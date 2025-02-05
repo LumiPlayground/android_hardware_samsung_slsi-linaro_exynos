@@ -486,9 +486,8 @@ bool ExynosCameraStreamManager::findStream(int id)
 {
     status_t ret = NO_ERROR;
     bool found = true;
-    ExynosCameraStream *stream = NULL;
 
-    ret = m_find(id, stream, &m_streamInfoMap, &m_streamInfoLock);
+    ret = m_find(id, &m_streamInfoMap, &m_streamInfoLock);
     if (ret != NO_ERROR)
         found = false;
 
@@ -600,7 +599,7 @@ status_t ExynosCameraStreamManager::m_erase(int id, ExynosCameraStream **item, S
     return ret;
 }
 
-status_t ExynosCameraStreamManager::m_find(int id, ExynosCameraStream *item, StreamInfoMap *list, Mutex *lock)
+status_t ExynosCameraStreamManager::m_find(int id, StreamInfoMap *list, Mutex *lock)
 {
     status_t ret = NO_ERROR;
     StreamInfoMap::iterator iter;

@@ -204,9 +204,10 @@ status_t ExynosCameraPipeSTK_PICTURE::m_run(void)
     int pixelformat = STK_YUYV;
     int nv21Align = 0;
 
-    if (m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS
-        || m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21
-       ) {
+    if(m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS
+            || m_parameters->getShotMode() == SAMSUNG_ANDROID_CONTROL_SHOOTING_MODE_HDR
+            || m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21
+            || m_parameters->getShotMode() == SAMSUNG_ANDROID_CONTROL_SHOOTING_MODE_SELECTIVE_FOCUS) {
         pixelformat = STK_NV21;
         nv21Align = ALIGN_UP(pictureRect.w, CAMERA_16PX_ALIGN) * ALIGN_UP(pictureRect.h, CAMERA_16PX_ALIGN);
     } else {

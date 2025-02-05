@@ -48,12 +48,36 @@ ExynosCameraFrameSelector::ExynosCameraFrameSelector(int cameraId,
     m_activityControl = m_parameters->getActivityControl();
 
     m_frameHoldList.setWaitTime(2000000000);
+#ifdef OIS_CAPTURE
+    m_OISFrameHoldList.setWaitTime(130000000);
+#endif
+#ifdef RAWDUMP_CAPTURE
+    m_RawFrameHoldList.setWaitTime(2000000000);
+#endif
 
     m_reprocessingCount = 0;
     m_frameHoldCount = 1;
     m_isFirstFrame = true;
     isCanceled = false;
 
+#ifdef OIS_CAPTURE
+    removeFlags = false;
+#endif
+#ifdef LLS_REPROCESSING
+    LLSCaptureFrame = NULL;
+    m_isLastFrame = true;
+    m_isConvertingMeta = true;
+    m_LLSCaptureCount = 0;
+#endif
+#ifdef SAMSUNG_LBP
+    m_lbpFrameCounter = 0;
+    m_LBPFrameNum = 0;
+#endif
+#ifdef SAMSUNG_DNG
+    m_DNGFrameCount = 0;
+    m_preDNGFrameCount = 0;
+    m_preDNGFrame = NULL;
+#endif
     m_CaptureCount = 0;
 #ifdef SUPPORT_DEPTH_MAP
     m_depthCallbackQ = depthCallbackQ;
@@ -62,11 +86,45 @@ ExynosCameraFrameSelector::ExynosCameraFrameSelector(int cameraId,
 
     m_cameraId = cameraId;
     memset(m_name, 0x00, sizeof(m_name));
+
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA_CAPTURE_FUSION
+    m_dualFrameSelector = NULL;
+    m_dualFrameSelector = ExynosCameraSingleton<ExynosCameraDualBayerFrameSelector>::getInstance();
+
+    /* get the singleton dual selector and init */
+    if (m_parameters->getDualCameraMode() == true &&
+            m_parameters != NULL &&
+            m_bufMgr != NULL) {
+        int ret = 0;
+        ret = m_dualFrameSelector->setInfo(m_cameraId,
+                m_parameters,
+                m_bufMgr);
+        if (ret != NO_ERROR) {
+            CLOGE("m_dualFrameSelector->setInfo(id:%d, param:%p, bufMgr:%p)",
+                    m_cameraId, m_parameters, m_bufMgr);
+        }
+
+        ret = m_dualFrameSelector->setFrameHoldCount(m_cameraId, m_frameHoldCount, 1);
+        if (ret != NO_ERROR) {
+            CLOGE("m_dualFrameSelector->setFrameHoldCount(id:%d, holdCount:%d)",
+                    m_cameraId, m_frameHoldCount);
+        }
+    }
+#endif // USE_DUAL_CAMERA_CAPTURE_FUSION
+#endif // BOARD_CAMERA_USES_DUAL_CAMERA
 }
 
 ExynosCameraFrameSelector::~ExynosCameraFrameSelector()
 {
-    /* empty destructor */
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA_CAPTURE_FUSION
+    if (m_dualFrameSelector != NULL &&
+            m_parameters->getDualCameraMode() == true) {
+        m_dualFrameSelector->deinit(m_cameraId);
+    }
+#endif // USE_DUAL_CAMERA_CAPTURE_FUSION
+#endif // BOARD_CAMERA_USES_DUAL_CAMERA
 }
 
 status_t ExynosCameraFrameSelector::m_release(frame_queue_t *list)
@@ -126,7 +184,7 @@ status_t ExynosCameraFrameSelector::m_manageHdrFrameHoldList(ExynosCameraFrameSP
                 pipeID, (isSrc)?"Src":"Dst");
     }
 
-    if (m_isFrameMetaTypeShotExt() == true) {
+    if (m_parameters->getUsePureBayerReprocessing() == true) {
         camera2_shot_ext *shot_ext = NULL;
         shot_ext = (camera2_shot_ext *)(buffer.addr[buffer.getMetaPlaneIndex()]);
         if (shot_ext != NULL)
@@ -769,8 +827,6 @@ status_t ExynosCameraFrameSelector::setFrameHoldCount(int32_t count)
         return BAD_VALUE;
     }
 
-    CLOGD("holdCount : %d", count);
-
     m_frameHoldCount = count;
 
     return NO_ERROR;
@@ -778,8 +834,19 @@ status_t ExynosCameraFrameSelector::setFrameHoldCount(int32_t count)
 
 bool ExynosCameraFrameSelector::m_isFrameMetaTypeShotExt(void)
 {
-    /* All cases(Pure bayer/Processed bayer/YUV) include shot stream */
-    return false;
+    bool isShotExt = true;
+
+    if (m_parameters->isSccCapture() == true) {
+        if (m_parameters->isReprocessing() == true)
+            isShotExt = true;
+        else
+            isShotExt = false;
+    } else {
+        if (m_parameters->getUsePureBayerReprocessing() == false)
+            isShotExt = false;
+    }
+
+    return isShotExt;
 }
 
 void ExynosCameraFrameSelector::setWaitTime(uint64_t waitTime)

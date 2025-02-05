@@ -23,7 +23,7 @@
 namespace android {
 #define SET_BIT(x)      (1 << x)
 
-#if 1
+#if ENABLE_SERVICE_METADATA_VALIDATE_CHECK
 #define META_VALIDATE_CHECK(x) do { \
         if (validate_camera_metadata_structure(x->getAndLock(), NULL)) CLOGE("ERR!!!"); \
         x->unlock(x->getAndLock()); \
@@ -65,6 +65,9 @@ ExynosCameraMetadataConverter::ExynosCameraMetadataConverter(int cameraId,
     memset(m_frameCountMap, 0x00, sizeof(m_frameCountMap));
     memset(m_name, 0x00, sizeof(m_name));
     m_prevMeta = NULL;
+#ifdef SUPPORT_MULTI_AF
+    m_flagMultiAf = false;
+#endif
 }
 
 ExynosCameraMetadataConverter::~ExynosCameraMetadataConverter()
@@ -314,7 +317,7 @@ status_t ExynosCameraMetadataConverter::constructDefaultRequestSettings(int type
         settings.update(ANDROID_TONEMAP_CURVE_BLUE, tonemapCurve, 4);
     }
 
-#if 0 //future
+#if 0 //USE_SAMPLE_SESSION_KEYS
     /** android.noise_reduction */
     const uint8_t noiseStrength = 5;
     settings.update(ANDROID_NOISE_REDUCTION_STRENGTH, &noiseStrength, 1);
@@ -390,7 +393,7 @@ status_t ExynosCameraMetadataConverter::constructDefaultRequestSettings(int type
         }
         hotPixelMode = ANDROID_HOT_PIXEL_MODE_HIGH_QUALITY;
         noiseReductionMode = ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY;
-        shadingMode = ANDROID_SHADING_MODE_FAST;
+        shadingMode = ANDROID_SHADING_MODE_HIGH_QUALITY;
         colorCorrectionMode = ANDROID_COLOR_CORRECTION_MODE_HIGH_QUALITY;
         tonemapMode = ANDROID_TONEMAP_MODE_HIGH_QUALITY;
         edgeMode = ANDROID_EDGE_MODE_HIGH_QUALITY;
@@ -445,7 +448,8 @@ status_t ExynosCameraMetadataConverter::constructDefaultRequestSettings(int type
     return OK;
 }
 
-status_t ExynosCameraMetadataConverter::constructStaticInfo(int cameraId, __unused int scenario, camera_metadata_t **cameraInfo)
+status_t ExynosCameraMetadataConverter::constructStaticInfo(int serviceCameraId, int cameraId, __unused int scenario,
+                                                            camera_metadata_t **cameraInfo, HAL_CameraInfo_t **HAL_CameraInfo)
 {
     status_t ret = NO_ERROR;
 
@@ -460,6 +464,11 @@ status_t ExynosCameraMetadataConverter::constructStaticInfo(int cameraId, __unus
     if (sensorStaticInfo == NULL) {
         CLOGE2("sensorStaticInfo is NULL");
         return BAD_VALUE;
+    }
+
+    /* Get HAL CameraInfos by sensorInfo */
+    if (HAL_CameraInfo != NULL && serviceCameraId >= 0) {
+        *HAL_CameraInfo = getExynosCameraVendorDeviceInfoByServiceCamId(serviceCameraId);
     }
 
     /* android.colorCorrection static attributes */
@@ -682,6 +691,11 @@ status_t ExynosCameraMetadataConverter::constructStaticInfo(int cameraId, __unus
         CLOGD2("ANDROID_JPEG_AVAILABLE_THUMBNAIL_SIZES update failed(%d)", ret);
 
     int32_t jpegMaxSize = 0;
+#ifdef SAMSUNG_DUAL_PORTRAIT_SOLUTION
+    if (scenario == SCENARIO_DUAL_REAR_PORTRAIT || scenario == SCENARIO_DUAL_FRONT_PORTRAIT) {
+        jpegMaxSize = sensorStaticInfo->maxPictureW * sensorStaticInfo->maxPictureH * 3 * 1.5;
+    } else
+#endif
     {
         jpegMaxSize = sensorStaticInfo->maxPictureW * sensorStaticInfo->maxPictureH * 2;
     }
@@ -776,8 +790,13 @@ status_t ExynosCameraMetadataConverter::constructStaticInfo(int cameraId, __unus
     if (ret < 0)
         CLOGD2("ANDROID_REQUEST_MAX_NUM_OUTPUT_STREAMS update failed(%d)", ret);
 
+    int num_of_inputs = 0;
+    if (sensorStaticInfo->supportedCapabilities & CAPABILITIES_PRIVATE_REPROCESSING) {
+        num_of_inputs = sensorStaticInfo->maxNumInputStreams;
+    }
+
     ret = info.update(ANDROID_REQUEST_MAX_NUM_INPUT_STREAMS,
-            &(sensorStaticInfo->maxNumInputStreams), 1);
+            &num_of_inputs, 1);
     if (ret < 0)
         CLOGD2("ANDROID_REQUEST_MAX_NUM_INPUT_STREAMS update failed(%d)", ret);
 
@@ -893,7 +912,10 @@ status_t ExynosCameraMetadataConverter::constructStaticInfo(int cameraId, __unus
         CLOGD2("ANDROID_SENSOR_REFERENCE_ILLUMINANT2 update failed(%d)", ret);
 
     int32_t calibrationRG = 1024, calibrationBG = 1024;
-
+#ifdef SAMSUNG_TN_FEATURE
+    getAWBCalibrationGain(&calibrationRG, &calibrationBG,
+                    sensorStaticInfo->masterRGain, sensorStaticInfo->masterBGain);
+#endif
     camera_metadata_rational_t calibrationMatrix[9] = {
         {calibrationRG, 1024}, {0, 1024}, {0, 1024},
         {0, 1024}, {1024, 1024}, {0, 1024},
@@ -1101,6 +1123,22 @@ status_t ExynosCameraMetadataConverter::constructStaticInfo(int cameraId, __unus
             CLOGD2("ANDROID_REQUEST_AVAILABLE_CHARACTERISTICS_KEYS update failed(%d)", ret);
     }
 
+
+    /*
+    * Session KEYS: The listed KEYS config is constant between the configStreams() call.
+    * Include all the KEYS that can't be supported per-frame.
+    * Include all the KEYS that cause unexpected delays to apply per-frame
+    */
+    Vector<int32_t> sessionKeyList;
+    if (m_createAvailableSessionKeys(sensorStaticInfo, &requestList, &sessionKeyList) == NO_ERROR) {
+        if (sessionKeyList.size() > 0) {
+            ret = info.update(ANDROID_REQUEST_AVAILABLE_SESSION_KEYS,
+                                sessionKeyList.array(), sessionKeyList.size());
+            if (ret < 0)
+                CLOGD2("ANDROID_REQUEST_AVAILABLE_SESSION_KEYS update failed(%d)", ret);
+        }
+    }
+
     /* Vendor staticInfo*/
     m_constructVendorStaticInfo(sensorStaticInfo, &info, cameraId);
 
@@ -1120,11 +1158,23 @@ void ExynosCameraMetadataConverter::setStaticInfo(int camId, camera_metadata_t *
     if (info == NULL) {
         camera_metadata_t *meta = NULL;
         CLOGW("info is null");
-        ExynosCameraMetadataConverter::constructStaticInfo(camId, m_configurations->getScenario(), &meta);
+        ExynosCameraMetadataConverter::constructStaticInfo(-1, camId, m_configurations->getScenario(), &meta, NULL);
         m_staticInfo = meta;
     } else {
         m_staticInfo = info;
     }
+}
+
+// TODO: the session params need to be used (to examine) while setting control meta.
+void ExynosCameraMetadataConverter::setSessionParams(const camera_metadata_t *info)
+{
+    /* deep copy */
+    if (info)
+        m_sessionParams = info;
+    else
+        m_sessionParams.clear();
+
+    return;
 }
 
 status_t ExynosCameraMetadataConverter::initShotData(struct camera2_shot_ext *shot_ext)
@@ -1294,14 +1344,6 @@ status_t ExynosCameraMetadataConverter::initShotData(struct camera2_shot_ext *sh
     shot->ctl.aa.vendor_videoMode = AA_VIDEOMODE_OFF;
 
     shot->uctl.opMode = CAMERA_OP_MODE_HAL3_GED;
-
-    shot->uctl.cameraMode = AA_CAMERAMODE_SINGLE;
-
-    if (m_cameraId == CAMERA_ID_BACK) {
-        shot->uctl.masterCamera = AA_SENSORPLACE_REAR;
-    } else {
-        shot->uctl.masterCamera = AA_SENSORPLACE_FRONT;
-    }
 
     /* udm */
 
@@ -1777,10 +1819,6 @@ status_t ExynosCameraMetadataConverter::translateLensControlData(CameraMetadata 
     /* ANDROID_LENS_FOCUS_DISTANCE */
     entry = settings->find(ANDROID_LENS_FOCUS_DISTANCE);
     if (entry.count > 0) {
-        /* should not control afMode and focusDistance at the same time
-        should not set the same focusDistance continuously
-        set the -1 to focusDistance if you do not need to change focusDistance
-        */
         if (m_afMode != AA_AFMODE_OFF || m_afMode != m_preAfMode || m_focusDistance == entry.data.f[0]) {
             dst->ctl.lens.focusDistance = -1;
         } else {
@@ -2264,10 +2302,20 @@ status_t ExynosCameraMetadataConverter::translateStatisticsControlData(CameraMet
     entry = settings->find(ANDROID_STATISTICS_FACE_DETECT_MODE);
     if (entry.count > 0) {
         dst->ctl.stats.faceDetectMode = (enum facedetect_mode) FIMC_IS_METADATA(entry.data.u8[0]);
-        dst_ext->fd_bypass = (dst->ctl.stats.faceDetectMode == FACEDETECT_MODE_OFF) ? 1 : 0;
+#ifdef USE_ALWAYS_FD_ON
+        if (m_configurations->getMode(CONFIGURATION_ALWAYS_FD_ON_MODE) == true) {
+            dst_ext->fd_bypass = 0;
+        } else
+#endif
+        {
+            dst_ext->fd_bypass = (dst->ctl.stats.faceDetectMode == FACEDETECT_MODE_OFF) ? 1 : 0;
+        }
 
         if (m_parameters->getHfdMode() == true
             && m_configurations->getMode(CONFIGURATION_RECORDING_MODE) == false
+#ifdef SAMSUNG_TN_FEATURE
+            && m_configurations->getModeValue(CONFIGURATION_SHOT_MODE) == SAMSUNG_ANDROID_CONTROL_SHOOTING_MODE_BEAUTY
+#endif
             ) {
             dst_ext->hfd.hfd_enable = !(dst_ext->fd_bypass);
         }
@@ -2739,7 +2787,7 @@ status_t ExynosCameraMetadataConverter::translateControlMetaData(ExynosCameraReq
 
     META_VALIDATE_CHECK(settings);
 
-    translateVendorControlMetaData(settings, shot_ext);
+    translateVendorControlMetaData(settings, shot_ext, requestInfo);
 
     return OK;
 }
@@ -2787,7 +2835,16 @@ status_t ExynosCameraMetadataConverter::translateFlashMetaData(ExynosCameraReque
     if (flashMgr == NULL) {
         flashState = ANDROID_FLASH_STATE_UNAVAILABLE;
     } else if (m_sensorStaticInfo->flashAvailable == ANDROID_FLASH_INFO_AVAILABLE_FALSE) {
-        {
+        if (m_configurations->getSamsungCamera() == true
+            && m_sensorStaticInfo->screenFlashAvailable == true) {
+            camera_metadata_entry_t entry = settings->find(ANDROID_CONTROL_CAPTURE_INTENT);
+            if (entry.count > 0 && ((enum aa_capture_intent) entry.data.u8[0] == AA_CAPTURE_INTENT_STILL_CAPTURE)
+                && m_configurations->getModeValue(CONFIGURATION_MARKING_EXIF_FLASH) != 0) {
+                flashState = ANDROID_FLASH_STATE_FIRED;
+            } else {
+                flashState = ANDROID_FLASH_STATE_READY;
+            }
+        } else {
             flashState = ANDROID_FLASH_STATE_UNAVAILABLE;
         }
     } else {
@@ -3255,6 +3312,13 @@ status_t ExynosCameraMetadataConverter::translatePartialMetaData(ExynosCameraReq
 
     META_VALIDATE_CHECK(settings);
 
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    if (m_subPrameters != NULL
+        && (m_configurations->getModeValue(CONFIGURATION_DUAL_DISP_CAM_TYPE)
+            == UNI_PLUGIN_CAMERA_TYPE_TELE)) {
+        activityControl = m_subPrameters->getActivityControl();
+    } else
+#endif
     {
         activityControl = m_parameters->getActivityControl();
     }
@@ -3376,6 +3440,80 @@ status_t ExynosCameraMetadataConverter::translatePartialMetaData(ExynosCameraReq
             cropRegionEntry = settings->find(ANDROID_SCALER_CROP_REGION);
             entry = settings->find(ANDROID_CONTROL_AF_REGIONS);
 
+#ifdef SAMSUNG_OT
+            if (src->ctl.aa.vendor_afmode_option & SET_BIT(AA_AFMODE_OPTION_BIT_OBJECT_TRACKING)) {
+                if (m_rectUiSkipCount > 0
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+                    || m_configurations->getModeValue(CONFIGURATION_DUAL_2X_BUTTON) == true
+#endif
+                ) {
+                    afRegion[0] = 0;
+                    afRegion[1] = 0;
+                    afRegion[2] = 0;
+                    afRegion[3] = 0;
+                    afRegion[4] = 0;
+                } else {
+                    UniPluginFocusData_t OTfocusData;
+                    ExynosRect hwSensorSize;
+                    ExynosRect hwBcropSize;
+                    int rectW = 0, rectH = 0;
+                    int ratio = 0;
+                    float zoomRatio = 0;
+                    int centerX = 0, centerY = 0;
+
+                    m_configurations->getObjectTrackingFocusData(&OTfocusData);
+
+                    afRect.x1 = OTfocusData.focusROI.left;
+                    afRect.y1 = OTfocusData.focusROI.top;
+                    afRect.x2 = OTfocusData.focusROI.right;
+                    afRect.y2 = OTfocusData.focusROI.bottom;
+
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+                    if (m_configurations->getScenario() == SCENARIO_DUAL_REAR_ZOOM
+                        && m_configurations->getDynamicMode(DYNAMIC_DUAL_FORCE_SWITCHING) == false) {
+                        m_convertOTRectToActiveArrayRegion(settings, shot_ext, &afRect);
+                    } else
+#endif
+                    {
+                        m_convert3AAToActiveArrayRegion(&afRect);
+                    }
+
+                    afRegion[0] = afRect.x1;
+                    afRegion[1] = afRect.y1;
+                    afRegion[2] = afRect.x2;
+                    afRegion[3] = afRect.y2;
+                    afRegion[4] = OTfocusData.focusWeight;
+
+                    if (cropRegionEntry.count > 0) {
+                        if (cropRegionEntry.data.i32[0] > afRegion[0]
+                            || cropRegionEntry.data.i32[1] > afRegion[1]
+                            || (cropRegionEntry.data.i32[0] + cropRegionEntry.data.i32[2]) < afRegion[2]
+                            || (cropRegionEntry.data.i32[1] + cropRegionEntry.data.i32[3]) < afRegion[3]) {
+                            if (cropRegionEntry.data.i32[0] > afRegion[0]) {
+                                afRegion[2] += (cropRegionEntry.data.i32[0] - afRegion[0]);
+                                afRegion[0] = cropRegionEntry.data.i32[0];
+                            }
+                            if (cropRegionEntry.data.i32[1] > afRegion[1]) {
+                                afRegion[3] += (cropRegionEntry.data.i32[1] - afRegion[1]);
+                                afRegion[1] = cropRegionEntry.data.i32[1];
+                            }
+                            if ((cropRegionEntry.data.i32[0] + cropRegionEntry.data.i32[2]) < afRegion[2]) {
+                                if (afRegion[0] - ((afRegion[2] - cropRegionEntry.data.i32[0] + cropRegionEntry.data.i32[2])) > 0) {
+                                    afRegion[0] -= (afRegion[2] - cropRegionEntry.data.i32[0] + cropRegionEntry.data.i32[2]);
+                                    afRegion[2] = cropRegionEntry.data.i32[0] + cropRegionEntry.data.i32[2];
+                                }
+                            }
+                            if ((cropRegionEntry.data.i32[1] + cropRegionEntry.data.i32[3]) < afRegion[3]) {
+                                if (afRegion[1] - ((afRegion[3] - cropRegionEntry.data.i32[1] + cropRegionEntry.data.i32[3])) > 0) {
+                                    afRegion[1] -= (afRegion[3] - cropRegionEntry.data.i32[1] + cropRegionEntry.data.i32[3]);
+                                    afRegion[3] = cropRegionEntry.data.i32[1] + cropRegionEntry.data.i32[3];
+                                }
+                            }
+                        }
+                    }
+                }
+            } else
+#endif
             {
                 /*
                 * CTS(testDigitalZoom) require that af region value is exactly same about control value.
@@ -3711,6 +3849,13 @@ status_t ExynosCameraMetadataConverter::m_createAvailableKeys(
         characteristics->add(ANDROID_STATISTICS_INFO_AVAILABLE_HOT_PIXEL_MAP_MODES);
     }
 
+    if (hwLevel == ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY
+        && cameraId == CAMERA_ID_SECURE) {
+        request->add(ANDROID_SENSOR_EXPOSURE_TIME);
+        result->add(ANDROID_SENSOR_EXPOSURE_TIME);
+        characteristics->add(ANDROID_SENSOR_INFO_EXPOSURE_TIME_RANGE);
+    }
+
     if (sensorStaticInfo->max3aRegions[AE] > 0) {
         request->add(ANDROID_CONTROL_AE_REGIONS);
         result->add(ANDROID_CONTROL_AE_REGIONS);
@@ -3723,6 +3868,51 @@ status_t ExynosCameraMetadataConverter::m_createAvailableKeys(
         request->add(ANDROID_CONTROL_AF_REGIONS);
         result->add(ANDROID_CONTROL_AF_REGIONS);
     }
+
+    return ret;
+}
+
+status_t ExynosCameraMetadataConverter::m_createAvailableSessionKeys(
+        const struct ExynosCameraSensorInfoBase *sensorStaticInfo,
+        Vector<int32_t> *request, Vector<int32_t> *sessionKeys)
+{
+    status_t ret = NO_ERROR;
+
+    if (sensorStaticInfo == NULL) {
+        CLOGE2("Sensor static info is NULL");
+        return BAD_VALUE;
+    }
+    if (request == NULL || sessionKeys == NULL) {
+        CLOGE2("NULL");
+        return BAD_VALUE;
+    }
+
+    if (sensorStaticInfo->sessionKeys != NULL) {
+        sessionKeys->appendArray(sensorStaticInfo->sessionKeys,
+                                    sensorStaticInfo->sessionKeysLength);
+    }
+
+#ifdef USE_SAMPLE_SESSION_KEYS
+    /*
+    * currently these are dummy KEYS
+    * The following keys are sample SESSION KEYS.
+    * actual keys need to be registered based on the SOC requirements
+    */
+
+    sessionKeys->add(ANDROID_NOISE_REDUCTION_STRENGTH);
+    sessionKeys->add(ANDROID_EDGE_STRENGTH);
+    sessionKeys->add(ANDROID_SHADING_STRENGTH);
+
+    if (sensorStaticInfo->max3aRegions[AE] > 0) {
+       sessionKeys->add(ANDROID_CONTROL_AE_REGIONS);
+    }
+    if (sensorStaticInfo->max3aRegions[AWB] > 0) {
+       sessionKeys->add(ANDROID_CONTROL_AWB_REGIONS);
+    }
+    if (sensorStaticInfo->max3aRegions[AF] > 0) {
+       sessionKeys->add(ANDROID_CONTROL_AF_REGIONS);
+    }
+#endif
 
     return ret;
 }
@@ -4184,6 +4374,9 @@ void ExynosCameraMetadataConverter::m_updateFaceDetectionMetaData(CameraMetadata
     __unused int dsInputPortId = m_parameters->getDsInputPortId(false);
     int offsetX = 0, offsetY = 0;
     bool is3aaVraM2M = (m_parameters->getHwConnectionMode(PIPE_3AA, PIPE_VRA) == HW_CONNECTION_MODE_M2M);
+#ifdef SAMSUNG_TN_FEATURE
+    int transientAction = m_configurations->getModeValue(CONFIGURATION_TRANSIENT_ACTION_MODE);
+#endif
 
     if (settings == NULL) {
         CLOGE("CameraMetadata is NULL");
@@ -4214,6 +4407,24 @@ void ExynosCameraMetadataConverter::m_updateFaceDetectionMetaData(CameraMetadata
                                        hwBdsSize);
     }
 
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    if (m_configurations->getScenario() == SCENARIO_DUAL_REAR_ZOOM
+        && m_configurations->getDynamicMode(DYNAMIC_DUAL_FORCE_SWITCHING) == false) {
+        ExynosRect fusionSrcRect;
+        ExynosRect fusionDstRect;
+        int margin = m_parameters->getActiveZoomMargin();
+
+        /* only use wide margin & hwYuvSize*/
+        if (margin == DUAL_SOLUTION_MARGIN_VALUE_30 ||
+            margin == DUAL_SOLUTION_MARGIN_VALUE_20) {
+            m_parameters->getFusionSize(hwYuvSize.w, hwYuvSize.h,
+                    &fusionSrcRect, &fusionDstRect,
+                    margin);
+            hwYuvSize.w = fusionSrcRect.w;
+            hwYuvSize.h = fusionSrcRect.h;
+        }
+    }
+#endif
     if (is3aaVraM2M) {
         // TODO:  need to change to logic to handle the per frame info properly
         if (m_parameters->getHwConnectionMode(PIPE_FLITE, PIPE_3AA) == HW_CONNECTION_MODE_M2M) {
@@ -4301,6 +4512,31 @@ void ExynosCameraMetadataConverter::m_updateFaceDetectionMetaData(CameraMetadata
         return;
     }
 
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    if (m_configurations->getScenario() == SCENARIO_DUAL_REAR_ZOOM && (!is3aaVraM2M)
+        && m_configurations->getDynamicMode(DYNAMIC_DUAL_FORCE_SWITCHING) == false) {
+        if (m_subPrameters != NULL
+             && (m_configurations->getModeValue(CONFIGURATION_DUAL_DISP_CAM_TYPE) == UNI_PLUGIN_CAMERA_TYPE_TELE)) {
+             m_subPrameters->getVendorRatioCropSizeForVRA(&dsInputSize);
+        } else {
+            m_parameters->getVendorRatioCropSizeForVRA(&dsInputSize);
+        }
+
+        /* Add DS input crop offset */
+        if (hwYuvSize.w < dsInputSize.w) {
+            offsetX = 0;
+        } else {
+            offsetX = (hwYuvSize.w - dsInputSize.w)/2;
+        }
+
+        if (hwYuvSize.h < dsInputSize.h) {
+            offsetY = 0;
+        } else {
+            offsetY = (hwYuvSize.h - dsInputSize.h)/2;
+        }
+    }
+    else
+#endif
     {
         /* Add DS input crop offset */
         offsetX = dsInputSize.x;
@@ -4369,11 +4605,28 @@ void ExynosCameraMetadataConverter::m_updateFaceDetectionMetaData(CameraMetadata
     scaleRatioW = dsScaleRatioW * yuvScaleRatioW * bdsScaleRatioW * sensorScaleRatioW;
     scaleRatioH = dsScaleRatioH * yuvScaleRatioH * bdsScaleRatioH * sensorScaleRatioH;
 
+    CLOGV("[F(%d)]HwActiveArraySize %d,%d %dx%d(%d) DSInputSize %d,%d %dx%d(%d) Offset %d %d is3aaVraM2M %d"
+        "dsScaleRatio (%f %f) bdsScaleRatio (%f %f) sensorScaleRatio (%f %f) scaleRatio (%f %f) hwSensorSize (%d %d)",
+            shot_ext->shot.dm.request.frameCount,
+            hwActiveArraySize.x, hwActiveArraySize.y, hwActiveArraySize.w, hwActiveArraySize.h,
+            SIZE_RATIO(hwActiveArraySize.w, hwActiveArraySize.h),
+            dsInputSize.x, dsInputSize.y, dsInputSize.w, dsInputSize.h,
+            SIZE_RATIO(dsInputSize.w, dsInputSize.h),
+            offsetX, offsetY, is3aaVraM2M, dsScaleRatioW, dsScaleRatioH, bdsScaleRatioW, bdsScaleRatioH,
+            sensorScaleRatioW, sensorScaleRatioH,
+            scaleRatioW, scaleRatioH, hwSensorSize.w, hwSensorSize.h);
+
     /* Apply offset and scale ratio to FD region
      * FD region' = (FD region x scaleRatioW,H) + offsetX,Y
      */
     for (int i = 0; i < NUM_OF_DETECTED_FACES; i++) {
         if (shot_ext->shot.dm.stats.faceIds[i] > 0
+#ifdef SAMSUNG_TN_FEATURE
+            && transientAction == SAMSUNG_ANDROID_CONTROL_TRANSIENT_ACTION_NONE
+#endif
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+            && m_configurations->getModeValue(CONFIGURATION_DUAL_2X_BUTTON) == false
+#endif
             && m_rectUiSkipCount <= 0
             ) {
             switch (shot_ext->shot.dm.stats.faceDetectMode) {
@@ -4737,6 +4990,23 @@ void ExynosCameraMetadataConverter::setMetaCtlSceneMode(struct camera2_shot_ext 
         shot_ext->shot.ctl.edge.strength = default_edge_strength;
         shot_ext->shot.ctl.color.vendor_saturation = 3; /* "3" is default. */
         break;
+#ifdef SAMSUNG_FOOD_MODE
+    case AA_SCENE_MODE_FOOD:
+        shot_ext->shot.ctl.aa.aeMode = AA_AEMODE_MATRIX;
+
+        shot_ext->shot.ctl.aa.awbMode = AA_AWBMODE_WB_AUTO;
+        shot_ext->shot.ctl.aa.vendor_isoMode = AA_ISOMODE_AUTO;
+        shot_ext->shot.ctl.aa.vendor_isoValue = 0;
+        shot_ext->shot.ctl.sensor.sensitivity = 0;
+        shot_ext->shot.ctl.noise.mode = default_noise_mode;
+        shot_ext->shot.ctl.noise.strength = default_noise_strength;
+        shot_ext->shot.ctl.edge.mode = default_edge_mode;
+        shot_ext->shot.ctl.edge.strength = default_edge_strength;
+        shot_ext->shot.ctl.color.vendor_saturation = 3; /* "3" is default. */
+
+        shot_ext->shot.ctl.aa.aeExpCompensation = 2;
+        break;
+#endif
     case AA_SCENE_MODE_AQUA:
         /* set default setting */
         if (shot_ext->shot.ctl.aa.aeMode == AA_AEMODE_OFF)
@@ -4887,4 +5157,17 @@ uint32_t ExynosCameraMetadataConverter::m_getFrameInfoForTimeStamp(enum frame_co
 
     return 0;
 }
+
+int ExynosCameraMetadataConverter::getExynosCameraDeviceInfoSize()
+{
+    int size = getExynosCameraVendorDeviceInfoSize();
+    return size;
+}
+
+HAL_CameraInfo_t *ExynosCameraMetadataConverter::getExynosCameraDeviceInfoByCamIndex(int camIndex)
+{
+    HAL_CameraInfo_t *CameraInfo = getExynosCameraVendorDeviceInfoByCamIndex(camIndex);
+    return CameraInfo;
+}
+
 }; /* namespace android */

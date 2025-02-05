@@ -28,6 +28,10 @@
 #include <videodev2_exynos_media.h>
 #include <videodev2_exynos_camera.h>
 
+#ifdef USE_CSC_FEATURE
+#include <SecNativeFeature.h>
+#endif
+
 #include "ExynosCameraConfig.h"
 
 #include "ExynosCameraSensorInfoBase.h"
@@ -40,12 +44,29 @@
 //#include "ExynosCameraUtilsModule.h"
 #include "ExynosCameraActivityControl.h"
 #include "ExynosCameraAutoTimer.h"
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraParameters.h"
+#endif
+#if 0//def SUPPORT_SW_VDIS
+#include "SecCameraSWVdis.h"
+#endif /*SUPPORT_SW_VDIS*/
+#ifdef SUPPORT_SW_VDIS
+#include "SecCameraSWVdis_3_0.h"
+#endif /*SUPPORT_SW_VDIS*/
+#ifdef SAMSUNG_OIS
+#include"ExynosCameraNode.h"
+#endif
+
 #include <map>
 
 
 #define EXYNOS_CONFIG_DEFINED (-1)
 #define EXYNOS_CONFIG_NOTDEFINED (-2)
 
+#define STATE_REG_BINNING_MODE          (1<<28)
+#define STATE_REG_MANUAL_ISO            (1<<26)
+#define STATE_REG_LONG_CAPTURE          (1<<24)
+#define STATE_REG_SHARPEN_SINGLE        (1<<22)
 #define STATE_REG_RTHDR_AUTO            (1<<20)
 #define STATE_REG_NEED_LLS              (1<<18)
 #define STATE_REG_ZOOM_INDOOR           (1<<16)
@@ -108,6 +129,10 @@
 #define STATE_UHD_VIDEO_CAPTURE_WDR_ON          (STATE_REG_UHD_RECORDING|STATE_REG_RECORDINGHINT|STATE_REG_FLAG_REPROCESSING|STATE_REG_RTHDR_ON)
 #define STATE_UHD_VIDEO_CAPTURE_WDR_AUTO        (STATE_REG_UHD_RECORDING|STATE_REG_RECORDINGHINT|STATE_REG_FLAG_REPROCESSING|STATE_REG_RTHDR_AUTO)
 
+#define STATE_STILL_BINNING_PREVIEW             (STATE_REG_BINNING_MODE)
+#define STATE_VIDEO_BINNING                     (STATE_REG_RECORDINGHINT|STATE_REG_BINNING_MODE)
+#define STATE_DUAL_STILL_BINING_PREVIEW         (STATE_REG_DUAL_MODE|STATE_REG_BINNING_MODE)
+#define STATE_DUAL_VIDEO_BINNING                (STATE_REG_DUAL_RECORDINGHINT|STATE_REG_DUAL_MODE|STATE_REG_BINNING_MODE)
 
 namespace android {
 
@@ -181,6 +206,7 @@ public:
     virtual bool                        getUsePureBayerReprocessing(void) = 0;
     virtual bool                        isSccCapture(void) = 0;
     virtual bool                        isReprocessing(void) = 0;
+    virtual status_t                    getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH) = 0;
     virtual void                        getHwBayerCropRegion(int *w, int *h, int *x, int *y) = 0;
     virtual void                        getHwPreviewSize(int *w, int *h) = 0;
     virtual void                        getVideoSize(int *w, int *h) = 0;
@@ -311,6 +337,7 @@ public:
     virtual bool                        getUsePureBayerReprocessing(void) = 0;
     virtual bool                        isSccCapture(void) = 0;
     virtual bool                        isReprocessing(void) = 0;
+    virtual status_t                    getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH) = 0;
     virtual void                        getHwBayerCropRegion(int *w, int *h, int *x, int *y) = 0;
     virtual void                        getHwPreviewSize(int *w, int *h) = 0;
     virtual void                        getPictureSize(int *w, int *h) = 0;
@@ -363,6 +390,10 @@ public:
 #ifdef DEBUG_RAWDUMP
     virtual bool                        checkBayerDumpEnable(void) = 0;
 #endif/* DEBUG_RAWDUMP */
+#ifdef RAWDUMP_CAPTURE
+    virtual void                        setRawCaptureModeOn(bool enable) = 0;
+    virtual bool                        getRawCaptureModeOn(void) = 0;
+#endif /* RAWDUMP_CAPTURE */
 
 //    virtual int                         getGrallocUsage(void) = 0;
 //    virtual int                         getGrallocLockUsage(void) = 0;

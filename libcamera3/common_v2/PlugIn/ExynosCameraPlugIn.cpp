@@ -286,8 +286,6 @@ status_t ExynosCameraPlugIn::process(Map_t *map)
 
 status_t ExynosCameraPlugIn::setParameter(int key, void *data)
 {
-    status_t ret = NO_ERROR;
-
     Mutex::Autolock lock(m_lock);
 
     /* state check */
@@ -307,8 +305,6 @@ status_t ExynosCameraPlugIn::setParameter(int key, void *data)
 
 status_t ExynosCameraPlugIn::getParameter(int key, void *data)
 {
-    status_t ret = NO_ERROR;
-
     Mutex::Autolock lock(m_lock);
 
     /* state check */
@@ -328,8 +324,6 @@ status_t ExynosCameraPlugIn::getParameter(int key, void *data)
 
 void ExynosCameraPlugIn::dump(void)
 {
-    status_t ret = NO_ERROR;
-
     Mutex::Autolock lock(m_lock);
 
     /* state check */
@@ -350,8 +344,6 @@ void ExynosCameraPlugIn::dump(void)
 
 status_t ExynosCameraPlugIn::query(Map_t *map)
 {
-    status_t ret = NO_ERROR;
-
     Mutex::Autolock lock(m_lock);
 
     /* state check */

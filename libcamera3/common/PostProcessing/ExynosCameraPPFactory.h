@@ -35,6 +35,9 @@
 #include "ExynosCameraPPLibcsc.h"
 /* #include "ExynosCameraPPLibacryl.h" */
 #include "ExynosCameraPPJPEG.h"
+#ifdef SAMSUNG_TN_FEATURE
+#include "ExynosCameraPPUniPlugin.h"
+#endif
 
 using namespace android;
 

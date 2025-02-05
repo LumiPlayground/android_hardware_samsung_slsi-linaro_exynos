@@ -308,11 +308,13 @@ status_t ExynosCameraMCPipe::stop(void)
 {
     CLOGV("");
     status_t ret = NO_ERROR;
+    status_t funcRet = NO_ERROR;
 
     ret = m_stopNode();
     if (ret != NO_ERROR) {
         CLOGE("m_stopNode() fail, ret(%d)", ret);
-        return ret;
+        /* If stop() is error, driver will recover */
+        funcRet |= ret;
     }
 
     m_putBufferThread->requestExitAndWait();
@@ -349,7 +351,7 @@ status_t ExynosCameraMCPipe::stop(void)
 
     CLOGI("stop() is succeed, Pipe(%d)", getPipeId());
 
-    return ret;
+    return funcRet;
 }
 
 bool ExynosCameraMCPipe::flagStart(void)
@@ -1456,8 +1458,8 @@ status_t ExynosCameraMCPipe::m_putBuffer(void)
             if (buffer[i].index < 0) {
                 ret = m_bufferManager[i]->getBuffer(&(bufferIndex[i]), EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &(buffer[i]));
                 if (ret != NO_ERROR) {
-                    CLOGE("Buffer manager getBuffer fail, manager(%d)(%s), frameCount(%d), ret(%d)",
-                            i, m_bufferManager[i]->getName(), newFrame->getFrameCount(), ret);
+                    CLOGE("Buffer manager getBuffer fail, manager(%d), frameCount(%d), ret(%d)",
+                             i, newFrame->getFrameCount(), ret);
 
                     newFrame->dump();
 
@@ -1566,11 +1568,10 @@ status_t ExynosCameraMCPipe::m_putBuffer(void)
         if (i == OUTPUT_NODE) {
             /* Output Node(Can be group video node) */
             if (m_runningFrameList[i][(buffer[i].index)] != NULL) {
-                if (newFrame->getFrameType() == FRAME_TYPE_INTERNAL
-                    /* if internal frame at ISP pipe */
-                    && getPipeId() == PIPE_ISP
-                    /* If Processed(Dirty) bayer reprocessing */
-                    && m_parameters->getReprocessingMode() == PROCESSING_MODE_REPROCESSING_PROCESSED_BAYER) {
+                if ( (m_parameters->isReprocessing() == true)
+                        && (m_parameters->getUsePureBayerReprocessing() == false)  /* if Dirty bayer reprocessing */
+                        && (newFrame->getFrameType() == FRAME_TYPE_INTERNAL)
+                        && (getPipeId() == PIPE_ISP) ) {                /* if internal frame at ISP pipe */
                     /* In dirty bayer mode, Internal frame would not have valid
                        output buffer on ISP pipe. So suppress error message */
                     CLOGI("Internal frame will raises an error here, but it's normal operation, index(%d), frameCount(%d)",
@@ -2003,8 +2004,8 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
 
     /* 6. Update metadata of capture node buffer(DstBuffer) from output node buffer(SrcBuffer) */
                 if (m_node[OUTPUT_NODE] != NULL
-                    && m_deviceInfo->nodeNum[i] != FIMC_IS_VIDEO_HWFC_JPEG_NUM
-                    && m_deviceInfo->nodeNum[i] != FIMC_IS_VIDEO_HWFC_THUMB_NUM) {
+                        && m_deviceInfo->nodeNum[i] != FIMC_IS_VIDEO_HWFC_JPEG_NUM
+                        && m_deviceInfo->nodeNum[i] != FIMC_IS_VIDEO_HWFC_THUMB_NUM) {
                     m_node[OUTPUT_NODE]->getColorFormat(&v4l2Colorformat, &planeCount[OUTPUT_NODE]);
                     m_node[i]->getColorFormat(&v4l2Colorformat, &planeCount[i]);
 
@@ -2022,10 +2023,12 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
                         shot_ext_dst->fd_bypass = shot_ext_src->fd_bypass;
                         shot_ext_dst->shot.dm.request.frameCount = shot_ext_src->shot.dm.request.frameCount;
                         shot_ext_dst->shot.magicNumber= shot_ext_src->shot.magicNumber;
+                        //#ifdef SAMSUNG_COMPANION
                         shot_ext_dst->shot.uctl.companionUd.wdr_mode = shot_ext_src->shot.uctl.companionUd.wdr_mode;
+                        //#endif
                     } else {
                         CLOGE("metadata address fail, frameCount(%d) shot_ext src(%p) dst(%p) ",
-                                 newFrame->getFrameCount(), shot_ext_src, shot_ext_dst);
+                                newFrame->getFrameCount(), shot_ext_src, shot_ext_dst);
                     }
                     /* Comment out : It was not useful for metadate fully update, I want know reasons for the existence. */
                     /* memcpy(buffer[i].addr[(planeCount[i] - 1)], buffer[OUTPUT_NODE].addr[(planeCount[OUTPUT_NODE] - 1)], sizeof(struct camera2_shot_ext)); */
@@ -2153,15 +2156,6 @@ status_t ExynosCameraMCPipe::m_updateMetadataFromFrame(ExynosCameraFrameSP_sptr_
     CLOGV("");
     status_t ret = NO_ERROR;
 
-    /*
-     * common_v3 is not use V1.
-     * so, just make assert.
-     */
-    android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):\
-                                                   m_updateMetadataFromFrame() is not use in common_v3, assert!!!!",
-                                                   __FUNCTION__, __LINE__);
-
-#if 0
     camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buffer->addr[buffer->getMetaPlaneIndex()]);
 
     if (shot_ext != NULL) {
@@ -2369,7 +2363,6 @@ status_t ExynosCameraMCPipe::m_updateMetadataFromFrame(ExynosCameraFrameSP_sptr_
         /* dump info on shot_ext, just before qbuf */
         /* m_dumpPerframeShotInfo(m_deviceInfo->nodeName[OUTPUT_NODE], frame->getFrameCount(), shot_ext); */
     }
-#endif
 
     return ret;
 }
@@ -2899,11 +2892,7 @@ status_t ExynosCameraMCPipe::m_setNodeInfo(ExynosCameraNode *node, camera_pipe_i
             flagValidSetFormatInfo = false;
         }
 
-        /* Fixed 1 batch size during fastenAeStable */
-        if (m_parameters->getFastenAeStableOn() == false) {
-            batchSize = m_parameters->getBatchSize((enum pipeline)getPipeId());
-        }
-
+        batchSize = m_parameters->getBatchSize((enum pipeline)getPipeId());
         node->setColorFormat(pipeInfos->rectInfo.colorFormat, planeCount, batchSize, yuvRange);
 
         if ((int)pipeInfos->bufInfo.type == 0 || pipeInfos->bufInfo.memory == 0) {
@@ -2917,6 +2906,15 @@ status_t ExynosCameraMCPipe::m_setNodeInfo(ExynosCameraNode *node, camera_pipe_i
                             (enum v4l2_memory)pipeInfos->bufInfo.memory);
 
         if (flagValidSetFormatInfo == true) {
+#ifdef SAMSUNG_DNG
+            if (m_parameters->getDNGCaptureModeOn() && strcmp(node->getName(), "BAYER") == 0) {
+                CLOGV(" DNG flite node->setFormat() getPipeId()(%d)", getPipeId());
+                if (node->setFormat() != NO_ERROR) {
+                    CLOGE(" node->setFormat() fail");
+                    return INVALID_OPERATION;
+                }
+            } else
+#endif // SAMSUNG_DNG
             {
                 ret = node->setFormat(pipeInfos->bytesPerPlane);
                 if (ret != NO_ERROR) {
@@ -3163,11 +3161,8 @@ status_t ExynosCameraMCPipe::m_setJpegInfo(int nodeType, ExynosCameraBuffer *buf
         return BAD_VALUE;
     }
 
-    /*
-     * 2. Get control metadata from buffer and pipeId
-     * JPEG_DST node uses the image plane to deliver EXIF informations
-     * This plane index should be "planeCount" not "getMetaPlaneIndex"
-     */
+    /* 2. Get control metadata from buffer and pipeId */
+    /* JPEG_DST node uses the image plane to deliver EXIF informations */
     shot_ext = (struct camera2_shot_ext *)(buffer->addr[buffer->planeCount - 1]);
     pipeId = m_deviceInfo->pipeId[nodeType];
 
@@ -3215,6 +3210,20 @@ status_t ExynosCameraMCPipe::m_setJpegInfo(int nodeType, ExynosCameraBuffer *buf
                     pictureRect.w, pictureRect.h,
                     m_deviceInfo->nodeName[nodeType], ret);
 
+#ifdef SAMSUNG_JQ
+        if (m_parameters->getJpegQtableOn() == true && m_parameters->getJpegQtableStatus() != JPEG_QTABLE_DEINIT) {
+            if (m_parameters->getJpegQtableStatus() == JPEG_QTABLE_UPDATED) {
+                CLOGD("[JQ]:Get JPEG Q-table");
+                m_parameters->setJpegQtableStatus(JPEG_QTABLE_RETRIEVED);
+                m_parameters->getJpegQtable(m_qtable);
+            }
+
+            CLOGD("[JQ]:Set JPEG Q-table");
+            ret = m_node[nodeType]->setQuality(m_qtable);
+            if (ret != NO_ERROR)
+                CLOGE("[JQ]:m_node[nodeType]->setQuality(qtable[]) fail");
+        } else
+#endif
         {
             /* JPEG HAL setQuality */
             CLOGV("m_node[nodeType]->setQuality(int)");
@@ -3276,6 +3285,7 @@ status_t ExynosCameraMCPipe::m_stopNode(void)
 {
     CLOGD("");
     status_t ret = NO_ERROR;
+    status_t funcRet = NO_ERROR;
 
     for (int i = OUTPUT_NODE; i < MAX_CAPTURE_NODE; i++) {
         /* only M2M mode need stream on/off */
@@ -3285,21 +3295,23 @@ status_t ExynosCameraMCPipe::m_stopNode(void)
             if (ret != NO_ERROR) {
                 CLOGE("node(%s)->stop fail, ret(%d)",
                          m_deviceInfo->nodeName[i], ret);
-                return ret;
+                /* If stop() is error, driver will recover */
+                funcRet |= ret;
             }
 
             ret = m_node[i]->clrBuffers();
             if (ret != NO_ERROR) {
                 CLOGE("node(%s)->clrBuffers fail, ret(%d)",
                          m_deviceInfo->nodeName[i], ret);
-                return ret;
+                /* If clrBuffers() is error, driver will recover */
+                funcRet |= ret;
             }
 
             m_node[i]->removeItemBufferQ();
         }
     }
 
-    return ret;
+    return funcRet;
 }
 
 status_t ExynosCameraMCPipe::m_clearNode(void)
@@ -3331,9 +3343,8 @@ status_t ExynosCameraMCPipe::m_checkNodeGroupInfo(char *name, camera2_node *oldN
     bool flagCropRegionChanged = false;
 
     for (int i = 0; i < 4; i++) {
-        if (oldNode->request != newNode->request
-            || oldNode->input.cropRegion[i] != newNode->input.cropRegion[i]
-            || oldNode->output.cropRegion[i] != newNode->output.cropRegion[i]) {
+        if (oldNode->input.cropRegion[i] != newNode->input.cropRegion[i] ||
+            oldNode->output.cropRegion[i] != newNode->output.cropRegion[i]) {
             CLOGD("(%s):vid(%d), request(%d -> %d), oldCropSize(%d, %d, %d, %d / %d, %d, %d, %d) -> newCropSize(%d, %d, %d, %d / %d, %d, %d, %d)",
                 name,
                 newNode->vid,
@@ -3348,7 +3359,6 @@ status_t ExynosCameraMCPipe::m_checkNodeGroupInfo(char *name, camera2_node *oldN
     }
 
     for (int i = 0; i < 4; i++) {
-        oldNode->request = newNode->request;
         oldNode->input. cropRegion[i] = newNode->input. cropRegion[i];
         oldNode->output.cropRegion[i] = newNode->output.cropRegion[i];
     }
@@ -3366,14 +3376,12 @@ status_t ExynosCameraMCPipe::m_checkNodeGroupInfo(char *name, int index, camera2
     bool flagCropRegionChanged = false;
 
     for (int i = 0; i < 4; i++) {
-        if (oldNode->request != newNode->request
-            || oldNode->input.cropRegion[i] != newNode->input.cropRegion[i]
-            || oldNode->output.cropRegion[i] != newNode->output.cropRegion[i]) {
-            CLOGD("(%s):index(%d), vid(%d), request(%d -> %d), oldCropSize (%d, %d, %d, %d / %d, %d, %d, %d) -> newCropSize (%d, %d, %d, %d / %d, %d, %d, %d)",
+        if (oldNode->input.cropRegion[i] != newNode->input.cropRegion[i] ||
+            oldNode->output.cropRegion[i] != newNode->output.cropRegion[i]) {
+
+            CLOGD(" name %s : index %d: PerFrame oldCropSize (%d, %d, %d, %d / %d, %d, %d, %d) -> newCropSize (%d, %d, %d, %d / %d, %d, %d, %d)",
                 name,
                 index,
-                newNode->vid,
-                oldNode->request, newNode->request,
                 oldNode->input. cropRegion[0], oldNode->input. cropRegion[1], oldNode->input. cropRegion[2], oldNode->input. cropRegion[3],
                 oldNode->output.cropRegion[0], oldNode->output.cropRegion[1], oldNode->output.cropRegion[2], oldNode->output.cropRegion[3],
                 newNode->input. cropRegion[0], newNode->input. cropRegion[1], newNode->input. cropRegion[2], newNode->input. cropRegion[3],
@@ -3384,7 +3392,6 @@ status_t ExynosCameraMCPipe::m_checkNodeGroupInfo(char *name, int index, camera2
     }
 
     for (int i = 0; i < 4; i++) {
-        oldNode->request = newNode->request;
         oldNode->input. cropRegion[i] = newNode->input. cropRegion[i];
         oldNode->output.cropRegion[i] = newNode->output.cropRegion[i];
     }
@@ -3617,6 +3624,14 @@ status_t ExynosCameraMCPipe::m_createSensorNode(int32_t *sensorIds)
     bool flagUseCompanion = false;
     bool flagQuickSwitchFlag = false;
 
+#ifdef SAMSUNG_COMPANION
+    flagUseCompanion = m_parameters->getUseCompanion();
+#endif
+
+#ifdef SAMSUNG_QUICK_SWITCH
+    flagQuickSwitchFlag = m_parameters->getQuickSwitchFlag();
+#endif
+
     int fliteNodeNum = getFliteNodenum(m_cameraId, flagUseCompanion, flagQuickSwitchFlag);
 
     for (int i = OUTPUT_NODE; i < MAX_NODE; i++) {
@@ -3647,20 +3662,10 @@ status_t ExynosCameraMCPipe::m_createSensorNode(int32_t *sensorIds)
     }
 
     m_node[m_sensorNodeIndex] = m_createNode(m_cameraId, m_deviceInfo->nodeNum[m_sensorNodeIndex]);
-    if (m_node[m_sensorNodeIndex] == NULL) {
-        CLOGE("sensor open failed sensorNodeIndex(%d) sensorIds[%d]=%d m_node[%d]=NULL",
-            m_sensorNodeIndex, m_sensorNodeIndex, sensorIds[m_sensorNodeIndex], m_sensorNodeIndex);
-        return INVALID_OPERATION;
-    }
-
-    if (m_node[m_sensorNodeIndex] == NULL) {
-        CLOGE("m_node[%d] == NULL. fail", m_sensorNodeIndex);
-        return INVALID_OPERATION;
-    }
 
     // setInput here for performance.
 #ifdef INPUT_STREAM_MASK
-    CLOGD("i(%2d) \t setInput(sensorIds : %d) [src nodeNum : %d][nodeNums : %d][otf : %d][leader : %d][reprocessing : %d][unique sensorId : %d]",
+    CLOGD(" i(%2d) \t setInput(sensorIds : %d) [src nodeNum : %d][nodeNums : %d][otf : %d][leader : %d][reprocessing : %d][unique sensorId : %d]",
         m_sensorNodeIndex,
          sensorIds[m_sensorNodeIndex],
         ((sensorIds[m_sensorNodeIndex] & INPUT_VINDEX_MASK) >>  INPUT_VINDEX_SHIFT) + FIMC_IS_VIDEO_BAS_NUM,
@@ -3673,13 +3678,23 @@ status_t ExynosCameraMCPipe::m_createSensorNode(int32_t *sensorIds)
     CLOGD("setInput(sensorIds : %d)", sensorIds[m_sensorNodeIndex]);
 #endif
 
+#ifdef SAMSUNG_QUICK_SWITCH
+    if (m_deviceInfo->nodeNum[m_sensorNodeIndex] == FIMC_IS_VIDEO_SS4_NUM ||
+        m_deviceInfo->nodeNum[m_sensorNodeIndex] == FIMC_IS_VIDEO_SS5_NUM) {
+        if (m_parameters->getQuickSwitchCmd() == QUICK_SWITCH_CMD_IDLE_TO_STBY) {
+            ret = m_node[m_sensorNodeIndex]->setInput(sensorIds[m_sensorNodeIndex] | (SENSOR_SCENARIO_STANDBY << SCENARIO_SHIFT));
+        } else {
+            /* Skip the setInput for this node in the switching case */
+        }
+    } else {
+        ret = m_node[m_sensorNodeIndex]->setInput(sensorIds[m_sensorNodeIndex]);
+    }
+#else
     ret = m_node[m_sensorNodeIndex]->setInput(sensorIds[m_sensorNodeIndex]);
-    if (ret != NO_ERROR) {
-        CLOGE("nodeNums[%d] : %p, setInput(sensorIds : %d fail, ret(%d)",
-            m_sensorNodeIndex, m_node[m_sensorNodeIndex], sensorIds[m_sensorNodeIndex], ret);
-
-        m_destroyNode(m_cameraId, m_node[m_sensorNodeIndex]);
-        m_node[m_sensorNodeIndex] = NULL;
+#endif
+    if (ret < 0) {
+        CLOGE("nodeNums[%d] : %d, setInput(sensorIds : %d fail, ret(%d)",
+            m_sensorNodeIndex, m_node[m_sensorNodeIndex], m_sensorIds[m_sensorNodeIndex], ret);
 
         return ret;
     }
@@ -3708,11 +3723,6 @@ status_t ExynosCameraMCPipe::m_createSensorNode(int32_t *sensorIds)
         }
 
         m_node[m_depthVcNodeIndex] = m_createVcNode(m_cameraId, m_deviceInfo->nodeNum[m_depthVcNodeIndex]);
-
-        if (m_node[m_depthVcNodeIndex] == NULL) {
-            CLOGE("m_node[%d] == NULL. fail", m_depthVcNodeIndex);
-            return INVALID_OPERATION;
-        }
     }
 #endif // SUPPORT_DEPTH_MAP
 

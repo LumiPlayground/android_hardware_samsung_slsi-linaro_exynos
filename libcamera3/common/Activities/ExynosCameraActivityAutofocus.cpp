@@ -16,7 +16,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraActivityAutofocus"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraActivityAutofocus.h"
 
@@ -42,6 +42,9 @@ ExynosCameraActivityAutofocus::ExynosCameraActivityAutofocus(int cameraId) : Exy
     m_metaCtlAFMode = -1;
     m_frameCount = 0;
 
+#ifdef SAMSUNG_DOF
+    m_flagLensMoveStart = false;
+#endif
     m_macroPosition = AUTOFOCUS_MACRO_POSITION_BASE;
 
     m_af_mode_info = 0;
@@ -54,6 +57,10 @@ ExynosCameraActivityAutofocus::ExynosCameraActivityAutofocus(int cameraId) : Exy
     m_af_factory_info = 0;
     m_paf_from_info = 0;
     m_paf_error_code = 0;
+
+#ifdef SAMSUNG_OT
+    memset(&m_OTfocusData, 0, sizeof(UniPluginFocusData_t));
+#endif
 }
 
 ExynosCameraActivityAutofocus::~ExynosCameraActivityAutofocus()
@@ -127,11 +134,11 @@ void ExynosCameraActivityAutofocus::displayAFStatus(void)
         m_af_pos[8], m_af_pos[9]);
 
     CLOGD("(%s): %lld %lld %lld %lld %lld %lld %lld %lld %lld %lld", "CMGEFL",
-        m_af_filter[0], m_af_filter[1],
-        m_af_filter[2], m_af_filter[3],
-        m_af_filter[4], m_af_filter[5],
-        m_af_filter[6], m_af_filter[7],
-        m_af_filter[8], m_af_filter[9]);
+        (long long)m_af_filter[0], (long long)m_af_filter[1],
+        (long long)m_af_filter[2], (long long)m_af_filter[3],
+        (long long)m_af_filter[4], (long long)m_af_filter[5],
+        (long long)m_af_filter[6], (long long)m_af_filter[7],
+        (long long)m_af_filter[8], (long long)m_af_filter[9]);
 
     return ;
 }

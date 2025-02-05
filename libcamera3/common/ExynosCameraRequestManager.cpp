@@ -577,8 +577,7 @@ status_t ExynosCameraRequest::setFactoryAddrList(ExynosCameraFrameFactory *facto
 
     for (int factoryTypeIdx = 0; factoryTypeIdx < FRAME_FACTORY_TYPE_MAX; factoryTypeIdx++) {
         if (factoryAddr[factoryTypeIdx] != NULL) {
-            if (factoryTypeIdx == FRAME_FACTORY_TYPE_REPROCESSING ||
-                    factoryTypeIdx == FRAME_FACTORY_TYPE_JPEG_REPROCESSING) {
+            if (factoryTypeIdx == FRAME_FACTORY_TYPE_REPROCESSING) {
                 m_captureFactoryAddrList.push_back(factoryAddr[factoryTypeIdx]);
             } else if (factoryTypeIdx == FRAME_FACTORY_TYPE_CAPTURE_PREVIEW
                        || factoryTypeIdx == FRAME_FACTORY_TYPE_VISION) {
@@ -596,8 +595,7 @@ status_t ExynosCameraRequest::getFactoryAddrList(enum FRAME_FACTORY_TYPE factory
     FrameFactoryListIterator iter;
     ExynosCameraFrameFactory *factory = NULL;
 
-    if (factoryType == FRAME_FACTORY_TYPE_REPROCESSING ||
-            factoryType == FRAME_FACTORY_TYPE_JPEG_REPROCESSING) {
+    if (factoryType== FRAME_FACTORY_TYPE_REPROCESSING) {
         for (iter = m_captureFactoryAddrList.begin(); iter != m_captureFactoryAddrList.end(); ) {
             factory = *iter;
             list->push_back(factory);
@@ -889,10 +887,10 @@ CameraMetadata ExynosCameraRequest::get3AAResultMeta(void)
 
 CameraMetadata ExynosCameraRequest::getShutterMeta()
 {
-    uint8_t entry = 1;
     CameraMetadata minimal_resultMeta;
 
 #ifdef SAMSUNG_TN_FEATURE
+    uint8_t entry = 1;
     minimal_resultMeta.update(SAMSUNG_ANDROID_CONTROL_SHUTTER_NOTIFICATION, &entry, 1);
     CLOGV2("SAMSUNG_ANDROID_CONTROL_SHUTTER_NOTIFICATION is (%d)", entry);
 #endif
@@ -1137,7 +1135,7 @@ ExynosCameraRequestManager::ExynosCameraRequestManager(int cameraId, ExynosCamer
     m_converter = NULL;
     m_callbackOps = NULL;
     m_requestResultKey = 0;
-    m_flushFlag = false;
+    m_setFlushFlag(false);
     m_resultRenew = 0;
     memset(m_name, 0x00, sizeof(m_name));
 
@@ -1151,13 +1149,16 @@ ExynosCameraRequestManager::ExynosCameraRequestManager(int cameraId, ExynosCamer
     m_allMetaSequencer = new ExynosCameraCallbackSequencer();
 
     m_resultCallbackThread = new callbackThread(this, &ExynosCameraRequestManager::m_resultCallbackThreadFunc, "m_resultCallbackThread");
+
+    for (int i = 0; i < EXYNOS_REQUEST_RESULT::CALLBACK_MAX; i++)
+        m_lastResultKey[i] = 0;
 }
 
 ExynosCameraRequestManager::~ExynosCameraRequestManager()
 {
     CLOGD("");
 
-    m_flushFlag = false;
+    m_setFlushFlag(false);
     m_resultRenew = 0;
 
     stopThreadAndInputQ(m_resultCallbackThread, 1, &m_resultCallbackQ);
@@ -1458,6 +1459,27 @@ status_t ExynosCameraRequestManager::m_get(uint32_t key,
     return ret;
 }
 
+void ExynosCameraRequestManager::m_printAllServiceRequestInfo(void)
+{
+    Mutex::Autolock l(m_requestLock);
+
+    RequestInfoListIterator iter;
+    ExynosCameraRequestSP_sprt_t request;
+    camera3_capture_request_t *serviceRequest;
+
+    for (iter = m_serviceRequests.begin(); iter != m_serviceRequests.end(); ++iter) {
+        request = *iter;
+        serviceRequest = request->getServiceRequest();
+        CLOGI("key(%d), serviceFrameCount(%d), (%p) frame_number(%d), outputNum(%d)",
+                request->getKey(),
+                request->getFrameCount(),
+                serviceRequest,
+                serviceRequest->frame_number,
+                serviceRequest->num_output_buffers);
+
+    }
+}
+
 void ExynosCameraRequestManager::m_printAllRequestInfo(RequestInfoMap *map, Mutex *lock)
 {
     RequestInfoMapIterator iter;
@@ -1473,14 +1495,14 @@ void ExynosCameraRequestManager::m_printAllRequestInfo(RequestInfoMap *map, Mute
         item = request;
 
         serviceRequest = item->getServiceRequest();
-#if 0
-        CLOGE("key(%d), serviceFrameCount(%d), (%p) frame_number(%d), outputNum(%d)",
+
+        CLOGI("key(%d), serviceFrameCount(%d), (%p) frame_number(%d), outputNum(%d)",
             request->getKey(),
             request->getFrameCount(),
             serviceRequest,
             serviceRequest->frame_number,
             serviceRequest->num_output_buffers);
-#endif
+
         iter++;
     }
     lock->unlock();
@@ -1587,7 +1609,7 @@ status_t ExynosCameraRequestManager::registerToRunningList(ExynosCameraRequestSP
     if (ret < 0){
         CLOGE("request m_push is failed request");
         ret = INVALID_OPERATION;
-        return NULL;
+        return ret;
     }
 
     ret = m_increasePipelineDepth(&m_runningRequests, &m_requestLock);
@@ -1611,7 +1633,7 @@ status_t ExynosCameraRequestManager::m_removeFromRunningList(uint32_t requestKey
         CLOGE("request m_popFront is failed request");
     }
 
-    if (m_flushFlag == false) {
+    if (m_getFlushFlag() == false) {
         uint32_t key = 0;
         ret = m_popKey(&key, request->getFrameCount());
         if (ret < NO_ERROR) {
@@ -1677,11 +1699,11 @@ status_t ExynosCameraRequestManager::flush()
 
     EXYNOS_REQUEST_RESULT::TYPE cbType = EXYNOS_REQUEST_RESULT::CALLBACK_INVALID;
 
+    m_setFlushFlag(true);
+    m_resultRenew = 0;
+
     m_resultCallbackThread->requestExitAndWait();
     m_resultCallbackQ.release();
-
-    m_flushFlag = true;
-    m_resultRenew = 0;
 
     m_callbackFlushTimer.start();
 
@@ -1725,7 +1747,13 @@ status_t ExynosCameraRequestManager::flush()
 
                 notifyMsg->type = CAMERA3_MSG_ERROR;
                 notifyMsg->message.error.frame_number = requestKey;
-                notifyMsg->message.error.error_code = CAMERA3_MSG_ERROR_REQUEST;
+
+                if (request->getCallbackDone(EXYNOS_REQUEST_RESULT::CALLBACK_PARTIAL_3AA) == true
+                        || request->getCallbackDone(EXYNOS_REQUEST_RESULT::CALLBACK_BUFFER_ONLY) == true) {
+                    notifyMsg->message.error.error_code = CAMERA3_MSG_ERROR_RESULT;
+                } else {
+                    notifyMsg->message.error.error_code = CAMERA3_MSG_ERROR_REQUEST;
+                }
 
                 m_notifyErrorCallback(request, resultRequest);
                 request->setCallbackDone(cbType, true);
@@ -1871,7 +1899,7 @@ status_t ExynosCameraRequestManager::flush()
     long long FlushTime = m_callbackFlushTimer.durationMsecs();
     CLOGV("flush time(%lld)", FlushTime);
 
-    m_flushFlag = false;
+    m_setFlushFlag(false);
 
     stopThreadAndInputQ(m_resultCallbackThread, 1, &m_resultCallbackQ);
 
@@ -1882,6 +1910,10 @@ status_t ExynosCameraRequestManager::flush()
     if (m_allMetaSequencer != NULL) {
         m_allMetaSequencer->flush();
     }
+
+    /* dump */
+    if (getAllRequestCount() > 0)
+        dump();
 
     CLOGD(" OUT---");
 
@@ -2094,7 +2126,7 @@ status_t ExynosCameraRequestManager::m_callbackOpsNotify(camera3_notify_msg_t *m
         break;
     case CAMERA3_MSG_SHUTTER:
         CLOGV("msg frame(%d) type(%d) timestamp(%llu)",
-                 msg->message.shutter.frame_number, msg->type, msg->message.shutter.timestamp);
+                 msg->message.shutter.frame_number, msg->type, (unsigned long long)msg->message.shutter.timestamp);
         m_callbackOps->notify(m_callbackOps, msg);
         break;
     default:
@@ -2111,7 +2143,6 @@ status_t ExynosCameraRequestManager::m_increasePipelineDepth(RequestInfoMap *map
     status_t ret = NO_ERROR;
     RequestInfoMapIterator requestIter;
     ExynosCameraRequestSP_sprt_t request = NULL;
-    struct camera2_shot_ext shot_ext;
 
     lock->lock();
     if (map->size() < 1) {
@@ -2149,6 +2180,18 @@ status_t ExynosCameraRequestManager::pushResultRequest(ResultRequest result)
     return NO_ERROR;
 }
 
+void ExynosCameraRequestManager::m_setFlushFlag(bool flag)
+{
+    Mutex::Autolock l(m_flushLock);
+    m_flushFlag = flag;
+}
+
+bool ExynosCameraRequestManager::m_getFlushFlag(void)
+{
+    Mutex::Autolock l(m_flushLock);
+    return m_flushFlag;
+}
+
 int32_t ExynosCameraRequestManager::getResultRenew(void)
 {
     return m_resultRenew;
@@ -2156,7 +2199,7 @@ int32_t ExynosCameraRequestManager::getResultRenew(void)
 
 void ExynosCameraRequestManager::incResultRenew(void)
 {
-    if (m_flushFlag == true) {
+    if (m_getFlushFlag() == true) {
         CLOGV("flush flag is set. Do not increase the result renew count");
     } else {
         m_resultRenew++;
@@ -2166,6 +2209,22 @@ void ExynosCameraRequestManager::incResultRenew(void)
 void ExynosCameraRequestManager::resetResultRenew(void)
 {
     m_resultRenew = 0;
+}
+
+void ExynosCameraRequestManager::dump(void)
+{
+    CLOGD("AllRequestCount(%d), ServiceRequestCount(%d), RunningRequestCount(%d)",
+            getAllRequestCount(), getServiceRequestCount(), getRunningRequestCount());
+
+    CLOGD("----- Last Result Key -----");
+    for (int i = 0; i < EXYNOS_REQUEST_RESULT::CALLBACK_MAX; i++)
+        CLOGI("Type[%d] = Last Key(%d)", i, m_lastResultKey[i]);
+
+    CLOGD("----- All Remained Request Info (m_serviceRequests-----");
+    m_printAllServiceRequestInfo();
+
+    CLOGD("----- All Remained Request Info (m_runningRequests-----");
+    m_printAllRequestInfo(&m_runningRequests, &m_requestLock);
 }
 
 bool ExynosCameraRequestManager::m_requestDeleteFunc(ExynosCameraRequestSP_sprt_t curRequest)
@@ -2215,8 +2274,6 @@ bool ExynosCameraRequestManager::m_resultCallback(void)
     ExynosCameraRequestSP_sprt_t curRequest = NULL;
     ResultRequest result = NULL;
 
-    EXYNOS_REQUEST_RESULT::TYPE cbType = EXYNOS_REQUEST_RESULT::CALLBACK_INVALID;
-
     ret = m_resultCallbackQ.waitAndPopProcessQ(&result);
     if (ret == TIMED_OUT) {
         CLOGV("resultCallbackQ wait timeout");
@@ -2240,6 +2297,9 @@ bool ExynosCameraRequestManager::m_resultCallback(void)
 
     CLOGV("[R%d T%d] resultCallbackQ(%d)",
             curRequest->getKey(), result->getType(), m_resultCallbackQ.getSizeOfProcessQ());
+
+    if (result->getType() != EXYNOS_REQUEST_RESULT::CALLBACK_INVALID)
+        m_lastResultKey[result->getType()] = curRequest->getKey();
 
     switch(result->getType()){
     case EXYNOS_REQUEST_RESULT::CALLBACK_NOTIFY_ONLY:
@@ -2423,10 +2483,6 @@ bool ExynosCameraRequestManager::m_bufferOnlyCallback(ExynosCameraRequestSP_sprt
             curRequest->getCallbackDone(cbType));
 
     if (curRequest->getCallbackStreamDone(resultStreamId) == false) {
-        TIME_LOGGER_UPDATE(m_cameraId, curRequest->getKey(), 0, CUMULATIVE_CNT, RESULT_CALLBACK, 0);
-        if (curRequest->getKey() == 0) {
-            TIME_LOGGER_SAVE(m_cameraId);
-        }
         m_sendCallbackResult(result);
         curRequest->increaseCompleteBufferCount();
         curRequest->setCallbackStreamDone(resultStreamId, true);
@@ -2437,7 +2493,6 @@ bool ExynosCameraRequestManager::m_bufferOnlyCallback(ExynosCameraRequestSP_sprt
             curRequest->getKey(), resultStreamId, resultStreamId % HAL_STREAM_ID_MAX);
     }
 
-
     CLOGV("-END-");
 
     return ret;
@@ -2447,7 +2502,6 @@ bool ExynosCameraRequestManager::m_notifyErrorCallback(ExynosCameraRequestSP_spr
 {
     CLOGV("-IN-");
     status_t ret = NO_ERROR;
-    uint32_t wishNotifyCount = 0;
 
     EXYNOS_REQUEST_RESULT::TYPE cbType = EXYNOS_REQUEST_RESULT::CALLBACK_INVALID;
 
@@ -2482,7 +2536,7 @@ status_t ExynosCameraRequestManager::waitforRequestflush()
     int count = 0;
 
     CLOGD("m_serviceRequest size(%d) m_runningRequest size(%d)",
-           m_serviceRequests.size(), m_runningRequests.size());
+           (int)m_serviceRequests.size(), (int)m_runningRequests.size());
 
     while (true) {
         if (m_serviceRequests.size() == 0 && m_runningRequests.size() == 0)
@@ -2496,7 +2550,7 @@ status_t ExynosCameraRequestManager::waitforRequestflush()
 
     if (count > 200) {
         CLOGW("m_serviceRequest size(%d) m_runningRequest size(%d), count(%d)",
-               m_serviceRequests.size(), m_runningRequests.size(), count);
+               (int)m_serviceRequests.size(), (int)m_runningRequests.size(), count);
     } else {
         CLOGD("Done : count(%d)", count);
     }

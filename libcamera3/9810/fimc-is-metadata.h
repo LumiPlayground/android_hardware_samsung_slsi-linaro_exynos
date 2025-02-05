@@ -755,8 +755,7 @@ struct camera2_stats_dm {
     uint32_t                    faceLandmarks[CAMERA2_MAX_FACES][6];
     uint32_t                    faceRectangles[CAMERA2_MAX_FACES][4];
     uint8_t                     faceScores[CAMERA2_MAX_FACES];
-    uint32_t                    faceSrcImageSize[2];
-    uint32_t                    faces[CAMERA2_MAX_FACES - 2];
+    uint32_t                    faces[CAMERA2_MAX_FACES];
     uint32_t                    histogram[3 * 256];
     enum stats_mode             histogramMode;
     int32_t                     sharpnessMap[2][2][3];
@@ -1162,12 +1161,6 @@ struct camera2_aa_dm {
     uint32_t                vendor_captureCount;
     uint32_t                vendor_captureExposureTime;
     float                   vendor_objectDistanceCm;
-	// For dual
-    uint32_t                vendor_wideTeleConvEv;
-    uint32_t                vendor_teleSync;
-    uint32_t                vendor_fusionCaptureAeInfo;
-    uint32_t                vendor_fusionCaptureAfInfo;
-
     uint32_t                vendor_reserved[9];
 };
 
@@ -1591,7 +1584,6 @@ struct camera2_scaler_uctl {
     uint32_t txpTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
     uint32_t ixcTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
     uint32_t ixpTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint64_t mexcTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
     uint32_t sccTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
     uint32_t scpTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
     uint32_t sc0TargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
@@ -1621,25 +1613,50 @@ struct camera2_flash_udm {
     enum flash_mode flashMode;
 };
 
-enum camera2_wdr_mode {
-    CAMERA_WDR_OFF = 1,
-    CAMERA_WDR_ON = 2,
-    CAMERA_WDR_AUTO = 3,
-    CAMERA_WDR_AUTO_LIKE = 4,
-    TOTALCOUNT_CAMERA_WDR,
-    CAMERA_WDR_UNKNOWN,
+enum companion_drc_mode {
+    COMPANION_DRC_OFF = 1,
+    COMPANION_DRC_ON,
 };
 
-enum camera2_paf_mode {
-    CAMERA_PAF_OFF = 1,
-    CAMERA_PAF_ON,
+enum companion_wdr_mode {
+    COMPANION_WDR_OFF = 1,
+    COMPANION_WDR_ON = 2,
+    COMPANION_WDR_AUTO = 3,
+    COMPANION_WDR_AUTO_LIKE = 4,
+    TOTALCOUNT_COMPANION_WDR,
+    COMPANION_WDR_UNKNOWN,
 };
 
-enum camera2_disparity_mode {
-    CAMERA_DISPARITY_OFF = 1,
-    CAMERA_DISPARITY_SAD,
-    CAMERA_DISPARITY_CENSUS_MEAN,
-    CAMERA_DISPARITY_CENSUS_CENTER,		/* disparity mode default */
+enum companion_paf_mode {
+    COMPANION_PAF_OFF = 1,
+    COMPANION_PAF_ON,
+};
+
+enum companion_caf_mode {
+    COMPANION_CAF_OFF = 1,
+    COMPANION_CAF_ON,
+};
+
+enum companion_bypass_mode {
+    COMPANION_FULL_BYPASS_OFF = 1,
+    COMPANION_FULL_BYPASS_ON,
+};
+
+enum companion_lsc_mode {
+    COMPANION_LSC_OFF = 1,
+    COMPANION_LSC_ON,
+};
+
+enum companion_bpc_mode {
+    COMPANION_BPC_OFF = 1,
+    COMPANION_BPC_ON,
+};
+
+enum companion_disparity_mode {
+    COMPANION_DISPARITY_OFF = 1,
+    COMPANION_DISPARITY_SAD,
+    COMPANION_DISPARITY_CENSUS_MEAN,
+    COMPANION_DISPARITY_CENSUS_CENTER    // Disparity mode default
 };
 
 enum camera_flash_mode {
@@ -1659,10 +1676,15 @@ enum camera_op_mode {
     CAMERA_OP_MODE_HAL3_FAC,
 };
 
-struct camera2_is_mode_uctl {
-	enum camera2_wdr_mode wdr_mode;
-	enum camera2_paf_mode paf_mode;
-	enum camera2_disparity_mode disparity_mode;
+struct camera2_companion_uctl {
+    enum companion_drc_mode     drc_mode;
+    enum companion_wdr_mode     wdr_mode;
+    enum companion_paf_mode     paf_mode;
+    enum companion_caf_mode     caf_mode;
+    enum companion_lsc_mode     lsc_mode;
+    enum companion_bpc_mode     bpc_mode;
+    enum companion_bypass_mode  bypass_mode;
+    enum companion_disparity_mode   disparity_mode;
 };
 
 struct camera2_pdaf_single_result {
@@ -1687,10 +1709,16 @@ struct camera2_pdaf_udm {
     uint16_t    lensPosResolution;
 };
 
-struct camera2_is_mode_udm {
-	enum camera2_wdr_mode wdr_mode;
-	enum camera2_paf_mode paf_mode;
-	enum camera2_disparity_mode disparity_mode;
+struct camera2_companion_udm {
+    enum companion_drc_mode     drc_mode;
+    enum companion_wdr_mode     wdr_mode;
+    enum companion_paf_mode     paf_mode;
+    enum companion_caf_mode     caf_mode;
+    enum companion_lsc_mode     lsc_mode;
+    enum companion_bpc_mode     bpc_mode;
+    enum companion_bypass_mode  bypass_mode;
+    struct camera2_pdaf_udm     pdaf;
+    enum companion_disparity_mode     disparity_mode;
 };
 
 struct camera2_fd_uctl {
@@ -1725,13 +1753,6 @@ struct camera2_fd_udm {
         vendorSpecific[1] ~ vendorSpecific[31] : reserved
     ---------------------------------------------------------
 */
-};
-
-#define CAMERA2_MAX_ME_MV 200
-
-struct camera2_me_udm {
-    uint32_t motion_vector[CAMERA2_MAX_ME_MV];   /* for (n-2)th frame */
-    uint32_t current_patch[CAMERA2_MAX_ME_MV];   /* for (n-1)th frame */
 };
 
 struct camera2_ni_udm {
@@ -1819,7 +1840,7 @@ struct camera2_uctl {
     struct camera2_sensor_uctl      sensorUd;
     struct camera2_flash_uctl       flashUd;
     struct camera2_scaler_uctl      scalerUd;
-    struct camera2_is_mode_uctl     isModeUd;
+    struct camera2_companion_uctl   companionUd;
     struct camera2_fd_uctl          fdUd;
     struct camera2_drc_uctl         drcUd;
     struct camera2_dcp_uctl         dcpUd;
@@ -1827,10 +1848,10 @@ struct camera2_uctl {
     float                           zoomRatio;
     enum camera_flash_mode          flashMode;
     enum camera_op_mode             opMode;
-    struct camera2_is_hw_lls_uctl   hwlls_mode;
+    struct camera2_is_hw_lls_uctl   hwLls_mode;
     uint32_t                        statsRoi[4];
     enum aa_cameratype              masterCam;
-    uint32_t                        reserved[10];
+    uint32_t                        reserved[1];
 };
 
 struct camera2_udm {
@@ -1846,17 +1867,14 @@ struct camera2_udm {
     struct camera2_rta_udm       rta;
     struct camera2_internal_udm  internal;
     struct camera2_scaler_udm    scaler;
-    struct camera2_is_mode_udm   isMode;
-    struct camera2_pdaf_udm      pdaf;
+    struct camera2_companion_udm companion;
     struct camera2_fd_udm        fd;
-    struct camera2_me_udm        me;
     enum camera_vt_mode          vtMode;
     float                        zoomRatio;
     enum camera_flash_mode       flashMode;
     enum camera_op_mode          opMode;
     struct camera2_ni_udm        ni;
-    uint32_t                     frame_id;
-    uint32_t                     reserved[9];
+    uint32_t                     reserved[3];
 };
 
 struct camera2_shot {
@@ -1894,12 +1912,11 @@ struct camera2_node_group {
 
 struct hfd_meta {
     uint32_t    hfd_enable;
-    uint32_t    score[CAMERA2_MAX_FACES];
-	uint32_t	is_rot[CAMERA2_MAX_FACES];
-	uint32_t	is_yaw[CAMERA2_MAX_FACES];
+	uint32_t		is_rot[CAMERA2_MAX_FACES];
+	uint32_t		is_yaw[CAMERA2_MAX_FACES];
     uint32_t    rot[CAMERA2_MAX_FACES];
-	uint32_t	mirror_x[CAMERA2_MAX_FACES];
-	uint32_t	hw_rot_mirror[CAMERA2_MAX_FACES];
+	uint32_t		mirror_x[CAMERA2_MAX_FACES];
+	uint32_t		hw_rot_mirror[CAMERA2_MAX_FACES];
 };
 
 struct camera2_stream {
@@ -2034,7 +2051,6 @@ typedef struct camera2_scaler_uctl camera2_scaler_uctl_t;
 
 typedef struct camera2_fd_uctl camera2_fd_uctl_t;
 typedef struct camera2_fd_udm camera2_fd_udm_t;
-typedef struct camera2_me_udm camera2_me_udm_t;
 
 typedef struct camera2_sensor_uctl camera2_sensor_uctl_t;
 
@@ -2051,11 +2067,12 @@ typedef struct camera2_as_udm camera2_as_udm_t;
 typedef struct camera2_ipc_udm camera2_ipc_udm_t;
 typedef struct camera2_udm camera2_udm_t;
 
+typedef struct camera2_rta_udm camera2_rta_udm_t;
 typedef struct camera2_internal_udm camera2_internal_udm_t;
 
 typedef struct camera2_flash_uctl camera2_flash_uctl_t;
 
-typedef struct camera2_is_mode_udm camera2_is_mode_udm_t;
+typedef struct camera2_companion_udm camera2_companion_udm_t;
 
 typedef struct camera2_shot camera2_shot_t;
 

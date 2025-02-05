@@ -19,7 +19,7 @@
 #define EXYNOS_CAMERA_PIPE_H
 
 #include <array>
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraConfig.h"
 
@@ -27,6 +27,9 @@
 
 #include "ExynosCameraNode.h"
 #include "ExynosCameraNodeJpegHAL.h"
+#ifdef USE_CIP_HW
+#include "ExynosCameraNodeCIP.h"
+#endif
 #include "ExynosCameraFrame.h"
 #include "ExynosCameraSensorInfo.h"
 #include "ExynosCameraParameters.h"
@@ -36,7 +39,6 @@
 #include "ExynosCameraSizeControl.h"
 
 #include "ExynosJpegApi.h"
-#include "PlugInCommon.h"
 
 namespace android {
 
@@ -252,20 +254,6 @@ public:
 
     virtual status_t        setupPipe(camera_pipe_info_t *pipeInfos, int32_t *sensorIds = NULL);
     virtual status_t        setupPipe(camera_pipe_info_t *pipeInfos, int32_t *sensorIds, int32_t *ispSensorIds);
-    virtual status_t        setupPipe(Map_t *map) {
-        android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Not supported API. use PlugInPipe, assert!!!!", __FUNCTION__, __LINE__);
-        return NO_ERROR;
-    };
-
-    virtual status_t        setParameter(int key, void *data) {
-        android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Not supported API. use PlugInPipe, assert!!!!", __FUNCTION__, __LINE__);
-        return NO_ERROR;
-    };
-    virtual status_t        getParameter(int key, void *data) {
-        android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Not supported API. use PlugInPipe, assert!!!!", __FUNCTION__, __LINE__);
-        return NO_ERROR;
-    };
-
     virtual status_t        prepare(void);
     virtual status_t        prepare(uint32_t prepareCnt);
 

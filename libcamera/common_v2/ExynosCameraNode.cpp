@@ -282,7 +282,7 @@ status_t ExynosCameraNode::close(void)
 {
     EXYNOS_CAMERA_NODE_IN();
 
-    CLOGD("DEBUG(%s[%d]): close", __FUNCTION__, __LINE__);
+    CLOGD("DEBUG(%s[%d]): close(fd:%d)", __FUNCTION__, __LINE__, m_fd);
 
     if (m_nodeState == NODE_STATE_CREATED) {
         CLOGE("ERR(%s[%d]):m_nodeState = [%d] is not valid",
@@ -376,6 +376,13 @@ status_t ExynosCameraNode::getColorFormat(int *v4l2Colorformat, int *planesCount
 }
 
 status_t ExynosCameraNode::setQuality(__unused int quality)
+{
+    EXYNOS_CAMERA_NODE_IN();
+
+    return NO_ERROR;
+}
+
+status_t ExynosCameraNode::setQuality(__unused const unsigned char qtable[])
 {
     EXYNOS_CAMERA_NODE_IN();
 
@@ -582,6 +589,20 @@ status_t ExynosCameraNode::getControl(unsigned int id, int *value)
     m_nodeState = NODE_STATE_IN_PREPARE;
     m_nodeStateLock.unlock();
 */
+    EXYNOS_CAMERA_NODE_OUT();
+
+    return NO_ERROR;
+}
+
+status_t ExynosCameraNode::setExtControl(struct v4l2_ext_controls *ctrl)
+{
+    EXYNOS_CAMERA_NODE_IN();
+
+    if (m_setExtControl(ctrl) < 0) {
+        CLOGE("ERR(%s):m_setExtControl fail", __FUNCTION__);
+        return INVALID_OPERATION;
+    }
+
     EXYNOS_CAMERA_NODE_OUT();
 
     return NO_ERROR;
@@ -905,7 +926,7 @@ status_t ExynosCameraNode::prepareBuffer(ExynosCameraBuffer *buf)
 
 #ifdef EXYNOS_CAMERA_NODE_TRACE
     CLOGD("DEBUG(%s[%d]):name(%s) fd %d, index %d done",
-            __FUNCTION__, __LINE__, m_name, m_fd, v4l2_buf->index);
+            __FUNCTION__, __LINE__, m_name, m_fd, v4l2_buf.index);
 #endif
 
     return ret;
@@ -1315,6 +1336,24 @@ int ExynosCameraNode::m_getControl(unsigned int id, int *value)
         if (ret < 0) {
             CLOGE("ERR(%s):exynos_v4l2_g_ctrl(fd:%d) fail (%d) [id %d, value %d]",
                 __FUNCTION__, m_fd, ret, id, *value);
+            return ret;
+        }
+    }
+
+    return ret;
+}
+
+int ExynosCameraNode::m_setExtControl(struct v4l2_ext_controls *ctrl)
+{
+    int ret = 0;
+
+    if (m_nodeType == NODE_TYPE_DUMMY) {
+        /* no operation */
+    } else {
+        ret = exynos_v4l2_s_ext_ctrl(m_fd, ctrl);
+        if (ret < 0) {
+            CLOGE("ERR(%s):exynos_v4l2_s_ext_ctrl(fd:%d) fail (%d)",
+                    __FUNCTION__, m_fd, ret);
             return ret;
         }
     }

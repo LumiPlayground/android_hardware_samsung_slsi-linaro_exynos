@@ -60,7 +60,13 @@ static int sCameraInfo[][2] = {
     }
 };
 
-static int sCameraHiddenInfo[][2] = {
+static CameraInfo sCameraHiddenInfo[] = {
+#if defined(BOARD_SECURE_CAMERA_SUPPORT)
+    {
+        CAMERA_FACING_FRONT,
+        FRONT_ROTATION,  /* orientation */
+    }
+#endif
 };
 
 /* This struct used in device3.3 service arbitration */

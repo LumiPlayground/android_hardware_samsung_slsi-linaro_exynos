@@ -358,23 +358,24 @@ int ExynosCameraStreamAllocator::lock(
         }
     default:
         lockbufferTimer.start();
-        /* HACK: YSUM solution for 64bit usage is not supported */
+/* HACK: YSUM solution for 64bit usage is not supported */
 #ifdef USE_YSUM_RECORDING
+
         if ((usage & GRALLOC1_CONSUMER_USAGE_VIDEO_ENCODER)
                 && (planeCount == 3)) {
             error = m_grallocMapper->lock(**bufHandle,
-                                          (uint64_t)usage | GRALLOC1_CONSUMER_USAGE_VIDEO_PRIVATE_DATA,
-                                          rect,
-                                          -1, /* acquireFence */
-                                          &ycbcrLayout);
+                    (uint64_t)usage | GRALLOC1_CONSUMER_USAGE_VIDEO_PRIVATE_DATA,
+                    rect,
+                    -1, /* acquireFence */
+                    &ycbcrLayout);
         } else
 #endif
         {
             error = m_grallocMapper->lock(**bufHandle,
-                                          usage,
-                                          rect,
-                                          -1, /* acquireFence */
-                                          &ycbcrLayout);
+                    usage,
+                    rect,
+                    -1, /* acquireFence */
+                    &ycbcrLayout);
         }
         lockbufferTimer.stop();
         break;
@@ -422,17 +423,15 @@ int ExynosCameraStreamAllocator::lock(
         break;
     case HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M:
     case HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M_FULL:
-#ifdef USE_YSUM_RECORDING
         if ( /* (usage & GRALLOC1_CONSUMER_USAGE_VIDEO_PRIVATE_DATA) &&
               * : YSUM solution for 64bit usage is not supported */
-             (usage & GRALLOC1_CONSUMER_USAGE_VIDEO_ENCODER) &&
-             (m_actualFormat == HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M) &&
-             (planeCount == 3)) {
+                (usage & GRALLOC1_CONSUMER_USAGE_VIDEO_ENCODER) &&
+                (m_actualFormat == HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M) &&
+                (planeCount == 3)) {
             /* Use VideoMeta data */
             grallocFd[2] = priv_handle->fd2;
             grallocAddr[2] = ycbcrLayout.cb;
         }
-#endif
         grallocFd[1] = priv_handle->fd1;
         grallocAddr[1] = ycbcrLayout.cr;
         grallocFd[0] = priv_handle->fd;
@@ -447,11 +446,17 @@ int ExynosCameraStreamAllocator::lock(
         grallocFd[0] = priv_handle->fd;
         grallocAddr[0] = ycbcrLayout.y;
         break;
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_P010_M:
     case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M:
     case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M_PRIV:
     case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M_S10B:
     case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SPN_S10B:
     case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M_TILED:
+        if (usage & GRALLOC1_CONSUMER_USAGE_VIDEO_PRIVATE_DATA) {
+            /* Use VideoMeta data */
+            grallocFd[2] = priv_handle->fd2;
+            grallocAddr[2] = ycbcrLayout.cr;
+        }
         grallocFd[1] = priv_handle->fd1;
         grallocAddr[1] = ycbcrLayout.cb;
         grallocFd[0] = priv_handle->fd;

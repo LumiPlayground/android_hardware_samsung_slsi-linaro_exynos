@@ -45,15 +45,15 @@ status_t ExynosCameraPipe::create(int32_t *sensorIds)
 
     if (m_flagValidInt(m_nodeNum[OUTPUT_NODE]) == true) {
         m_node[OUTPUT_NODE] = new ExynosCameraNode();
-        ret = m_node[OUTPUT_NODE]->create("main", m_cameraId);
+        ret = m_node[OUTPUT_NODE]->create(m_name, m_cameraId);
         if (ret < 0) {
-            CLOGE("ERR(%s[%d]): OUTPUT_NODE create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            CLOGE("ERR(%s[%d]):OUTPUT_NODE create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
             return ret;
         }
 
         ret = m_node[OUTPUT_NODE]->open(m_nodeNum[OUTPUT_NODE]);
         if (ret < 0) {
-            CLOGE("ERR(%s[%d]): OUTPUT_NODE open fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            CLOGE("ERR(%s[%d]):OUTPUT_NODE open fail, ret(%d)", __FUNCTION__, __LINE__, ret);
             return ret;
         }
         CLOGD("DEBUG(%s):Node(%d) opened", __FUNCTION__, m_nodeNum[OUTPUT_NODE]);
@@ -312,8 +312,6 @@ status_t ExynosCameraPipe::start(void)
     m_flagStartPipe = true;
     m_flagTryStop = false;
 
-    m_flagIgnoreFlip = false;
-
     return NO_ERROR;
 }
 
@@ -364,8 +362,6 @@ status_t ExynosCameraPipe::stop(void)
     m_threadCommand = 0;
     m_timeInterval = 0;
     m_flagTryStop= false;
-
-    m_flagIgnoreFlip = false;
 
     return NO_ERROR;
 }
@@ -483,6 +479,24 @@ status_t ExynosCameraPipe::setControl(int cid, int value)
     return ret;
 }
 
+status_t ExynosCameraPipe::setControl(int cid, int value, __unused enum NODE_TYPE nodeType)
+{
+    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+
+    if (m_mainNode == NULL) {
+        CLOGE("ERR(%s): m_mainNode == NULL. so, fail", __FUNCTION__);
+        return INVALID_OPERATION;
+    }
+
+    int ret = 0;
+
+    ret = m_mainNode->setControl(cid, value);
+    if (ret != NO_ERROR)
+        CLOGE("ERR(%s):m_mainNode->setControl failed", __FUNCTION__);
+
+    return ret;
+}
+
 status_t ExynosCameraPipe::getControl(int cid, int *value)
 {
     CLOGV("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
@@ -497,6 +511,24 @@ status_t ExynosCameraPipe::getControl(int cid, int *value)
     ret = m_mainNode->getControl(cid, value);
     if (ret != NO_ERROR)
         CLOGE("ERR(%s):m_mainNode->getControl failed", __FUNCTION__);
+
+    return ret;
+}
+
+status_t ExynosCameraPipe::setExtControl(struct v4l2_ext_controls *ctrl)
+{
+    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+
+    if (m_mainNode == NULL) {
+        CLOGE("ERR(%s):m_mainNode == NULL. so, fail", __FUNCTION__);
+        return INVALID_OPERATION;
+    }
+
+    int ret = 0;
+
+    ret = m_mainNode->setExtControl(ctrl);
+    if (ret != NO_ERROR)
+        CLOGE("ERR(%s):m_mainNode->setControl failed", __FUNCTION__);
 
     return ret;
 }
@@ -599,7 +631,7 @@ status_t ExynosCameraPipe::instantOnQbuf(ExynosCameraFrame **frame, BUFFER_POS::
         return BAD_VALUE;
     }
 
-    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(newBuffer.addr[1]);
+    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(newBuffer.addr[newBuffer.planeCount - 1]);
 
     if (shot_ext != NULL) {
         newFrame->getMetaData(shot_ext);
@@ -613,8 +645,18 @@ status_t ExynosCameraPipe::instantOnQbuf(ExynosCameraFrame **frame, BUFFER_POS::
         shot_ext->shot.ctl.scaler.cropRegion[2] = FASTEN_AE_WIDTH;
         shot_ext->shot.ctl.scaler.cropRegion[3] = FASTEN_AE_HEIGHT;
 #else
-        shot_ext->shot.ctl.scaler.cropRegion[2] = 0;
-        shot_ext->shot.ctl.scaler.cropRegion[3] = 0;
+        int bcropW = 0;
+        int bcropH = 0;
+
+        ret = m_parameters->getFastenAeStableBcropSize(&bcropW, &bcropH);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):m_parameters->getFastenAeStableBcropSize() fail on fastAE",
+                __FUNCTION__, __LINE__);
+            return INVALID_OPERATION;
+        }
+
+        shot_ext->shot.ctl.scaler.cropRegion[2] = bcropW;
+        shot_ext->shot.ctl.scaler.cropRegion[3] = bcropH;
 #endif
 
         setMetaCtlAeTargetFpsRange(shot_ext, FASTEN_AE_FPS, FASTEN_AE_FPS);
@@ -727,7 +769,7 @@ status_t ExynosCameraPipe::instantOnDQbuf(ExynosCameraFrame **frame, __unused BU
 
     m_activityControl->activityAfterExecFunc(getPipeId(), (void *)&curBuffer);
 
-    ret = m_updateMetadataToFrame(curBuffer.addr[1], curBuffer.index);
+    ret = m_updateMetadataToFrame(curBuffer.addr[curBuffer.planeCount - 1], curBuffer.index);
     if (ret < 0)
         CLOGE("ERR(%s[%d]): updateMetadataToFrame fail, ret(%d)", __FUNCTION__, __LINE__, ret);
 
@@ -980,14 +1022,6 @@ status_t ExynosCameraPipe::setStopFlag(void)
 
     return NO_ERROR;
 }
-status_t ExynosCameraPipe::setFlagFlipIgnore(bool ignoreFlip)
-{
-    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
-
-    m_flagIgnoreFlip = ignoreFlip;
-
-    return NO_ERROR;
-}
 
 int ExynosCameraPipe::getRunningFrameCount(void)
 {
@@ -1000,6 +1034,15 @@ int ExynosCameraPipe::getRunningFrameCount(void)
     }
 
     return runningFrameCount;
+}
+
+void ExynosCameraPipe::setOneShotMode(bool enable)
+{
+    CLOGI("INFO(%s[%d]):%s %s OneShot mode",
+            __FUNCTION__, __LINE__, m_name,
+            (enable == true)? "Enable" : "Disable");
+
+    m_oneShotMode = enable;
 }
 
 #ifdef USE_MCPIPE_SERIALIZATION_MODE
@@ -1134,10 +1177,11 @@ status_t ExynosCameraPipe::m_putBuffer(void)
         return BAD_VALUE;
     }
 
-    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(newBuffer.addr[1]);
+    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(newBuffer.addr[newBuffer.planeCount - 1]);
     if (shot_ext != NULL) {
         newFrame->getMetaData(shot_ext);
-        m_parameters->duplicateCtrlMetadata((void *)shot_ext);
+        if (m_parameters->getHalVersion() != IS_HAL_VER_3_2)
+            m_parameters->duplicateCtrlMetadata((void *)shot_ext);
         m_activityControl->activityBeforeExecFunc(getPipeId(), (void *)&newBuffer);
 
         if (m_perframeMainNodeGroupInfo.perFrameLeaderInfo.perFrameNodeType == PERFRAME_NODE_TYPE_LEADER) {
@@ -1148,7 +1192,7 @@ status_t ExynosCameraPipe::m_putBuffer(void)
             /* Per - Leader */
             if (node_group_info.leader.request == 1) {
 
-                if (m_checkNodeGroupInfo(-1, &m_curNodeGroupInfo.leader, &node_group_info.leader) != NO_ERROR)
+                if (m_checkNodeGroupInfo(m_mainNode->getName(), &m_curNodeGroupInfo.leader, &node_group_info.leader) != NO_ERROR)
                     CLOGW("WARN(%s[%d]): m_checkNodeGroupInfo(leader) fail", __FUNCTION__, __LINE__);
 
                 setMetaNodeLeaderInputSize(shot_ext,
@@ -1204,6 +1248,31 @@ status_t ExynosCameraPipe::m_putBuffer(void)
         return ret;
     }
 
+#ifdef SUPPORT_DEPTH_MAP
+    if (getPipeId() == PIPE_FLITE && newFrame->getRequest(PIPE_VC1) == true) {
+        ExynosCameraBuffer depthMapBuffer;
+        ret = newFrame->getDstBuffer(getPipeId(), &depthMapBuffer, CAPTURE_NODE_2);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Failed to get CAPTURE_NODE_2 buffer. ret %d",
+                    __FUNCTION__, __LINE__, ret);
+            return OK;
+        }
+
+        ret = m_node[CAPTURE_NODE_2]->putBuffer(&depthMapBuffer);
+        if (ret < 0) {
+            CLOGE("ERR(%s):putBuffer fail", __FUNCTION__);
+            return ret;
+            /* TODO: doing exception handling */
+        }
+
+        ret = newFrame->setDstBufferState(getPipeId(), ENTITY_BUFFER_STATE_PROCESSING, CAPTURE_NODE_2);
+        if (ret < 0) {
+            CLOGE("ERR(%s): setDstBuffer state fail", __FUNCTION__);
+            return ret;
+        }
+    }
+#endif
+
     m_runningFrameList[newBuffer.index] = newFrame;
     m_numOfRunningFrame++;
 
@@ -1222,7 +1291,8 @@ status_t ExynosCameraPipe::m_getBuffer(void)
     int ret = 0;
 
     if (m_numOfRunningFrame <= 0 || m_flagStartPipe == false) {
-        CLOGD("DEBUG(%s[%d]): skip getBuffer, flagStartPipe(%d), numOfRunningFrame = %d", __FUNCTION__, __LINE__, m_flagStartPipe, m_numOfRunningFrame);
+        CLOGD("DEBUG(%s[%d]): skip getBuffer, flagStartPipe(%d), numOfRunningFrame = %d",
+                __FUNCTION__, __LINE__, m_flagStartPipe, m_numOfRunningFrame);
         return NO_ERROR;
     }
 
@@ -1240,7 +1310,7 @@ status_t ExynosCameraPipe::m_getBuffer(void)
 
     m_activityControl->activityAfterExecFunc(getPipeId(), (void *)&curBuffer);
 
-    ret = m_updateMetadataToFrame(curBuffer.addr[1], curBuffer.index);
+    ret = m_updateMetadataToFrame(curBuffer.addr[curBuffer.planeCount - 1], curBuffer.index);
     if (ret < 0)
         CLOGE("ERR(%s[%d]): updateMetadataToFrame fail, ret(%d)", __FUNCTION__, __LINE__, ret);
 
@@ -1361,7 +1431,8 @@ status_t ExynosCameraPipe::m_setInput(ExynosCameraNode *nodes[], int32_t *nodeNu
     int currentSensorId[MAX_NODE] = {0, };
 
     if (nodeNums == NULL || sensorIds == NULL) {
-        CLOGE("ERR(%s[%d]): nodes == %p || nodeNum == %p || sensorId == %p", __FUNCTION__, __LINE__, nodes, nodeNums, sensorIds);
+        CLOGE("ERR(%s[%d]): nodes == %p || nodeNum == %p || sensorId == %p",
+                __FUNCTION__, __LINE__, nodes, nodeNums, sensorIds);
         return INVALID_OPERATION;
     }
 
@@ -1381,7 +1452,8 @@ status_t ExynosCameraPipe::m_setInput(ExynosCameraNode *nodes[], int32_t *nodeNu
             currentSensorId[i] != sensorIds[i]) {
 
 #ifdef FIMC_IS_VIDEO_BAS_NUM
-            CLOGD("DEBUG(%s[%d]): setInput(sensorIds : %d) [src nodeNum : %d][nodeNums : %d][otf : %d][leader : %d][reprocessing : %d][unique sensorId : %d]",
+            CLOGD("DEBUG(%s[%d]): setInput(sensorIds : %d) [src nodeNum : %d][nodeNums : %d]\
+                [otf : %d][leader : %d][reprocessing : %d][unique sensorId : %d]",
                 __FUNCTION__, __LINE__,
                  sensorIds[i],
                 ((sensorIds[i] & INPUT_VINDEX_MASK) >>  INPUT_VINDEX_SHIFT) + FIMC_IS_VIDEO_BAS_NUM,
@@ -1394,11 +1466,23 @@ status_t ExynosCameraPipe::m_setInput(ExynosCameraNode *nodes[], int32_t *nodeNu
             CLOGD("DEBUG(%s[%d]): setInput(sensorIds : %d)",
                 __FUNCTION__, __LINE__, sensorIds[i]);
 #endif
+#ifdef SAMSUNG_QUICK_SWITCH
+            if (nodeNums[1] == FIMC_IS_VIDEO_SS4_NUM || nodeNums[1] == FIMC_IS_VIDEO_SS5_NUM) {
+                if (m_parameters->getQuickSwitchCmd() == QUICK_SWITCH_CMD_IDLE_TO_STBY) {
+                    ret = nodes[i]->setInput(sensorIds[i] | (SENSOR_SCENARIO_STANDBY << SCENARIO_SHIFT));
+                } else {
+                    /* Skip the setInput for this node in the switching case */
+                }
+            } else {
+                ret = nodes[i]->setInput(sensorIds[i]);
+            }
+#else
             ret = nodes[i]->setInput(sensorIds[i]);
+#endif
             if (ret < 0) {
                 CLOGE("ERR(%s[%d]): nodeNums[%d] : %d, setInput(sensorIds : %d fail, ret(%d)",
-                    __FUNCTION__, __LINE__, i, nodeNums[i], sensorIds[i],
-                    ret);
+                        __FUNCTION__, __LINE__, i, nodeNums[i], sensorIds[i],
+                        ret);
 
                 return ret;
             }
@@ -1413,14 +1497,23 @@ status_t ExynosCameraPipe::m_setPipeInfo(camera_pipe_info_t *pipeInfos)
     CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
 
     status_t ret = NO_ERROR;
+    uint32_t planeCount = 2;
+    uint32_t bytePerPlane = 0;
 
     if (pipeInfos == NULL) {
         CLOGE("ERR(%s[%d]): pipeInfos == NULL. so, fail", __FUNCTION__, __LINE__);
         return INVALID_OPERATION;
     }
 
+    int colorFormat = pipeInfos[0].rectInfo.colorFormat;
+
+    getYuvFormatInfo(colorFormat, &bytePerPlane, &planeCount);
+    /* Add medadata plane count */
+    planeCount++;
+
     ret = m_setNodeInfo(m_mainNode, &pipeInfos[0],
-                        2, YUV_FULL_RANGE);
+                        planeCount, YUV_FULL_RANGE);
+
     if (ret != NO_ERROR) {
         CLOGE("ERR(%s[%d]): m_setNodeInfo(%d, %d, %d) fail",
             __FUNCTION__, __LINE__, pipeInfos[0].rectInfo.fullW, pipeInfos[0].rectInfo.fullH, pipeInfos[0].bufInfo.count);
@@ -1515,7 +1608,8 @@ status_t ExynosCameraPipe::m_setNodeInfo(ExynosCameraNode *node, camera_pipe_inf
 
     if (flagSetRequest == true) {
         CLOGD("DEBUG(%s[%d]): set pipeInfos on %s : setFormat(%d, %d) and reqBuffers(%d).",
-            __FUNCTION__, __LINE__, node->getName(), pipeInfos->rectInfo.fullW, pipeInfos->rectInfo.fullH, pipeInfos->bufInfo.count);
+            __FUNCTION__, __LINE__, node->getName(), pipeInfos->rectInfo.fullW,
+            pipeInfos->rectInfo.fullH, pipeInfos->bufInfo.count);
 
         bool flagValidSetFormatInfo = true;
 
@@ -1538,9 +1632,27 @@ status_t ExynosCameraPipe::m_setNodeInfo(ExynosCameraNode *node, camera_pipe_inf
                 __FUNCTION__, __LINE__, (int)pipeInfos->bufInfo.type, (int)pipeInfos->bufInfo.memory);
             flagValidSetFormatInfo = false;
         }
-        node->setBufferType(pipeInfos->bufInfo.count, (enum v4l2_buf_type)pipeInfos->bufInfo.type, (enum v4l2_memory)pipeInfos->bufInfo.memory);
+        node->setBufferType(pipeInfos->bufInfo.count, (enum v4l2_buf_type)pipeInfos->bufInfo.type,
+                            (enum v4l2_memory)pipeInfos->bufInfo.memory);
 
         if (flagValidSetFormatInfo == true) {
+#ifdef SAMSUNG_DNG
+            if (m_parameters->getDNGCaptureModeOn() && getPipeId() == PIPE_FLITE) {
+                CLOGV("DEBUG(%s[%d]): DNG flite node->setFormat() getPipeId()(%d)", __FUNCTION__, __LINE__,getPipeId());
+                if (node->setFormat() != NO_ERROR) {
+                    CLOGE("ERR(%s[%d]): node->setFormat() fail", __FUNCTION__, __LINE__);
+                    return INVALID_OPERATION;
+                }
+            } else
+#elif defined(DEBUG_RAWDUMP)
+            if (m_parameters->checkBayerDumpEnable() && flagBayer == true) {
+                //bytesPerLine[0] = (maxW + 16) * 2;
+                if (node->setFormat() != NO_ERROR) {
+                    CLOGE("ERR(%s[%d]): node->setFormat() fail", __FUNCTION__, __LINE__);
+                    return INVALID_OPERATION;
+                }
+            } else
+#endif
             {
                 if (node->setFormat(pipeInfos->bytesPerPlane) != NO_ERROR) {
                     CLOGE("ERR(%s[%d]): node->setFormat() fail", __FUNCTION__, __LINE__);
@@ -1657,7 +1769,8 @@ status_t ExynosCameraPipe::m_clearNode(void)
         if (m_node[i]) {
             ret = m_node[i]->clrBuffers();
             if (ret != NO_ERROR) {
-                CLOGE("ERR(%s[%d]): m_node[%d](%s)->clrBuffers fail!, ret(%d)", __FUNCTION__, __LINE__, i, nodeNames[i], ret);
+                CLOGE("ERR(%s[%d]): m_node[%d](%s)->clrBuffers fail!, ret(%d)",
+                        __FUNCTION__, __LINE__, i, nodeNames[i], ret);
                 return ret;
             }
         }
@@ -1679,13 +1792,18 @@ status_t ExynosCameraPipe::m_checkNodeGroupInfo(char *name, camera2_node *oldNod
         if (oldNode->input.cropRegion[i] != newNode->input.cropRegion[i] ||
             oldNode->output.cropRegion[i] != newNode->output.cropRegion[i]) {
 
-            CLOGD("DEBUG(%s[%d]): name %s : PerFrame oldCropSize (%d, %d, %d, %d / %d, %d, %d, %d) -> newCropSize (%d, %d, %d, %d / %d, %d, %d, %d)",
+            CLOGD("DEBUG(%s[%d]): name %s : PerFrame oldCropSize (%d, %d, %d, %d / %d, %d, %d, %d) \
+                -> newCropSize (%d, %d, %d, %d / %d, %d, %d, %d)",
                 __FUNCTION__, __LINE__,
                 name,
-                oldNode->input. cropRegion[0], oldNode->input. cropRegion[1], oldNode->input. cropRegion[2], oldNode->input. cropRegion[3],
-                oldNode->output.cropRegion[0], oldNode->output.cropRegion[1], oldNode->output.cropRegion[2], oldNode->output.cropRegion[3],
-                newNode->input. cropRegion[0], newNode->input. cropRegion[1], newNode->input. cropRegion[2], newNode->input. cropRegion[3],
-                newNode->output.cropRegion[0], newNode->output.cropRegion[1], newNode->output.cropRegion[2], newNode->output.cropRegion[3]);
+                oldNode->input. cropRegion[0], oldNode->input. cropRegion[1],
+                oldNode->input. cropRegion[2], oldNode->input. cropRegion[3],
+                oldNode->output.cropRegion[0], oldNode->output.cropRegion[1],
+                oldNode->output.cropRegion[2], oldNode->output.cropRegion[3],
+                newNode->input. cropRegion[0], newNode->input. cropRegion[1],
+                newNode->input. cropRegion[2], newNode->input. cropRegion[3],
+                newNode->output.cropRegion[0], newNode->output.cropRegion[1],
+                newNode->output.cropRegion[2], newNode->output.cropRegion[3]);
 
             break;
         }
@@ -1712,13 +1830,18 @@ status_t ExynosCameraPipe::m_checkNodeGroupInfo(int index, camera2_node *oldNode
         if (oldNode->input.cropRegion[i] != newNode->input.cropRegion[i] ||
             oldNode->output.cropRegion[i] != newNode->output.cropRegion[i]) {
 
-            CLOGD("DEBUG(%s[%d]): index %d : PerFrame oldCropSize (%d, %d, %d, %d / %d, %d, %d, %d) -> newCropSize (%d, %d, %d, %d / %d, %d, %d, %d)",
+            CLOGD("DEBUG(%s[%d]): index %d : PerFrame oldCropSize (%d, %d, %d, %d / %d, %d, %d, %d) \
+                -> newCropSize (%d, %d, %d, %d / %d, %d, %d, %d)",
                 __FUNCTION__, __LINE__,
                 index,
-                oldNode->input. cropRegion[0], oldNode->input. cropRegion[1], oldNode->input. cropRegion[2], oldNode->input. cropRegion[3],
-                oldNode->output.cropRegion[0], oldNode->output.cropRegion[1], oldNode->output.cropRegion[2], oldNode->output.cropRegion[3],
-                newNode->input. cropRegion[0], newNode->input. cropRegion[1], newNode->input. cropRegion[2], newNode->input. cropRegion[3],
-                newNode->output.cropRegion[0], newNode->output.cropRegion[1], newNode->output.cropRegion[2], newNode->output.cropRegion[3]);
+                oldNode->input. cropRegion[0], oldNode->input. cropRegion[1],
+                oldNode->input. cropRegion[2], oldNode->input. cropRegion[3],
+                oldNode->output.cropRegion[0], oldNode->output.cropRegion[1],
+                oldNode->output.cropRegion[2], oldNode->output.cropRegion[3],
+                newNode->input. cropRegion[0], newNode->input. cropRegion[1],
+                newNode->input. cropRegion[2], newNode->input. cropRegion[3],
+                newNode->output.cropRegion[0], newNode->output.cropRegion[1],
+                newNode->output.cropRegion[2], newNode->output.cropRegion[3]);
 
             break;
         }
@@ -1943,6 +2066,7 @@ void ExynosCameraPipe::m_init(void)
     m_pipeId = 0;
     m_cameraId = -1;
     m_reprocessing = 0;
+    m_oneShotMode = false;
 
     m_parameters = NULL;
     m_prepareBufferCount = 0;
@@ -1966,8 +2090,6 @@ void ExynosCameraPipe::m_init(void)
 
     m_flagStartPipe = false;
     m_flagTryStop = false;
-
-    m_flagIgnoreFlip = false;
 
     m_flagFrameDoneQ = false;
 

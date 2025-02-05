@@ -28,7 +28,6 @@ ExynosCameraActivityBase::ExynosCameraActivityBase(int cameraId)
     t_isActivated = false;
     t_reqNum = 0;
     t_reqStatus = 0;
-    pFunc = NULL;
     m_cameraId = cameraId;
     memset(m_name, 0x00, sizeof(m_name));
 }
@@ -39,42 +38,45 @@ ExynosCameraActivityBase::~ExynosCameraActivityBase()
 
 int ExynosCameraActivityBase::execFunction(CALLBACK_TYPE callbackType, void *args)
 {
+    int ret = INVALID_OPERATION;
+
     switch (callbackType) {
     case CALLBACK_TYPE_SENSOR_BEFORE:
-        pFunc = &ExynosCameraActivityBase::t_funcSensorBefore;
+        ret = t_funcSensorBefore(args);
         break;
     case CALLBACK_TYPE_SENSOR_AFTER:
-        pFunc = &ExynosCameraActivityBase::t_funcSensorAfter;
+        ret = t_funcSensorAfter(args);
         break;
     case CALLBACK_TYPE_3A_BEFORE:
-        pFunc = &ExynosCameraActivityBase::t_func3ABefore;
+        ret = t_func3ABefore(args);
         break;
     case CALLBACK_TYPE_3A_AFTER:
-        pFunc = &ExynosCameraActivityBase::t_func3AAfter;
+        ret = t_func3AAfter(args);
         break;
     case CALLBACK_TYPE_3A_BEFORE_HAL3:
-        pFunc = &ExynosCameraActivityBase::t_func3ABeforeHAL3;
+        ret = t_func3ABeforeHAL3(args);
         break;
     case CALLBACK_TYPE_3A_AFTER_HAL3:
-        pFunc = &ExynosCameraActivityBase::t_func3AAfterHAL3;
+        ret = t_func3AAfterHAL3(args);
         break;
     case CALLBACK_TYPE_ISP_BEFORE:
-        pFunc = &ExynosCameraActivityBase::t_funcISPBefore;
+        ret = t_funcISPBefore(args);
         break;
     case CALLBACK_TYPE_ISP_AFTER:
-        pFunc = &ExynosCameraActivityBase::t_funcISPAfter;
+        ret = t_funcISPAfter(args);
         break;
     case CALLBACK_TYPE_VRA_BEFORE:
-        pFunc = &ExynosCameraActivityBase::t_funcVRABefore;
+        ret = t_funcVRABefore(args);
         break;
     case CALLBACK_TYPE_VRA_AFTER:
-        pFunc = &ExynosCameraActivityBase::t_funcVRAAfter;
+        ret = t_funcVRAAfter(args);
         break;
     default:
+        CLOGE("invalid callbackType:%d", callbackType);
         break;
     }
 
-    return (this->*pFunc)(args);
+    return ret;
 }
 
 } /* namespace android */

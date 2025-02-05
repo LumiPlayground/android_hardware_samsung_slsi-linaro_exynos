@@ -96,7 +96,7 @@ int ExynosCameraActivityUCTL::t_func3AAfter(void *args)
     return 1;
 }
 
-int ExynosCameraActivityUCTL::t_func3ABeforeHAL3(void *args)
+int ExynosCameraActivityUCTL::t_func3ABeforeHAL3(__unused void *args)
 {
     return 1;
 }

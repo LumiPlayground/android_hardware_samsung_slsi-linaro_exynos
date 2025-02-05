@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraUtils"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraUtils.h"
 
@@ -594,9 +594,9 @@ void getMetaCtlCaptureExposureTime(struct camera2_shot_ext *shot_ext, uint32_t *
 }
 
 #ifdef SUPPORT_DEPTH_MAP
-void setMetaCtlDisparityMode(struct camera2_shot_ext *shot_ext, enum camera2_disparity_mode disparity_mode)
+void setMetaCtlDisparityMode(struct camera2_shot_ext *shot_ext, enum companion_disparity_mode disparity_mode)
 {
-    shot_ext->shot.uctl.isModeUd.disparity_mode = disparity_mode;
+    shot_ext->shot.uctl.companionUd.disparity_mode = disparity_mode;
 }
 #endif
 
@@ -870,6 +870,21 @@ void setMetaCtlSceneMode(struct camera2_shot_ext *shot_ext, enum aa_mode mode, e
         shot_ext->shot.ctl.edge.strength = default_edge_strength;
         shot_ext->shot.ctl.color.vendor_saturation = 3; /* "3" is default. */
         break;
+#ifdef SAMSUNG_FOOD_MODE
+    case AA_SCENE_MODE_FOOD:
+        shot_ext->shot.ctl.aa.aeMode = AA_AEMODE_MATRIX;
+
+        shot_ext->shot.ctl.aa.awbMode = AA_AWBMODE_WB_AUTO;
+        shot_ext->shot.ctl.aa.vendor_isoMode = AA_ISOMODE_AUTO;
+        shot_ext->shot.ctl.aa.vendor_isoValue = 0;
+        shot_ext->shot.ctl.sensor.sensitivity = 0;
+        shot_ext->shot.ctl.noise.mode = default_noise_mode;
+        shot_ext->shot.ctl.noise.strength = default_noise_strength;
+        shot_ext->shot.ctl.edge.mode = default_edge_mode;
+        shot_ext->shot.ctl.edge.strength = default_edge_strength;
+        shot_ext->shot.ctl.color.vendor_saturation = 3; /* "3" is default. */
+        break;
+#endif
     case AA_SCENE_MODE_AQUA:
         /* set default setting */
         if (shot_ext->shot.ctl.aa.aeMode == AA_AEMODE_OFF)
@@ -1085,6 +1100,30 @@ nsecs_t getMetaDmSensorTimeStamp(struct camera2_shot_ext *shot_ext)
     return shot_ext->shot.dm.sensor.timeStamp;
 }
 
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+status_t setMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext, uint64_t timeStamp)
+{
+    status_t status = NO_ERROR;
+    if (shot_ext == NULL) {
+        ALOGE("ERR(%s[%d]):buffer is NULL", __FUNCTION__, __LINE__);
+        status = INVALID_OPERATION;
+        return status;
+    }
+
+    shot_ext->shot.udm.sensor.timeStampBoot = timeStamp;
+    return status;
+}
+
+nsecs_t getMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext)
+{
+    if (shot_ext == NULL) {
+        ALOGE("ERR(%s[%d]):buffer is NULL", __FUNCTION__, __LINE__);
+        return 0;
+    }
+    return shot_ext->shot.udm.sensor.timeStampBoot;
+}
+#endif
+
 void setMetaNodeLeaderRequest(struct camera2_shot_ext* shot_ext, int value)
 {
     shot_ext->node_group.leader.request = value;
@@ -1292,64 +1331,6 @@ int getBayerPlaneSize(int width, int height, int bayerFormat)
     return planeSize;
 }
 
-bool directDumpToFile(ExynosCameraBuffer *buffer, uint32_t cameraId, uint32_t frameCount)
-{
-    time_t rawtime;
-    struct tm* timeinfo;
-    FILE *file = NULL;
-    char fileName[EXYNOS_CAMERA_NAME_STR_SIZE];
-
-    if (buffer == NULL) {
-        ALOGE("Invalid ExynosBuffer");
-        return false;
-    }
-
-    if (buffer->addr[0] == NULL) {
-        ALOGE("Need to mmap the virtual address(%s)", buffer->bufMgrNm);
-        return false;
-    }
-
-    if (buffer->status.position == EXYNOS_CAMERA_BUFFER_POSITION_IN_DRIVER) {
-        ALOGE("Can't dump this buffer(%s, %d)", buffer->bufMgrNm, buffer->index);
-        return false;
-    }
-
-    for (int batchIndex = 0; batchIndex < buffer->batchSize; batchIndex++) {
-        /* skip meta plane */
-        int startPlaneIndex = batchIndex * (buffer->planeCount - 1);
-        int endPlaneIndex = (batchIndex + 1) * (buffer->planeCount - 1);
-
-        time(&rawtime);
-        timeinfo = localtime(&rawtime);
-        snprintf(fileName, sizeof(fileName), DEBUG_DUMP_NAME,
-                cameraId, buffer->bufMgrNm, frameCount, buffer->index, batchIndex,
-                timeinfo->tm_year+1900, timeinfo->tm_mon+1, timeinfo->tm_mday,
-                timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-
-        file = fopen(fileName, "w");
-        if (file == NULL) {
-            ALOGE("ERR(%s):open(%s) fail", __func__, fileName);
-            return false;
-        }
-
-        fflush(stdout);
-        for (int plane = startPlaneIndex; plane < endPlaneIndex; plane++) {
-            fwrite(buffer->addr[plane], 1, buffer->size[plane], file);
-            ALOGI("filedump(%s, [%d]size(%d) s:%d, e:%d",
-                    fileName, plane, buffer->size[plane],
-                    startPlaneIndex, endPlaneIndex);
-        }
-        fflush(file);
-
-        fclose(file);
-        file = NULL;
-
-        ALOGD("filedump(%s) is successed!!", fileName);
-    }
-
-    return true;
-}
-
 bool dumpToFile(char *filename, char *srcBuf, unsigned int size)
 {
     FILE *yuvFd = NULL;
@@ -1453,7 +1434,7 @@ status_t readFromFile(char *fileName, char *dstBuf, uint32_t size)
 
     buffer = (char *) malloc(size);
     if (buffer == NULL) {
-        ALOGE("ERR(%s):Failed to alloc buffer. size %zu",
+        ALOGE("ERR(%s):Failed to alloc buffer. size %d",
                 __FUNCTION__, size);
         ret = INVALID_OPERATION;
         goto func_exit;
@@ -1461,14 +1442,14 @@ status_t readFromFile(char *fileName, char *dstBuf, uint32_t size)
 
     readSize = fread(buffer, 1, size, fd);
     if (readSize != size) {
-        ALOGW("WARN(%s):Image size mismatch! fileReadSize %zu bufferSize %zu",
+        ALOGW("WARN(%s):Image size mismatch! fileReadSize %zu bufferSize %d",
                 __FUNCTION__, readSize, size);
         size = (size < readSize) ? size : readSize;
     }
 
     memcpy(dstBuf, buffer, size);
 
-    ALOGD("DEBUG(%s):Success to read %s. size %zu",
+    ALOGD("DEBUG(%s):Success to read %s. size %d",
             __FUNCTION__, fileName, size);
 func_exit:
     if (buffer != NULL) {
@@ -1871,7 +1852,7 @@ status_t addBayerBufferByNeon(struct ExynosCameraBuffer *srcBuf,
 
     ALOGD("DEBUG(%s[%d]):srcAddr(%p), dstAddr(%p), copySize(%d), sizeof(short)(%d),\
             alignByte(%d), realCopySize(%d), remainedCopySize(%d)",
-            __FUNCTION__, __LINE__, srcAddr, dstAddr, copySize, sizeof(short), alignByte,
+            __FUNCTION__, __LINE__, srcAddr, dstAddr, copySize, (int)sizeof(short), alignByte,
             realCopySize, remainedCopySize);
 
     unsigned short* src0_ptr, *src1_ptr;
@@ -1952,7 +1933,6 @@ status_t addBayerBufferByNeonPacked(struct ExynosCameraBuffer *srcBuf,
         __FUNCTION__, __LINE__, srcAddr, dstAddr, copySize, (int)sizeof(short),
         alignByte, realCopySize, remainedCopySize, dstRect->w, dstRect->h, width_byte);
 
-    unsigned char dst_temp[16];
     unsigned short dstPix_0, dstPix_1, dstPix_2, dstPix_3, dstPix_4, dstPix_5, dstPix_6, dstPix_7;
     unsigned short srcPix_0, srcPix_1, srcPix_2, srcPix_3, srcPix_4, srcPix_5, srcPix_6, srcPix_7;
     unsigned int col;
@@ -2143,7 +2123,7 @@ status_t addBayerBufferByCpu(struct ExynosCameraBuffer *srcBuf,
 
     ALOGD("DEBUG(%s[%d]):srcAddr(%p), dstAddr(%p), copySize(%d), sizeof(short)(%d),\
             alignByte(%d), realCopySize(%d), remainedCopySize(%d)",
-            __FUNCTION__, __LINE__, srcAddr, dstAddr, copySize, sizeof(short), alignByte,
+            __FUNCTION__, __LINE__, srcAddr, dstAddr, copySize, (int)sizeof(short), alignByte,
             realCopySize, remainedCopySize);
 
     for (unsigned int i = 0; i < realCopySize; i++) {
@@ -2225,33 +2205,52 @@ void convertingYUYVtoRGB888(char *dstBuf, char *srcBuf, int width, int height)
     }
 }
 
-int getFliteNodenum(int cameraId)
+int getFliteNodenum(int cameraId,
+#ifndef SAMSUNG_COMPANION
+                    __unused
+#endif
+                    bool flagUseCompanion,
+#ifndef SAMSUNG_QUICK_SWITCH
+                    __unused
+#endif
+                    bool flagQuickSwitchFlag)
 {
     int fliteNodeNum = FIMC_IS_VIDEO_SS0_NUM;
 
-    switch (cameraId) {
-    case CAMERA_ID_BACK:
-        fliteNodeNum = MAIN_CAMERA_FLITE_NUM;
-        break;
-    case CAMERA_ID_FRONT:
-        fliteNodeNum = FRONT_CAMERA_FLITE_NUM;
-        break;
-#ifdef USE_DUAL_CAMERA
-    case CAMERA_ID_BACK_1:
-        fliteNodeNum = MAIN_1_CAMERA_FLITE_NUM;
-        break;
-    case CAMERA_ID_FRONT_1:
-        fliteNodeNum = FRONT_1_CAMERA_FLITE_NUM;
-        break;
+#ifdef SAMSUNG_COMPANION
+    if(flagUseCompanion == true) {
+        fliteNodeNum = FIMC_IS_VIDEO_SS0_NUM;
+#ifdef SAMSUNG_QUICK_SWITCH
+    } else if (flagQuickSwitchFlag == true) {
+        fliteNodeNum = (cameraId == CAMERA_ID_BACK) ? FIMC_IS_VIDEO_SS4_NUM : FIMC_IS_VIDEO_SS5_NUM;
 #endif
-    case CAMERA_ID_SECURE:
-        /*HACK : SECURE_CAMERA_FLITE_NUM is not defined, so use FIMC_IS_VIDEO_SS3_NUM */
-        fliteNodeNum = FIMC_IS_VIDEO_SS3_NUM;
-        break;
-    default:
-        android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Unexpected cameraId(%d), assert!!!!",
+    } else
+#endif
+    {
+        switch (cameraId) {
+        case CAMERA_ID_BACK:
+            fliteNodeNum = MAIN_CAMERA_FLITE_NUM;
+            break;
+        case CAMERA_ID_FRONT:
+            fliteNodeNum = FRONT_CAMERA_FLITE_NUM;
+            break;
+#ifdef USE_DUAL_CAMERA
+        case CAMERA_ID_BACK_1:
+            fliteNodeNum = MAIN_1_CAMERA_FLITE_NUM;
+            break;
+        case CAMERA_ID_FRONT_1:
+            fliteNodeNum = FRONT_1_CAMERA_FLITE_NUM;
+            break;
+#endif
+        case CAMERA_ID_SECURE:
+            /*HACK : SECURE_CAMERA_FLITE_NUM is not defined, so use FIMC_IS_VIDEO_SS3_NUM */
+            fliteNodeNum = FIMC_IS_VIDEO_SS3_NUM;
+            break;
+        default:
+            android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Unexpected cameraId(%d), assert!!!!",
                 __FUNCTION__, __LINE__, cameraId);
-        break;
+            break;
+        }
     }
 
     return fliteNodeNum;
@@ -2290,10 +2289,26 @@ int getFliteCaptureNodenum(int cameraId, int fliteOutputNode)
 }
 
 #ifdef SUPPORT_DEPTH_MAP
-int getDepthVcNodeNum(int cameraId)
+int getDepthVcNodeNum(int cameraId,
+#ifndef SAMSUNG_COMPANION
+                    __unused
+#endif
+                      bool flagUseCompanion)
 {
     int depthVcNodeNum = FIMC_IS_VIDEO_SS0VC1_NUM;
-    depthVcNodeNum = (cameraId == CAMERA_ID_BACK) ? MAIN_CAMERA_DEPTH_VC_NUM : FRONT_CAMERA_DEPTH_VC_NUM;
+
+#ifdef SAMSUNG_COMPANION
+    if (flagUseCompanion == true) {
+        depthVcNodeNum = FIMC_IS_VIDEO_SS0VC1_NUM;
+    } else
+#endif
+    {
+#ifdef SAMSUNG_QUICK_SWITCH
+        depthVcNodeNum = (cameraId == CAMERA_ID_BACK) ? FIMC_IS_VIDEO_SS4VC1_NUM : FRONT_CAMERA_DEPTH_VC_NUM;
+#else
+        depthVcNodeNum = (cameraId == CAMERA_ID_BACK) ? MAIN_CAMERA_DEPTH_VC_NUM : FRONT_CAMERA_DEPTH_VC_NUM;
+#endif
+    }
 
     return depthVcNodeNum;
 }
@@ -2317,6 +2332,21 @@ void checkAndroidVersion(void) {
 int calibratePosition(int w, int new_w, int pos)
 {
     return (float)(pos * new_w) / (float)w;
+}
+
+void setPreviewProperty(bool on)
+{
+    int ret = 0;
+    char value[5] = {0};
+
+    snprintf(value, sizeof(value), "%d", (on == true) ? 2 : 0);
+
+    ALOGD("Set persist.sys.camera.preview %s", value);
+
+    ret = property_set("persist.sys.camera.preview", value);
+    if (ret < 0) {
+        ALOGE("Failed to set persist.sys.camera.preview. ret %d", ret);
+    }
 }
 
 }; /* namespace android */

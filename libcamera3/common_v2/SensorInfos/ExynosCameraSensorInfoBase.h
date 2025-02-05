@@ -46,11 +46,76 @@
 #define COMMON_DENOMINATOR       (100)
 #define EFFECTMODE_META_2_HAL(x) (1 << (x -1))
 
+#ifdef SAMSUNG_OIS
+#define OIS_EXIF_SIZE         50
+#define OIS_EXIF_TAG         "ssois"
+#endif
+
+#ifdef SAMSUNG_BD
+#define BD_EXIF_SIZE    70
+#define BD_EXIF_TAG "ssbd"
+#endif
+
+#if defined(SAMSUNG_LLS_DEBLUR) || defined(SAMSUNG_DUAL_ZOOM_CAPTURE)
+#define LLS_EXIF_SIZE    310
+#define LLS_EXIF_TAG "sslls"
+#define FUSION_EXIF_TAG "ssfusion"
+#endif
+
+#ifdef SAMSUNG_MFHDR_CAPTURE
+#define MFHDR_EXIF_TAG "ssmfhdr"
+#endif
+
+#ifdef SAMSUNG_LLHDR_CAPTURE
+#define LLHDR_EXIF_TAG "ssllhdr"
+#endif
+
+#ifdef SAMSUNG_LENS_DC
+#define LDC_EXIF_SIZE    12
+#define LDC_EXIF_TAG "ssldc"
+#endif
+
+#ifdef SAMSUNG_STR_CAPTURE
+#define STR_EXIF_SIZE    120
+#define STR_EXIF_TAG "ssstr"
+#endif
+
+#ifdef SAMSUNG_MTF
+#define MTF_EXIF_TAG "ssmtf"
+#define MTF_EXIF_SIZE    61
+#endif
+
 #define SENSOR_ID_EXIF_SIZE         42
 #define SENSOR_ID_EXIF_UNIT_SIZE    16
 #define SENSOR_ID_EXIF_TAG         "ssuniqueid"
 
+#ifdef SAMSUNG_HIFI_VIDEO
+#define HIFI_VIDEO_EXIF_SIZE    314
+#define HIFI_VIDEO_EXIF_TAG "sshifivideo"
+#endif
+
 namespace android {
+
+/* Define Hidden Service IDs */ 
+#define SERVICE_ID_DUAL_REAR_ZOOM               20
+#define SERVICE_ID_DUAL_REAR_PORTRAIT           21
+#define SERVICE_ID_DUAL_FRONT_PORTRAIT          22
+#define SERVICE_ID_REAR_2ND                     50
+#define SERVICE_ID_FRONT_2ND                    51
+#define SERVICE_ID_IRIS                         90
+
+#define xstr(x)         #x
+#define toStr(x)        xstr(x)
+#define toSize(x,y)     (sizeof(x)/sizeof(y))
+
+struct HAL_CameraInfo_t {
+    int cameraId;
+    int facing_info;
+    int orientation;
+    int resource_cost;
+    char **conflicting_devices;
+    size_t conflicting_devices_length;
+};
 
 enum max_3a_region {
     AE,
@@ -134,10 +199,12 @@ enum CAMERA_ID {  // Internal ID
     CAMERA_ID_FRONT_0 = CAMERA_ID_FRONT,
     CAMERA_ID_BACK_1,
     CAMERA_ID_FRONT_1,
+    CAMERA_ID_SECURE,
     CAMERA_ID_MAX,
 };
 enum SCENARIO {
     SCENARIO_NORMAL              = 0,
+    SCENARIO_SECURE              = 1,
     SCENARIO_DUAL_REAR_ZOOM      = 2,
     SCENARIO_DUAL_REAR_PORTRAIT	 = 3,
     SCENARIO_DUAL_FRONT_PORTRAIT = 4,
@@ -159,6 +226,16 @@ enum {
     FOCUS_MODE_CONTINUOUS_PICTURE       = (1 << 6),
     FOCUS_MODE_TOUCH                    = (1 << 7),
     FOCUS_MODE_CONTINUOUS_PICTURE_MACRO = (1 << 8),
+#ifdef SAMSUNG_OT
+    FOCUS_MODE_OBJECT_TRACKING_PICTURE = (1 << 9),
+    FOCUS_MODE_OBJECT_TRACKING_VIDEO = (1 << 10),
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+    FOCUS_MODE_MANUAL = (1 << 11),
+#endif
+#ifdef SAMSUNG_FIXED_FACE_FOCUS
+    FOCUS_MODE_FIXED_FACE = (1 << 12),
+#endif
 };
 enum {
     FLASH_MODE_OFF     = (1 << 0),
@@ -178,6 +255,9 @@ enum SERIES_SHOT_MODE {
     SERIES_SHOT_MODE_BEST_PHOTO        = 6,
     SERIES_SHOT_MODE_MAGIC             = 7,
     SERIES_SHOT_MODE_SELFIE_ALARM      = 8,
+#ifdef ONE_SECOND_BURST_CAPTURE
+    SERIES_SHOT_MODE_ONE_SECOND_BURST  = 9,
+#endif
     SERIES_SHOT_MODE_MAX,
 };
 enum MULTI_CAPTURE_MODE {
@@ -186,6 +266,21 @@ enum MULTI_CAPTURE_MODE {
     MULTI_CAPTURE_MODE_AGIF  = 2,
     MULTI_CAPTURE_MODE_MAX,
 };
+
+#ifdef SAMSUNG_LLS_DEBLUR
+enum MULTI_SHOT_MODE {
+    MULTI_SHOT_MODE_NONE              = 0,
+    MULTI_SHOT_MODE_MULTI1            = 1,
+    MULTI_SHOT_MODE_MULTI2            = 2,
+    MULTI_SHOT_MODE_MULTI3            = 3,
+    MULTI_SHOT_MODE_MULTI4            = 4,
+    MULTI_SHOT_MODE_FLASHED_LLS       = 5,
+    MULTI_SHOT_MODE_SR                = 6,
+    MULTI_SHOT_MODE_MF_HDR            = 7,
+    MULTI_SHOT_MODE_LL_HDR            = 8,
+    MULTI_SHOT_MODE_MAX,
+};
+#endif
 
 enum TRANSIENT_ACTION {
     TRANSIENT_ACTION_NONE               = 0,
@@ -200,10 +295,53 @@ int getSensorIdFromFile(int camId);
 #ifdef SENSOR_FW_GET_FROM_FILE
 const char *getSensorFWFromFile(struct ExynosCameraSensorInfoBase *info, int camId);
 #endif
+#ifdef SAMSUNG_OIS
+char *getOisEXIFFromFile(struct ExynosCameraSensorInfoBase *info, int mode);
 
+struct ois_exif_data {
+    char ois_exif[OIS_EXIF_SIZE];
+};
+#endif
+#ifdef SAMSUNG_BD
+struct bd_exif_data {
+    char bd_exif[BD_EXIF_SIZE];
+};
+#endif
+#ifdef SAMSUNG_LLS_DEBLUR
+struct lls_exif_data {
+    char lls_exif[LLS_EXIF_SIZE];
+};
+#endif
+#ifdef SAMSUNG_LENS_DC
+struct ldc_exif_data {
+    char ldc_exif[LDC_EXIF_SIZE];
+};
+#endif
+#ifdef SAMSUNG_STR_CAPTURE
+struct str_exif_data {
+    char str_exif[STR_EXIF_SIZE];
+};
+#endif
+#ifdef SAMSUNG_MTF
+struct mtf_exif_data {
+    char mtf_exif[MTF_EXIF_SIZE];
+};
+#endif
 struct sensor_id_exif_data {
     char sensor_id_exif[SENSOR_ID_EXIF_SIZE];
 };
+#ifdef SAMSUNG_HIFI_VIDEO
+struct hifi_video_exif_data {
+    char hifi_video_exif[HIFI_VIDEO_EXIF_SIZE];
+};
+#endif
+
+#ifdef SAMSUNG_UTC_TS
+#define UTC_TS_SIZE 24 /* Tag (2bytes) + Length (2bytes) + Time (20bytes) */
+struct utc_ts {
+    char utc_ts_data[UTC_TS_SIZE];
+};
+#endif
 
 /* Helpper functions */
 int getSensorId(int camId);
@@ -301,6 +439,7 @@ public:
     bool    hdrMode;
 
     char    imageUniqueId[UNIQUE_ID_BUF_SIZE];
+    bool    samsungCamera;
     bool    isFactoryApp;
     int     recordingFps;
 
@@ -316,7 +455,28 @@ public:
 #ifdef SENSOR_FW_GET_FROM_FILE
     char	sensor_fw[25];
 #endif
+#ifdef SAMSUNG_OIS
+    struct ois_exif_data     ois_exif_info;
+#endif
+#ifdef SAMSUNG_BD
+    struct bd_exif_data     bd_exif_info;
+#endif
+#ifdef SAMSUNG_LLS_DEBLUR
+    struct lls_exif_data     lls_exif_info;
+#endif
+#ifdef SAMSUNG_LENS_DC
+    struct ldc_exif_data     ldc_exif_info;
+#endif
+#ifdef SAMSUNG_STR_CAPTURE
+    struct str_exif_data     str_exif_info;
+#endif
+#ifdef SAMSUNG_MTF
+	struct mtf_exif_data	mtf_exif_info;
+#endif
     struct sensor_id_exif_data sensor_id_exif_info;
+#ifdef SAMSUNG_HIFI_VIDEO
+    struct hifi_video_exif_data hifi_video_exif_info;
+#endif
 
     int     maxPreviewW;
     int     maxPreviewH;
@@ -424,9 +584,11 @@ public:
     int32_t   *requestKeys;
     int32_t   *resultKeys;
     int32_t   *characteristicsKeys;
+    int32_t   *sessionKeys;
     size_t    requestKeysLength;
     size_t    resultKeysLength;
     size_t    characteristicsKeysLength;
+    size_t    sessionKeysLength;
 
     /* Android Scaler Static Metadata */
     bool      zoomSupport;
@@ -502,9 +664,29 @@ public:
     int32_t 	maxCaptureStall;
 
     /* Samsung Vendor Feature */
+#ifdef SAMSUNG_CONTROL_METERING
+    int32_t   *vendorMeteringModes;
+    size_t    vendorMeteringModesLength;
+#endif
+#ifdef SAMSUNG_RTHDR
+    int32_t   vendorHdrRange[RANGE_TYPE_MAX];
+    int32_t   *vendorHdrModes;
+    size_t    vendorHdrModesLength;
+#endif
+#ifdef SAMSUNG_PAF
+    uint8_t   vendorPafAvailable;
+#endif
+#ifdef SAMSUNG_OIS
+    int32_t   *vendorOISModes;
+    size_t    vendorOISModesLength;
+#endif
     int32_t   *vendorFlipModes;
     size_t    vendorFlipModesLength;
 
+#ifdef SUPPORT_MULTI_AF
+    uint8_t   *vendorMultiAfAvailable;
+    size_t    vendorMultiAfAvailableLength;
+#endif
     float   *availableApertureValues;
     size_t  availableApertureValuesLength;
 
@@ -577,6 +759,11 @@ public:
     int    (*pictureFullSizeLut)[SIZE_OF_LUT];
     int    (*depthMapSizeLut)[3];
     bool   sizeTableSupport;
+
+#ifdef SAMSUNG_SSM
+    int    videoSizeLutSSMMax;
+    int    (*videoSizeLutSSM)[SIZE_OF_LUT];
+#endif
 
     int    hiddenPreviewListMax;
     int    (*hiddenPreviewList)[SIZE_OF_RESOLUTION];

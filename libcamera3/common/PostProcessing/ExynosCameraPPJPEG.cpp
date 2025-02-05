@@ -127,6 +127,35 @@ status_t ExynosCameraPPJPEG::m_draw(ExynosCameraImage *srcImage,
         goto jpeg_encode_done;
     }
 
+#ifdef SAMSUNG_DNG
+    if (m_parameters->getDNGCaptureModeOn() == true
+        && m_parameters->getSeriesShotMode() != SERIES_SHOT_MODE_BURST) {
+        unsigned int thumbBufSize = thumbnailRect.w * thumbnailRect.h * 2;
+        dng_thumbnail_t dngThumbnailBuf = m_parameters->createDngThumbnailBuffer(thumbBufSize);
+        char *thumbBufAddr = dngThumbnailBuf->buf;
+
+        if (thumbBufAddr) {
+            dngThumbnailBuf->size = m_jpegEnc.GetThumbnailImage(thumbBufAddr, thumbBufSize);
+            if (!dngThumbnailBuf->size)
+                CLOGE("[DNG] GetThumbnailImage failed");
+        } else {
+            CLOGE("[DNG] Thumbnail buf is NULL");
+            dngThumbnailBuf->size = 0;
+        }
+
+        if (m_parameters->getCaptureExposureTime() > CAMERA_PREVIEW_EXPOSURE_TIME_LIMIT) {
+            dngThumbnailBuf->frameCount = 0;
+        } else {
+            dngThumbnailBuf->frameCount = shot_ext->shot.dm.request.frameCount;
+        }
+
+        m_parameters->putDngThumbnailBuffer(dngThumbnailBuf);
+
+        CLOGD("[DNG] Thumbnail enable(%d), (addr:size:frame_count) [%p:%d:%d]",
+                exifInfo.enableThumb, thumbBufAddr, dngThumbnailBuf->size, dngThumbnailBuf->frameCount);
+    }
+#endif
+
 jpeg_encode_done:
     if (ret != NO_ERROR) {
         CLOGD("[dstBuf.fd[0] %d][dstBuf.size[0] + dstBuf.size[1] + dstBuf.size[2] %d]",

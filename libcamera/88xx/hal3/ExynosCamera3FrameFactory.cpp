@@ -85,7 +85,7 @@ status_t ExynosCamera3FrameFactory::mapBuffers(void)
     return INVALID_OPERATION;
 }
 
-status_t ExynosCamera3FrameFactory::fastenAeStable(int32_t numFrames, ExynosCameraBuffer *buffers)
+status_t ExynosCamera3FrameFactory::fastenAeStable(__unused int32_t numFrames, __unused ExynosCameraBuffer *buffers)
 {
     CLOGE("ERR(%s[%d]):Must use the concreate class, don't use superclass", __FUNCTION__, __LINE__);
     return NO_ERROR;
@@ -275,6 +275,15 @@ void ExynosCamera3FrameFactory::setRequest(int pipeId, bool enable)
     case PIPE_FLITE:
     case PIPE_FLITE_REPROCESSING:
         m_requestFLITE = enable ? 1 : 0;
+        break;
+    case PIPE_VC1:
+        m_requestVC1 = enable ? 1 : 0;
+        break;
+    case PIPE_VC2:
+        m_requestVC2 = enable ? 1 : 0;
+        break;
+    case PIPE_VC3:
+        m_requestVC3 = enable ? 1 : 0;
         break;
     case PIPE_3AC:
     case PIPE_3AC_REPROCESSING:
@@ -495,7 +504,7 @@ ExynosCameraFrame *ExynosCamera3FrameFactory::createNewFrameOnlyOnePipe(int pipe
         frameCnt = m_frameCount;
     }
 
-    ExynosCameraFrame *frame = m_frameMgr->createFrame(m_parameters, m_frameCount, frameType);
+    ExynosCameraFrame *frame = m_frameMgr->createFrame(m_parameters, frameCnt, frameType);
 
     /* set pipe to linkageList */
     newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
@@ -663,6 +672,33 @@ status_t ExynosCamera3FrameFactory::m_initFlitePipe(int sensorW, int sensorH, ui
     /* Set capture node default info */
     SET_CAPTURE_DEVICE_BASIC_INFO();
 
+#ifdef SUPPORT_DEPTH_MAP
+    if (m_parameters->getUseDepthMap()) {
+        /* Depth Map Configuration */
+        int depthMapW = 0, depthMapH = 0;
+        int depthMapFormat = DEPTH_MAP_FORMAT;
+
+        ret = m_parameters->getDepthMapSize(&depthMapW, &depthMapH);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Failed to getDepthMapSize", __FUNCTION__, __LINE__);
+            return ret;
+        }
+
+        CLOGI("INFO(%s[%d]):DepthMapSize %dx%d",
+                __FUNCTION__, __LINE__, depthMapW, depthMapH);
+
+        tempRect.fullW = depthMapW;
+        tempRect.fullH = depthMapH;
+        tempRect.colorFormat = depthMapFormat;
+
+        nodeType = CAPTURE_NODE_2;
+        pipeInfo[nodeType].bytesPerPlane[0] = getBayerLineSize(tempRect.fullW, tempRect.colorFormat);
+        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_sensor_buffers;
+
+        SET_CAPTURE_DEVICE_BASIC_INFO();
+    }
+#endif
+
     ret = m_pipes[pipeId]->setupPipe(pipeInfo, m_sensorIds[pipeId]);
     if (ret != NO_ERROR) {
         CLOGE("ERR(%s[%d]):FLITE setupPipe fail, ret(%d)", __FUNCTION__, __LINE__, ret);
@@ -739,6 +775,7 @@ status_t ExynosCamera3FrameFactory::m_initFrameMetadata(ExynosCameraFrame *frame
         m_bypassFD = 1; /* m_parameters->getFdEnable(); */
     } else {
         frame->setRequest(PIPE_FLITE, m_requestFLITE);
+        frame->setRequest(PIPE_VC1, m_requestVC1);
         frame->setRequest(PIPE_3AC, m_request3AC);
         frame->setRequest(PIPE_3AP, m_request3AP);
         frame->setRequest(PIPE_ISPC, m_requestISPC);
@@ -838,7 +875,7 @@ status_t ExynosCamera3FrameFactory::m_checkPipeInfo(uint32_t srcPipeId, uint32_t
     return NO_ERROR;
 }
 
-int ExynosCamera3FrameFactory::m_getSensorId(unsigned int nodeNum, bool reprocessing)
+int ExynosCamera3FrameFactory::m_getSensorId(__unused unsigned int nodeNum, bool reprocessing)
 {
     unsigned int reprocessingBit = 0;
     unsigned int nodeNumBit = 0;
@@ -890,12 +927,35 @@ int ExynosCamera3FrameFactory::m_getFliteNodenum(void)
 {
     int fliteNodeNum = FIMC_IS_VIDEO_SS0_NUM;
 
+#ifdef SAMSUNG_COMPANION
+    if(m_parameters->getUseCompanion() == true) {
+        fliteNodeNum = FIMC_IS_VIDEO_SS0_NUM;
+    } else
+#endif
     {
         fliteNodeNum = (m_cameraId == CAMERA_ID_BACK) ? MAIN_CAMERA_FLITE_NUM : FRONT_CAMERA_FLITE_NUM;
     }
 
     return fliteNodeNum;
 }
+
+#ifdef SUPPORT_DEPTH_MAP
+int ExynosCamera3FrameFactory::m_getDepthVcNodeNum(void)
+{
+    int depthVcNodeNum = FIMC_IS_VIDEO_SS0VC1_NUM;
+
+#ifdef SAMSUNG_COMPANION
+    if (m_parameters->getUseCompanion() == true) {
+        depthVcNodeNum = FIMC_IS_VIDEO_SS0VC1_NUM;
+    } else
+#endif
+    {
+        depthVcNodeNum = (m_cameraId == CAMERA_ID_BACK) ? MAIN_CAMERA_DEPTH_VC_NUM : FRONT_CAMERA_DEPTH_VC_NUM;
+    }
+
+    return depthVcNodeNum;
+}
+#endif
 
 void ExynosCamera3FrameFactory::m_initDeviceInfo(int pipeId)
 {
@@ -982,6 +1042,9 @@ void ExynosCamera3FrameFactory::m_init(void)
 
     /* setting about request */
     m_requestFLITE = true;
+    m_requestVC1 = false;
+    m_requestVC2 = false;
+    m_requestVC3 = false;
 
     m_request3AC = false;
     m_request3AP = false;

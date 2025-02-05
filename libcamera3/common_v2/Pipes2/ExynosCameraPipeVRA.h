@@ -23,7 +23,11 @@
 /* #define DUMP_VRA_INPUT */
 /* #define USE_VRA_FILE_INPUT */
 
+#ifdef CAMERA_GED_FEATURE
 #define DUMP_VRA_INPUT_PATH "/data/dump"
+#else
+#define DUMP_VRA_INPUT_PATH "/data/media/0"
+#endif
 
 namespace android {
 
@@ -48,6 +52,7 @@ public:
 
     virtual ~ExynosCameraPipeVRA();
     virtual status_t        create(int32_t *sensorIds = NULL);
+    virtual status_t        setUseLatestFrame(bool flag);
 
 protected:
     virtual bool            m_mainThreadFunc(void);
@@ -60,6 +65,8 @@ private:
 
     status_t                m_useImageFromFile(ExynosCameraBuffer *buffer);
     status_t                m_dumpVraInput(ExynosCameraBuffer *buffer);
+private:
+    bool                    m_useLatestFrame;
 };
 
 }; /* namespace android */

@@ -199,15 +199,16 @@ public:
                 buffer_handle_t **bufHandle,
                 int fd[],
                 char *addr[],
-                bool *isLocked);
-    status_t enqueueBuffer(buffer_handle_t *bufHandle);
-    status_t cancelBuffer(buffer_handle_t *bufHandle);
+                bool *isLocked, Mutex *lock);
+    status_t enqueueBuffer(buffer_handle_t *bufHandle, Mutex *lock);
+    status_t cancelBuffer(buffer_handle_t *bufHandle, Mutex *lock);
 
 private:
     preview_stream_ops              *m_allocator;
     static gralloc_module_t const   *m_grallocHal;
     int32_t                          m_minUndequeueBufferMargin;
 
+    int                              m_halPixelFormat;
     int                              m_grallocUsage;
 };
 

@@ -51,6 +51,8 @@ void setCaptureCropNScaleSizeToNodeGroupInfo(
         int outCropX, int outCropY,
         int outCropWidth, int outCropHeight);
 
+bool checkAvailableDownScaleSize(ExynosRect *src, ExynosRect *dst);
+
 }; /* namespace android */
 
 #endif

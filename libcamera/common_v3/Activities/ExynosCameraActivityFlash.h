@@ -195,6 +195,9 @@ public:
     void notifyAeResult(void);
     void setMainFlashFiring(bool isMainFlashFiring);
     void setManualExposureTime(uint64_t exposureTime);
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+    void setAeFlashModeForLcdFlash(camera2_shot_ext *shot_ext, int flashStep);
+#endif
 
 private:
     bool m_isNeedFlash;

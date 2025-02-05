@@ -116,7 +116,7 @@ void updateNodeGroupInfo(
         if (params->isUseIspInputCrop() == true)
             params->getPreviewYuvCropSize(&ispSize);
         else
-            params->getPreviewBdsSize(&ispSize);
+            ispSize = bdsSize;
 
         if (params->isUseMcscInputCrop() == true)
             params->getPreviewYuvCropSize(&mcscInputSize);
@@ -130,6 +130,25 @@ void updateNodeGroupInfo(
         } else {
             for (int i = ExynosCameraParameters::YUV_0; i < ExynosCameraParameters::YUV_MAX; i++) {
                 params->getYuvVendorSize(&mcscSize[i].w, &mcscSize[i].h, i, ispSize);
+
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+                if (configurations->getScenario() == SCENARIO_DUAL_REAR_ZOOM
+                    && params->isPreviewPortId(i) == true
+                    && configurations->getDynamicMode(DYNAMIC_DUAL_FORCE_SWITCHING) == false) {
+                    ExynosRect fusionSrcRect;
+                    ExynosRect fusionDstRect;
+                    int margin = params->getActiveZoomMargin();
+
+                    if (margin == DUAL_SOLUTION_MARGIN_VALUE_30 ||
+                        margin == DUAL_SOLUTION_MARGIN_VALUE_20) {
+                        params->getFusionSize(mcscSize[i].w, mcscSize[i].h,
+                                &fusionSrcRect, &fusionDstRect,
+                                margin);
+                        mcscSize[i].w = fusionSrcRect.w;
+                        mcscSize[i].h = fusionSrcRect.h;
+                    }
+                }
+#endif
             }
         }
 
@@ -184,6 +203,39 @@ void updateNodeGroupInfo(
         if (dsInputPortId != MCSC_PORT_NONE) {
             params->getHwVraInputSize(&mcscSize[5].w, &mcscSize[5].h, dsInputPortId);
         }
+    }
+
+    /* Make sure that the size being scaled is not larger than the input size */
+    if (checkAvailableDownScaleSize(&sensorSize, &bayerCropSize) == false) {
+        CLOGW2("change Dst(%s) size to Src(%s) size",
+                MAKE_STRING(bayerCropSize), MAKE_STRING(sensorSize));
+    }
+    if (checkAvailableDownScaleSize(&bayerCropSize, &bdsSize) == false) {
+        CLOGW2("change Dst(%s) size to Src(%s) size",
+                MAKE_STRING(bdsSize), MAKE_STRING(bayerCropSize));
+    }
+    if (isReprocessing == false) {
+        if (checkAvailableDownScaleSize(&bdsSize, &ispSize) == false) {
+            CLOGW2("change Dst(%s) size to Src(%s) size",
+                    MAKE_STRING(ispSize), MAKE_STRING(bdsSize));
+        }
+    } else {
+        if (params->getUsePureBayerReprocessing() == true) {
+            if (checkAvailableDownScaleSize(&bdsSize, &ispSize) == false) {
+                CLOGW2("change Dst(%s) size to Src(%s) size",
+                        MAKE_STRING(ispSize), MAKE_STRING(bdsSize));
+            }
+        } else {
+            /* for dirty bayer reprocessing */
+            if (checkAvailableDownScaleSize(&bayerCropSize, &ispSize) == false) {
+                CLOGW2("change Dst(%s) size to Src(%s) size",
+                        MAKE_STRING(ispSize), MAKE_STRING(bayerCropSize));
+            }
+        }
+    }
+    if (checkAvailableDownScaleSize(&ispSize, &mcscInputSize) == false) {
+        CLOGW2("change Dst(%s) size to Src(%s) size",
+                MAKE_STRING(mcscInputSize), MAKE_STRING(ispSize));
     }
 
     /* Set Leader node perframe size */
@@ -359,6 +411,11 @@ void updateNodeGroupInfo(
                 perframePosition++;
             }
             break;
+        case FIMC_IS_VIDEO_30G_NUM:
+        case FIMC_IS_VIDEO_31G_NUM:
+            setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, sensorSize.w, sensorSize.h);
+            perframePosition++;
+            break;
         case FIMC_IS_VIDEO_30F_NUM:
         case FIMC_IS_VIDEO_31F_NUM:
             {
@@ -532,16 +589,25 @@ void updateNodeGroupInfo(
                     ratioCropSize.h = mcscInputSize.h;
                 }
 
-                params->getVendorRatioCropSize(&ratioCropSize,
-                                               &mcscSize[portIndex],
-                                               portIndex,
-                                               isReprocessing);
+                params->getVendorRatioCropSize(&ratioCropSize
+                                               , &mcscSize[portIndex]
+                                               , portIndex
+                                               , isReprocessing
+#if defined(SAMSUNG_HIFI_VIDEO) && defined(HIFIVIDEO_ZOOM_SUPPORTED)
+                                               , &sensorSize
+                                               , &mcscInputSize
+#endif
+                                               );
             }
 
             setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
                                                     ratioCropSize.x, ratioCropSize.y,
                                                     ratioCropSize.w, ratioCropSize.h,
+#if defined(SAMSUNG_HIFI_VIDEO) && defined(HIFIVIDEO_ZOOM_SUPPORTED)
+                                                    mcscSize[portIndex].x, mcscSize[portIndex].y,
+#else
                                                     0, 0,
+#endif
                                                     mcscSize[portIndex].w, mcscSize[portIndex].h);
             perframePosition++;
         }
@@ -631,17 +697,19 @@ void updateNodeGroupInfo(
             break;
         }
 
-        CLOG_PERFRAME(SIZE, frame->getCameraId(), "", frame.get(), nullptr, frame->getRequestKey(),
-                "[P%d] NODE_CAPTURE(%d)/ (x:%d, y:%d) %d x %d -> (x:%d, y:%d) %d x %d",
-                pipeId, node_group_info->capture[i].vid,
-                node_group_info->capture[perframePosition - 1].input.cropRegion[0],
-                node_group_info->capture[perframePosition - 1].input.cropRegion[1],
-                node_group_info->capture[perframePosition - 1].input.cropRegion[2],
-                node_group_info->capture[perframePosition - 1].input.cropRegion[3],
-                node_group_info->capture[perframePosition - 1].output.cropRegion[0],
-                node_group_info->capture[perframePosition - 1].output.cropRegion[1],
-                node_group_info->capture[perframePosition - 1].output.cropRegion[2],
-                node_group_info->capture[perframePosition - 1].output.cropRegion[3]);
+        if (perframePosition > 0) {
+            CLOG_PERFRAME(SIZE, frame->getCameraId(), "", frame.get(), nullptr, frame->getRequestKey(),
+                    "[P%d] NODE_CAPTURE(%d)/ (x:%d, y:%d) %d x %d -> (x:%d, y:%d) %d x %d",
+                    pipeId, node_group_info->capture[i].vid,
+                    node_group_info->capture[perframePosition - 1].input.cropRegion[0],
+                    node_group_info->capture[perframePosition - 1].input.cropRegion[1],
+                    node_group_info->capture[perframePosition - 1].input.cropRegion[2],
+                    node_group_info->capture[perframePosition - 1].input.cropRegion[3],
+                    node_group_info->capture[perframePosition - 1].output.cropRegion[0],
+                    node_group_info->capture[perframePosition - 1].output.cropRegion[1],
+                    node_group_info->capture[perframePosition - 1].output.cropRegion[2],
+                    node_group_info->capture[perframePosition - 1].output.cropRegion[3]);
+        }
     }
 
     CLOG_PERFRAME(SIZE, frame->getCameraId(), "", frame.get(), nullptr, frame->getRequestKey(),
@@ -724,6 +792,21 @@ void setCaptureCropNScaleSizeToNodeGroupInfo(
     node_group_info->capture[perframePosition].output.cropRegion[1] = outCropY;
     node_group_info->capture[perframePosition].output.cropRegion[2] = outCropWidth;
     node_group_info->capture[perframePosition].output.cropRegion[3] = outCropHeight;
+}
+
+bool checkAvailableDownScaleSize(ExynosRect *src, ExynosRect *dst)
+{
+        if (src->w < dst->w || src->h < dst->h) {
+            CLOGW2("Src %dx%d is smaller than Dst %dx%d.",
+                    src->w, src->h,
+                    dst->w, dst->h);
+            dst->w = src->w;
+            dst->h = src->h;
+
+            return false;
+        }
+
+        return true;
 }
 
 }; /* namespace android */

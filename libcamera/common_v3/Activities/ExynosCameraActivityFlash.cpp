@@ -678,7 +678,7 @@ int ExynosCameraActivityFlash::t_func3AAfterHAL3(void *args)
             m_flashStatus = FLASH_STATUS_PRE_AF;
         } else if (shot_ext->shot.dm.aa.afState == AA_AFSTATE_FOCUSED_LOCKED
                     || shot_ext->shot.dm.aa.afState == AA_AFSTATE_NOT_FOCUSED_LOCKED) {
-            CLOGD("DEBUG(%s[%d]):FLASH_STATUS_PRE_DONE afTrigger(%d) af state(%d)",
+            ALOGD("DEBUG(%s[%d]):FLASH_STATUS_PRE_DONE afTrigger(%d) af state(%d)",
                 __FUNCTION__, __LINE__, shot_ext->shot.dm.aa.afTrigger, shot_ext->shot.dm.aa.afState);
             m_flashStatus = FLASH_STATUS_PRE_DONE;
             m_timeoutCount = 0;

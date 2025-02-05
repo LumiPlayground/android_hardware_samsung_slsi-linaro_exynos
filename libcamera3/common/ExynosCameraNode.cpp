@@ -911,7 +911,7 @@ status_t ExynosCameraNode::prepareBuffer(ExynosCameraBuffer *buf)
     v4l2_buf.index    = buf->index;
     v4l2_buf.length   = m_v4l2Format.fmt.pix_mp.num_planes;
 
-    for (int i = 0; i < (int)v4l2_buf.length; i++) {
+    for (int i = 0; i < (int)v4l2_buf.length - 1; i++) {
         if (v4l2_buf.memory == V4L2_MEMORY_DMABUF) {
             v4l2_buf.m.planes[i].m.fd = (int)(buf->fd[i]);
         } else if (v4l2_buf.memory == V4L2_MEMORY_USERPTR) {
@@ -923,6 +923,13 @@ status_t ExynosCameraNode::prepareBuffer(ExynosCameraBuffer *buf)
 
         v4l2_buf.m.planes[i].length = (unsigned long)(buf->size[i]);
     }
+
+    if (v4l2_buf.memory == V4L2_MEMORY_DMABUF) {
+        v4l2_buf.m.planes[v4l2_buf.length - 1].m.fd = (int)(buf->fd[buf->getMetaPlaneIndex()]);
+    } else if (v4l2_buf.memory == V4L2_MEMORY_USERPTR) {
+        v4l2_buf.m.planes[v4l2_buf.length - 1].m.userptr = (unsigned long)(buf->addr[buf->getMetaPlaneIndex()]);
+    }
+    v4l2_buf.m.planes[v4l2_buf.length - 1].length = (unsigned long)(buf->size[buf->getMetaPlaneIndex()]);
 
 #ifdef EXYNOS_CAMERA_NODE_TRACE
     CLOGD("name(%s) fd %d, index(%d), length(%d), width(%d), height(%d), bytesperline(%d)",
@@ -1548,7 +1555,7 @@ int ExynosCameraNode::m_mBuf(ExynosCameraBuffer *buf)
     v4l2_buf.index    = buf->index;
     v4l2_buf.length   = m_v4l2Format.fmt.pix_mp.num_planes;
 
-    for (i = 0; i < (int)v4l2_buf.length; i++) {
+    for (i = 0; i < (int)v4l2_buf.length - 1; i++) {
         if (v4l2_buf.memory == V4L2_MEMORY_DMABUF) {
             v4l2_buf.m.planes[i].m.fd = (int)(buf->fd[i]);
         } else if (v4l2_buf.memory == V4L2_MEMORY_USERPTR) {
@@ -1560,6 +1567,13 @@ int ExynosCameraNode::m_mBuf(ExynosCameraBuffer *buf)
 
         v4l2_buf.m.planes[i].length = (unsigned long)(buf->size[i]);
     }
+
+    if (v4l2_buf.memory == V4L2_MEMORY_DMABUF) {
+            v4l2_buf.m.planes[v4l2_buf.length - 1].m.fd = (int)(buf->fd[buf->getMetaPlaneIndex()]);
+    } else if (v4l2_buf.memory == V4L2_MEMORY_USERPTR) {
+        v4l2_buf.m.planes[v4l2_buf.length - 1].m.userptr = (unsigned long)(buf->addr[buf->getMetaPlaneIndex()]);
+    }
+    v4l2_buf.m.planes[v4l2_buf.length - 1].length = (unsigned long)(buf->size[buf->getMetaPlaneIndex()]);
 
 #ifndef SUPPORT_64BITS
     ret = exynos_v4l2_s_ctrl(m_fd, V4L2_CID_IS_MAP_BUFFER, (int)&v4l2_buf);

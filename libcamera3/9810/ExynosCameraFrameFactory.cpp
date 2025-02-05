@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraFrameFactory"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraFrameFactory.h"
 
@@ -133,6 +133,12 @@ enum NODE_TYPE ExynosCameraFrameFactory::getNodeType(uint32_t pipeId)
         nodeType = CAPTURE_NODE_17;
         break;
 #endif
+#if defined(USE_CIP_HW) || defined(USE_CIP_M2M_HW)
+    case PIPE_CIPS0:
+    case PIPE_CIPS0_REPROCESSING:
+    case PIPE_CIPS1:
+    case PIPE_CIPS1_REPROCESSING:
+#endif
     case PIPE_MCSC:
     case PIPE_MCSC_REPROCESSING:
         if (m_flagIspMcscOTF == HW_CONNECTION_MODE_M2M
@@ -177,11 +183,14 @@ enum NODE_TYPE ExynosCameraFrameFactory::getNodeType(uint32_t pipeId)
 #ifdef USE_DUAL_CAMERA
     case PIPE_FUSION:
 #endif
+#ifdef SAMSUNG_TN_FEATURE
+    case PIPE_PP_UNI_REPROCESSING:
+    case PIPE_PP_UNI_REPROCESSING2:
+    case PIPE_PP_UNI:
+    case PIPE_PP_UNI2:
+#endif
     case PIPE_GSC:
         nodeType = OUTPUT_NODE;
-        break;
-    case PIPE_ME:
-        nodeType = CAPTURE_NODE_11;
         break;
     default:
         android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Unexpected pipe_id(%d), assert!!!!",
@@ -204,7 +213,7 @@ void ExynosCameraFrameFactory::startScenario(int pipeId)
             __FUNCTION__, __LINE__, pipeId);
 }
 
-void ExynosCameraFrameFactory::stopScenario(int pipeId, bool suspendFlag)
+void ExynosCameraFrameFactory::stopScenario(int pipeId, __unused bool suspendFlag)
 {
     android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Function is NOT implemented! pipeId %d",
             __FUNCTION__, __LINE__, pipeId);
@@ -218,7 +227,7 @@ int ExynosCameraFrameFactory::getScenario(int pipeId)
     return -1;
 }
 
-status_t ExynosCameraFrameFactory::m_initFlitePipe(int sensorW, int sensorH, uint32_t frameRate)
+status_t ExynosCameraFrameFactory::m_initFlitePipe(int sensorW, int sensorH, __unused uint32_t frameRate)
 {
     CLOGI("");
 
@@ -232,20 +241,7 @@ status_t ExynosCameraFrameFactory::m_initFlitePipe(int sensorW, int sensorH, uin
     }
 
     /* FLITE is old pipe, node type is 0 */
-    enum NODE_TYPE nodeType = (enum NODE_TYPE)0;
-    enum NODE_TYPE leaderNodeType = OUTPUT_NODE;
-
     ExynosRect tempRect;
-    struct ExynosConfigInfo *config = m_parameters->getConfig();
-    int maxSensorW = 0, maxSensorH = 0, hwSensorW = 0, hwSensorH = 0;
-    int bayerFormat = m_parameters->getBayerFormat(PIPE_FLITE);
-    int perFramePos = 0;
-
-#ifdef DEBUG_RAWDUMP
-    if (m_parameters->checkBayerDumpEnable()) {
-        bayerFormat = CAMERA_DUMP_BAYER_FORMAT;
-    }
-#endif
 
     CLOGI("SensorSize(%dx%d)", sensorW, sensorH);
 
@@ -280,7 +276,6 @@ int ExynosCameraFrameFactory::m_getSensorId(unsigned int nodeNum, unsigned int c
     nodeNum -= FIMC_IS_VIDEO_BAS_NUM;
 
     unsigned int reprocessingBit = 0;
-    unsigned int otfInterfaceBit = 0;
     unsigned int leaderBit = 0;
     unsigned int sensorId = 0;
 

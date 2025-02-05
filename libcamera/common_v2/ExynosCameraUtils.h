@@ -30,8 +30,9 @@
 #include "ExynosCameraSensorInfo.h"
 #include "videodev2_exynos_media.h"
 #include "ExynosCameraBuffer.h"
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-#include "Sfl/ExynosCameraSFLMgr.h"
+
+#ifdef SAMSUNG_SENSOR_LISTENER
+#include "sensor_listener_wrapper.h"
 #endif
 
 #define ROUND_OFF(x, dig)           (floor((x) * pow(10.0f, dig)) / pow(10.0f, dig))
@@ -100,10 +101,7 @@ void            setZoomRatioList(int *list, int len, float maxZoomRatio);
 status_t        getZoomRatioList(String8 & string8Buf, int maxZoom, int maxZoomRatio, int *list);
 status_t        getSupportedFpsList(String8 & string8Buf, int min, int max,
                                     int camid, struct ExynosSensorInfoBase *sensorInfo);
-#ifdef GED_DNG
-status_t        getMatrixList(String8 & string8Buf, camera_metadata_rational *matrix, int max);
-status_t        getNeutralColorPointList(String8 &string8Buf, struct rational *neutralColor);
-#endif
+
 
 /*
  * Control struct camera2_shot_ext
@@ -135,13 +133,12 @@ void getMetaCtlExposureTime(struct camera2_shot_ext *shot_ext, uint64_t *exposur
 void setMetaCtlCaptureExposureTime(struct camera2_shot_ext *shot_ext, uint32_t exposureTime);
 void getMetaCtlCaptureExposureTime(struct camera2_shot_ext *shot_ext, uint32_t *exposureTime);
 
+#ifdef SUPPORT_DEPTH_MAP
+void setMetaCtlDisparityMode(struct camera2_shot_ext *shot_ext, enum companion_disparity_mode disparity_mode);
+#endif
+
 void setMetaCtlWbLevel(struct camera2_shot_ext *shot_ext, int32_t wbLevel);
 void getMetaCtlWbLevel(struct camera2_shot_ext *shot_ext, int32_t *wbLevel);
-
-#ifdef USE_FW_ZOOMRATIO
-void setMetaCtlZoom(struct camera2_shot_ext *shot_ext, float data);
-void getMetaCtlZoom(struct camera2_shot_ext *shot_ext, float *data);
-#endif
 
 status_t setMetaCtlCropRegion(
         struct camera2_shot_ext *shot_ext,
@@ -206,10 +203,6 @@ void getMetaCtlSharpness(struct camera2_shot_ext *shot_ext, enum processing_mode
 
 void setMetaCtlIso(struct camera2_shot_ext *shot_ext, enum aa_isomode mode, uint32_t iso);
 void getMetaCtlIso(struct camera2_shot_ext *shot_ext, enum aa_isomode *mode, uint32_t *iso);
-
-void setMetaCtlFocusDistance(struct camera2_shot_ext *shot_ext, float distance);
-void getMetaCtlFocusDistance(struct camera2_shot_ext *shot_ext, float *distance);
-
 void setMetaCtlFdMode(struct camera2_shot_ext *shot_ext, enum facedetect_mode mode);
 
 void getStreamFrameValid(struct camera2_stream *shot_stream, uint32_t *fvalid);
@@ -217,6 +210,10 @@ void getStreamFrameCount(struct camera2_stream *shot_stream, uint32_t *fcount);
 
 status_t setMetaDmSensorTimeStamp(struct camera2_shot_ext *shot_ext, uint64_t timeStamp);
 nsecs_t getMetaDmSensorTimeStamp(struct camera2_shot_ext *shot_ext);
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+status_t setMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext, uint64_t timeStamp);
+nsecs_t getMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext);
+#endif
 
 void setMetaNodeLeaderRequest(struct camera2_shot_ext* shot_ext, int value);
 void setMetaNodeLeaderVideoID(struct camera2_shot_ext* shot_ext, int value);
@@ -276,14 +273,6 @@ char clip(int i);
 void convertingYUYVtoRGB888(char *dstBuf, char *srcBuf, int width, int height);
 
 void checkAndroidVersion(void);
-
-/* Dual camera related */
-bool isDualCameraMode(int cameraId);
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-status_t convertExynosCameraToSFLBuffer(ExynosCameraBuffer *inputBuf, int pixelFormat, int width, int height, SFLBuffer *outputBuf);
-void makeSFLCommand(CommandInfo* commandInfo, SFL::Command cmd, SFL::BufferType type, SFL::BufferPos pos);
-#endif
 
 }; /* namespace android */
 

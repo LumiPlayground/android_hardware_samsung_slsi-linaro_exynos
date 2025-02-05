@@ -1,6 +1,6 @@
 /*
 **
-** Copyright 2017, Samsung Electronics Co. LTD
+** Copyright 2015, Samsung Electronics Co. LTD
 **
 ** Licensed under the Apache License, Version 2.0 (the "License");
 ** you may not use this file except in compliance with the License.
@@ -17,14 +17,14 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraActivityFlashSec"
-#include <cutils/log.h>
+#include <log/log.h>
 
 
 #include "ExynosCameraActivityFlash.h"
 
 namespace android {
 
-int ExynosCameraActivityFlash::t_func3ABefore(void *args)
+int ExynosCameraActivityFlash::t_func3ABefore(__unused void *args)
 {
     return 1;
 }
@@ -184,6 +184,11 @@ int ExynosCameraActivityFlash::t_func3ABeforeHAL3(void *args)
                 m_flashStatus = FLASH_STATUS_PRE_ON;
                 m_aeWaitMaxCount--;
             }
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+            else if (m_flashStep >= FLASH_STEP_PRE_LCD_ON && m_flashStep <= FLASH_STEP_LCD_OFF) {
+                setAeFlashModeForLcdFlashHAL3(shot_ext, m_flashStep);
+            }
+#endif /* SAMSUNG_FRONT_LCD_FLASH */
         } else if (m_flashStatus == FLASH_STATUS_PRE_ON) {
             CLOGV(" Flash status is PRE ON");
 
@@ -354,6 +359,11 @@ int ExynosCameraActivityFlash::t_func3ABeforeHAL3(void *args)
                     m_flashStatus = FLASH_STATUS_PRE_ON;
                     m_aeWaitMaxCount--;
                 }
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+                else if (m_flashStep >= FLASH_STEP_PRE_LCD_ON && m_flashStep <= FLASH_STEP_LCD_OFF) {
+                    setAeFlashModeForLcdFlashHAL3(shot_ext, m_flashStep);
+                }
+#endif /* SAMSUNG_FRONT_LCD_FLASH */
             } else if (m_flashStatus == FLASH_STATUS_PRE_ON) {
                 CLOGV(" Flash status is PRE ON");
 
@@ -471,7 +481,7 @@ done:
     return 1;
 }
 
-int ExynosCameraActivityFlash::t_func3AAfter(void *args)
+int ExynosCameraActivityFlash::t_func3AAfter(__unused void *args)
 {
     return 1;
 }
@@ -556,7 +566,19 @@ int ExynosCameraActivityFlash::t_func3AAfterHAL3(void *args)
         } else {
             m_timeoutCount++;
         }
-    } else if (m_flashStatus == FLASH_STATUS_PRE_ON) {
+    }
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+    else if (m_flashStatus == FLASH_STATUS_PRE_READY) {
+        if (m_flashStep == FLASH_STEP_LCD_ON) {
+            CLOGV("Flash step is LCD_ON(firingStable=%d)", shot_ext->shot.dm.flash.vendor_firingStable);
+            if (!m_ShotFcount && shot_ext->shot.dm.flash.vendor_firingStable == CAPTURE_STATE_FLASH) {
+                m_ShotFcount = shot_ext->shot.dm.request.frameCount;
+                m_flashStep = FLASH_STEP_LCD_ON_WAIT;
+            }
+        }
+    }
+#endif
+    else if (m_flashStatus == FLASH_STATUS_PRE_ON) {
         shot_ext->shot.dm.aa.aeState = AE_STATE_PRECAPTURE;
         if (shot_ext->shot.dm.flash.vendor_flashReady == 1 ||
                 FLASH_AE_TIMEOUT_COUNT < m_timeoutCount) {
@@ -726,6 +748,12 @@ bool ExynosCameraActivityFlash::setFlashStep(enum FLASH_STEP flashStepVal)
         break;
     case FLASH_STEP_END:
         break;
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+    case FLASH_STEP_LCD_ON:
+        m_waitingCount = 15;
+        m_timeoutCount = 0;
+        break;
+#endif
     default:
         break;
     }
@@ -737,5 +765,45 @@ bool ExynosCameraActivityFlash::setFlashStep(enum FLASH_STEP flashStepVal)
 
     return true;
 }
+
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+void ExynosCameraActivityFlash::setAeFlashModeForLcdFlashHAL3(camera2_shot_ext *shot_ext, int flashStep)
+{
+    if (flashStep == FLASH_STEP_PRE_LCD_ON) {
+        CLOGV("Flash step is PRE_LCD_ON");
+        shot_ext->shot.ctl.aa.vendor_aeflashMode = AA_FLASHMODE_START;
+        shot_ext->shot.ctl.flash.flashMode = CAM2_FLASH_MODE_LCD;
+        shot_ext->shot.ctl.flash.firingTime = 0;
+        shot_ext->shot.ctl.flash.firingPower = 0;
+        m_mainWaitCount = 0;
+    } else if (flashStep == FLASH_STEP_LCD_ON) {
+        CLOGV("Flash step is LCD_ON");
+        shot_ext->shot.ctl.aa.vendor_aeflashMode = AA_FLASHMODE_ON;
+        shot_ext->shot.ctl.flash.flashMode = CAM2_FLASH_MODE_LCD;
+        shot_ext->shot.ctl.flash.firingTime = 0;
+        shot_ext->shot.ctl.flash.firingPower = 0;
+        m_mainWaitCount = 0;
+    } else if (flashStep == FLASH_STEP_LCD_ON_WAIT) {
+        CLOGV("Flash step is LCD_ON_WAIT");
+
+        if (FLASH_MAIN_WAIT_COUNT < m_mainWaitCount) {
+            m_flashStep = FLASH_STEP_LCD_OFF;
+        } else {
+            m_mainWaitCount++;
+        }
+    } else if (flashStep == FLASH_STEP_LCD_OFF) {
+        CLOGV("Flash step is LCD_OFF");
+        shot_ext->shot.ctl.aa.vendor_aeflashMode = AA_FLASHMODE_OFF;
+        shot_ext->shot.ctl.flash.flashMode = CAM2_FLASH_MODE_NONE;
+        shot_ext->shot.ctl.flash.firingTime = 0;
+        shot_ext->shot.ctl.flash.firingPower = 0;
+        m_mainWaitCount = 0;
+        m_flashStep = FLASH_STEP_OFF;
+
+        resetShotFcount();
+    }
+}
+
+#endif
 
 }/* namespace android */

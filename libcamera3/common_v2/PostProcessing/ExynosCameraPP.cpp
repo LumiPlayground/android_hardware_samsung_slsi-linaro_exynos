@@ -18,6 +18,9 @@
 #define LOG_TAG "ExynosCameraPP"
 
 #include "ExynosCameraPP.h"
+#ifdef SAMSUNG_UNIPLUGIN
+#include "ExynosCameraPPUniPlugin.h"
+#endif
 
 ExynosCameraPP::~ExynosCameraPP()
 {
@@ -71,6 +74,12 @@ status_t ExynosCameraPP::extControl(int controlType, void *data)
         CLOGE("this->m_extControl() fail");
         return INVALID_OPERATION;
     }
+
+#ifdef SAMSUNG_UNIPLUGIN
+    if (controlType == PP_EXT_CONTROL_SET_UNI_PLUGIN_HANDLE) {
+        m_flagCreate = true;
+    }
+#endif
 
     CLOGD("done %d", controlType);
 

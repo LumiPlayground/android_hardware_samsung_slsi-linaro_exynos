@@ -22,7 +22,6 @@
 
 #include "ExynosCameraSWPipe.h"
 #include "ExynosCameraMetadataConverter.h"
-#include "ExynosCameraTimeLogger.h"
 
 #define HFD_LIBRARY_PATH "/vendor/lib/libhfd.so"
 

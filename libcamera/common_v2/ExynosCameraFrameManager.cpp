@@ -240,6 +240,7 @@ int32_t CreateWorker::m_getMargin()
 ExynosCameraFrame* CreateWorker::m_execute()
 {
     ExynosCameraFrame *frame = NULL;
+    int32_t ret = NO_ERROR;
 
     switch (m_operMode) {
     case FRAMEMGR_OPER::ONDEMAND:
@@ -248,15 +249,15 @@ ExynosCameraFrame* CreateWorker::m_execute()
     case FRAMEMGR_OPER::SLIENT:
         m_worklist->popProcessQ(&frame);
         if (frame == NULL) {
-            m_thread->run();
+            ret = m_thread->run();
             m_worklist->waitAndPopProcessQ(&frame);
         }
 
         if (frame == NULL) {
             CLOGE("ERR(%s[%d]): getframe failed, processQ size (%d)",
                 __FUNCTION__, __LINE__, m_worklist->getSizeOfProcessQ());
-            CLOGE("ERR(%s[%d]): Thread Run Status (%d)",
-                __FUNCTION__, __LINE__, m_thread->isRunning());
+            CLOGE("ERR(%s[%d]): Thread return (%d) Thread Run Status (%d)",
+                __FUNCTION__, __LINE__, ret, m_thread->isRunning());
         }
 
         m_thread->run();
@@ -836,7 +837,7 @@ ExynosCameraFrame* ExynosCameraFrameManager::m_createFrame(ExynosCameraParameter
                                                                 uint32_t frametype)
 {
     int ret = FRAMEMGR_ERRCODE::OK;
-    uint32_t key = 0;
+    uint32_t nextKey = 0;
     ExynosCameraFrame *frame = NULL;
     map<uint32_t, sp<FrameWorker> >::iterator iter;
     sp<FrameWorker> worker = NULL;
@@ -856,8 +857,20 @@ ExynosCameraFrame* ExynosCameraFrameManager::m_createFrame(ExynosCameraParameter
             CLOGE("ERR(%s[%d]): Frame is NULL", __FUNCTION__, __LINE__);
             return frame;
         }
+
         frame->setUniqueKey(m_keybox->createKey());
+        nextKey = m_keybox->getKey();
+        if (nextKey == frame->getUniqueKey()) {
+            CLOGW("WARN(%s[%d]):[F%d]Failed to increase frameUniqueKey. curKey %d nextKey %d",
+                    __FUNCTION__, __LINE__,
+                    framecnt, frame->getUniqueKey(), nextKey);
+
+            /* Increase the next frameUniqueKey forcely */
+            nextKey += 1;
+            m_keybox->setKey(nextKey);
+        }
         frame->setFrameInfo(param ,framecnt, frametype);
+
         ret = m_insertFrame(frame, &m_runningFrameList, m_lock);
         if (ret < 0) {
             CLOGE("ERR(%s[%d]): m_insertFrame is Failed ", __FUNCTION__, __LINE__);
@@ -898,7 +911,6 @@ status_t ExynosCameraFrameManager::m_deleteFrame(ExynosCameraFrame* frame)
             /* The frame must delete that refcount is ZERO */
 #endif
             ret = FRAMEMGR_ERRCODE::ERR;
-
             return ret;
         }
         worker->execute(frame, NULL);
@@ -976,6 +988,33 @@ status_t ExynosCameraFrameManager::m_dumpFrame()
     return ret;
 }
 
+status_t ExynosCameraFrameManager::m_dumpRunningFrame()
+{
+    status_t ret = FRAMEMGR_ERRCODE::OK;
+    map<uint32_t, ExynosCameraFrame*>::iterator frameIter;
+    ExynosCameraFrame *frame = NULL;
+
+    m_lock->lock();
+    CLOGD("DEBUG(%s[%d]):(%s) ++++++++++++++++++++++++++++++++++++", __FUNCTION__, __LINE__, m_name);
+    CLOGD("DEBUG(%s[%d]):runningFrameList size %zu",
+            __FUNCTION__, __LINE__, m_runningFrameList.size());
+
+    for (frameIter = m_runningFrameList.begin(); frameIter != m_runningFrameList.end(); ++frameIter) {
+        frame = frameIter->second;
+        CLOGD("DEBUG(%s[%d]):[F%d]uniqueKey %d frameType %d refCount %d",
+                __FUNCTION__, __LINE__,
+                frame->getFrameCount(),
+                frame->getUniqueKey(),
+                frame->getFrameType(),
+                frame->getRef());
+    }
+
+    CLOGD("DEBUG(%s[%d]):(%s) ------------------------------------", __FUNCTION__, __LINE__, m_name);
+    m_lock->unlock();
+
+    return ret;
+}
+
 status_t ExynosCameraFrameManager::m_deinit()
 {
     status_t ret = FRAMEMGR_ERRCODE::OK;
@@ -1032,9 +1071,12 @@ status_t ExynosCameraFrameManager::m_insertFrame(ExynosCameraFrame* frame,
 
     listRet = list->insert( pair<uint32_t, ExynosCameraFrame*>(frame->getUniqueKey(), frame));
     if (listRet.second == false) {
-        ret = FRAMEMGR_ERRCODE::ERR;
         CLOGE("ERR(%s[%d]): insertFrame fail frame already exist!! HAL frameCnt( %d ) UniqueKey ( %u ) ",
                 __FUNCTION__, __LINE__, frame->getFrameCount(), frame->getUniqueKey());
+
+        lock->unlock();
+        m_dumpRunningFrame();
+        return FRAMEMGR_ERRCODE::ERR;
     }
     lock->unlock();
     return ret;
@@ -1048,9 +1090,23 @@ ExynosCameraFrame* ExynosCameraFrameManager::m_removeFrame(ExynosCameraFrame* fr
     map<uint32_t, ExynosCameraFrame*>::iterator iter;
     pair<map<uint32_t, ExynosCameraFrame*>::iterator,bool> listRet;
     ExynosCameraFrame *ret = NULL;
+    uint32_t key;
+
+    if (frame == NULL) {
+        CLOGE("ERR(%s[%d]):frame is NULL", __FUNCTION__, __LINE__);
+
+        return NULL;
+    }
+
+    if (frame == NULL) {
+        CLOGE("ERR(%s[%d]):frame is NULL", __FUNCTION__, __LINE__);
+
+        return NULL;
+    }
 
     lock->lock();
-    iter = list->find(frame->getUniqueKey());
+    key = frame->getUniqueKey();
+    iter = list->find(key);
     if (iter != list->end()) {
         ret = iter->second;
 #ifdef USE_FRAME_REFERENCE_COUNT
@@ -1063,6 +1119,10 @@ ExynosCameraFrame* ExynosCameraFrameManager::m_removeFrame(ExynosCameraFrame* fr
     } else {
         CLOGE("ERR(%s[%d]): frame is not EXIST HAL-FrameCnt(%d) UniqueKey(%d)",
                 __FUNCTION__, __LINE__, frame->getFrameCount(), frame->getUniqueKey());
+
+        lock->unlock();
+        m_dumpRunningFrame();
+        return NULL;
     }
     lock->unlock();
 

@@ -64,7 +64,8 @@ namespace android {
 #endif
 
 #ifdef USE_GRALLOC_BUFFER_COLLECTOR
-#define MAX_BUFFER_COLLECT_COUNT    (6)
+#define MAX_BUFFER_COLLECT_COUNT        (6)
+#define BUFFER_COLLECTOR_WAITING_TIME   (10000) /* 10 msec */
 #endif
 
 // Hack: Close Fence FD if the fd is larger than specified number
@@ -372,7 +373,7 @@ private:
     typedef ExynosCameraThread<GrallocExynosCameraBufferManager> grallocBufferThread;
 
     int                         m_collectedBufferCount;
-    bool                        m_stopBufferColletor;
+    bool                        m_stopBufferCollector;
 
     sp<grallocBufferThread>     m_bufferCollector;
     bool                        m_bufferCollectorThreadFunc(void);
@@ -494,6 +495,7 @@ protected:
     virtual void     m_pushFence(List<ExynosCameraFence *> *list, ExynosCameraFence *fence);
     virtual ExynosCameraFence *m_popFence(List<ExynosCameraFence *> *list);
     virtual status_t m_removeFence(List<ExynosCameraFence *> *list, int index);
+    virtual status_t m_compareFdOfBufferHandle(const buffer_handle_t* handle, const ExynosCameraBuffer* exynosBuf);
 
 private:
     ExynosCameraStreamAllocator     *m_allocator;

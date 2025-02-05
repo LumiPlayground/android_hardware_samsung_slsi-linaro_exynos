@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraActivityFlash"
-#include <cutils/log.h>
+#include <log/log.h>
 
 
 #include "ExynosCameraActivityFlash.h"
@@ -82,17 +82,13 @@ ExynosCameraActivityFlash::~ExynosCameraActivityFlash()
 {
 }
 
-int ExynosCameraActivityFlash::t_funcNull(void *args)
+int ExynosCameraActivityFlash::t_funcNull(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
     return 1;
 }
 
-int ExynosCameraActivityFlash::t_funcSensorBefore(void *args)
+int ExynosCameraActivityFlash::t_funcSensorBefore(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-    m_reqBuf = *buf;
-
     return 1;
 }
 
@@ -115,31 +111,23 @@ int ExynosCameraActivityFlash::t_funcSensorAfter(void *args)
     return 1;
 }
 
-int ExynosCameraActivityFlash::t_funcISPBefore(void *args)
+int ExynosCameraActivityFlash::t_funcISPBefore(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-
     return 1;
 }
 
-int ExynosCameraActivityFlash::t_funcISPAfter(void *args)
+int ExynosCameraActivityFlash::t_funcISPAfter(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-
     return 1;
 }
 
-int ExynosCameraActivityFlash::t_funcSCPBefore(void *args)
+int ExynosCameraActivityFlash::t_funcSCPBefore(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-
     return 1;
 }
 
-int ExynosCameraActivityFlash::t_funcSCPAfter(void *args)
+int ExynosCameraActivityFlash::t_funcSCPAfter(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-
     return 1;
 }
 

@@ -142,6 +142,111 @@ status_t ExynosCameraPipe3AA_ISP::create(int32_t *sensorIds)
     return NO_ERROR;
 }
 
+#ifdef SAMSUNG_COMPANION
+status_t ExynosCameraPipe3AA_ISP::precreate(int32_t *sensorIds)
+{
+    ALOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+    int ret = 0;
+    int fd = -1;
+
+    if (sensorIds == NULL) {
+        ALOGE("ERR(%s[%d]): Pipe need sensorId", __FUNCTION__, __LINE__);
+        return BAD_VALUE;
+    }
+
+    /* ISP */
+    m_ispNode = new ExynosCameraNode();
+    ret = m_ispNode->create("ISP", m_cameraId);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]): ispNode create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+
+    ret = m_ispNode->open(m_ispNodeNum);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]): ispNode open fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+    ALOGD("DEBUG(%s):Node(%d) opened", __FUNCTION__, FIMC_IS_VIDEO_ISP_NUM);
+
+    m_ispThread = ExynosCameraThreadFactory::createThread(this, &ExynosCameraPipe3AA_ISP::m_ispThreadFunc, "ISPThread", PRIORITY_URGENT_DISPLAY);
+
+    m_ispBufferQ = new isp_buffer_queue_t;
+
+    /* 3AA output */
+    m_mainNode = new ExynosCameraNode();
+    ret = m_mainNode->create("3AA_output", m_cameraId);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]): mainNode create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+
+    ret = m_mainNode->open(m_mainNodeNum);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]): mainNode open fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+    ALOGD("DEBUG(%s):Node(%d) opened", __FUNCTION__, m_mainNodeNum);
+
+    ret = m_mainNode->getFd(&fd);
+    if (ret != NO_ERROR) {
+        ALOGE("ERR(%s[%d]):mainNode->getFd failed", __FUNCTION__, __LINE__);
+        return ret;
+    }
+
+    /* 3AA capture */
+    m_subNode = new ExynosCameraNode();
+    ret = m_subNode->create("3AA_capture", m_cameraId, fd);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]): subNode create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+
+    m_mainThread = ExynosCameraThreadFactory::createThread(this, &ExynosCameraPipe3AA_ISP::m_mainThreadFunc, "3AAThread", PRIORITY_URGENT_DISPLAY);
+
+    ALOGI("INFO(%s[%d]):precreate() is succeed (%d) prepare", __FUNCTION__, __LINE__, getPipeId());
+
+    return NO_ERROR;
+}
+
+status_t ExynosCameraPipe3AA_ISP::postcreate(int32_t *sensorIds)
+{
+    ALOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+    int ret = 0;
+    int fd = -1;
+
+    if (sensorIds == NULL) {
+        ALOGE("ERR(%s[%d]): Pipe need sensorId", __FUNCTION__, __LINE__);
+        return BAD_VALUE;
+    }
+
+    ret = m_ispNode->setInput(sensorIds[SUB_NODE]);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]): ispNode setInput fail, sensorId(%d), ret(%d)", __FUNCTION__, __LINE__, sensorIds[SUB_NODE], ret);
+        return ret;
+    }
+
+    ret = m_mainNode->setInput(sensorIds[OUTPUT_NODE]);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]): mainNode setInput fail, sensorId(%d), ret(%d)", __FUNCTION__, __LINE__, sensorIds[OUTPUT_NODE], ret);
+        return ret;
+    }
+
+    ret = m_subNode->setInput(sensorIds[CAPTURE_NODE]);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]): subNode setInput fail, sensorId(%d), ret(%d)", __FUNCTION__, __LINE__, sensorIds[CAPTURE_NODE], ret);
+        return ret;
+    }
+
+    m_inputFrameQ = new frame_queue_t;
+
+    m_prepareBufferCount = m_exynosconfig->current->pipeInfo.prepare[getPipeId()];
+    ALOGI("INFO(%s[%d]):postcreate() is succeed (%d) prepare (%d)", __FUNCTION__, __LINE__, getPipeId(), m_prepareBufferCount);
+
+    return NO_ERROR;
+}
+#endif
+
 status_t ExynosCameraPipe3AA_ISP::destroy(void)
 {
     int ret = 0;
@@ -409,6 +514,12 @@ status_t ExynosCameraPipe3AA_ISP::setControl(int cid, int value)
     ret = m_mainNode->setControl(cid, value);
     if (ret != NO_ERROR)
         ALOGE("ERR(%s[%d]):mainNode->setControl failed", __FUNCTION__, __LINE__);
+
+#ifdef OIS_CAPTURE
+    /* HACK: CAPTURE_INTENT must be delivered to 3AA_OUTPUT node only */
+    if (cid == V4L2_CID_IS_INTENT)
+        return ret;
+#endif
 
     ret = m_subNode->setControl(cid, value);
     if (ret != NO_ERROR)
@@ -969,6 +1080,9 @@ status_t ExynosCameraPipe3AA_ISP::m_getBuffer(void)
         shot_ext_dst->dis_bypass = shot_ext_src->dis_bypass;
         shot_ext_dst->dnr_bypass = shot_ext_src->dnr_bypass;
         shot_ext_dst->fd_bypass = shot_ext_src->fd_bypass;
+#ifdef SAMSUNG_COMPANION
+        shot_ext_dst->shot.uctl.companionUd.wdr_mode = shot_ext_src->shot.uctl.companionUd.wdr_mode;
+#endif
         shot_ext_dst->shot.dm.request.frameCount = shot_ext_src->shot.dm.request.frameCount;
         shot_ext_dst->shot.magicNumber= shot_ext_src->shot.magicNumber;
     } else {

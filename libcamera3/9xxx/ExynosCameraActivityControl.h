@@ -52,6 +52,11 @@ public:
     /* Check if the instance was created */
     bool            flagCreate(void);
 
+#ifdef OIS_CAPTURE
+    /* Sets OIS mode */
+    void            setOISCaptureMode(bool oisMode);
+#endif
+
     void            activityBeforeExecFunc(int pipeId, void *args);
     void            activityAfterExecFunc(int pipeId, void *args);
     ExynosCameraActivityFlash *getFlashMgr(void);

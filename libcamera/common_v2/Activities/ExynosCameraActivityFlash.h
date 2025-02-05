@@ -115,6 +115,9 @@ public:
         FLASH_STEP_MAIN_START,
         FLASH_STEP_MAIN_DONE,
         FLASH_STEP_CANCEL,
+        FLASH_STEP_PRE_LCD_ON,
+        FLASH_STEP_LCD_ON,
+        FLASH_STEP_LCD_OFF,
         FLASH_STEP_END
     };
 
@@ -192,6 +195,9 @@ public:
     void notifyAeResult(void);
     void setMainFlashFiring(bool isMainFlashFiring);
     void setManualExposureTime(uint64_t exposureTime);
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+    void setAeFlashModeForLcdFlash(camera2_shot_ext *shot_ext, int flashStep);
+#endif
 
 private:
     bool m_isNeedFlash;

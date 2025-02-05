@@ -47,22 +47,22 @@ namespace android {
 #define EXYNOS_CAMERA_BUFFER_1MB                        (1024*1024)
 #define EXYNOS_CAMERA_BUFFER_WARNING_TIME_MARGIN        (100)  /* 0.1ms per 1MB */
 
-#define EXYNOS_CAMERA_BUFFER_ION_MASK_NONCACHED         (ION_HEAP_SYSTEM_MASK)
+#define EXYNOS_CAMERA_BUFFER_ION_MASK_NONCACHED         (EXYNOS_ION_HEAP_SYSTEM_MASK)
 #define EXYNOS_CAMERA_BUFFER_ION_FLAG_NONCACHED         (0)
 #define EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_NONCACHED (1600 + EXYNOS_CAMERA_BUFFER_WARNING_TIME_MARGIN)  /* 1.6ms per 1MB */
 
-#define EXYNOS_CAMERA_BUFFER_ION_MASK_CACHED            (ION_HEAP_SYSTEM_MASK)
+#define EXYNOS_CAMERA_BUFFER_ION_MASK_CACHED            (EXYNOS_ION_HEAP_SYSTEM_MASK)
 #define EXYNOS_CAMERA_BUFFER_ION_FLAG_CACHED            (ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC)
 #define EXYNOS_CAMERA_BUFFER_ION_FLAG_CACHED_SYNC_FORCE (ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC | ION_FLAG_SYNC_FORCE)
 #define EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_CACHED    (670 + EXYNOS_CAMERA_BUFFER_WARNING_TIME_MARGIN)  /* 0.67ms per 1MB */
 
-#define EXYNOS_CAMERA_BUFFER_ION_MASK_RESERVED          (ION_HEAP_EXYNOS_CONTIG_MASK)
-#define EXYNOS_CAMERA_BUFFER_ION_FLAG_RESERVED          (ION_EXYNOS_VIDEO_MASK)
+#define EXYNOS_CAMERA_BUFFER_ION_MASK_RESERVED          (EXYNOS_ION_HEAP_VIDEO_FRAME_MASK)
+#define EXYNOS_CAMERA_BUFFER_ION_FLAG_RESERVED          (0)
 #define EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_RESERVED  (50)  /* 0.05ms */
 
 #define EXYNOS_CAMERA_BUFFER_GRALLOC_WARNING_TIME       (3300 + EXYNOS_CAMERA_BUFFER_WARNING_TIME_MARGIN)  /* 3.3ms per 1MB */
 
-#define EXYNOS_CAMERA_BUFFER_ION_MASK_SECURE            (EXYNOS_ION_HEAP_SECURE_CAMERA)
+#define EXYNOS_CAMERA_BUFFER_ION_MASK_SECURE            (EXYNOS_ION_HEAP_SECURE_CAMERA_MASK)
 #define EXYNOS_CAMERA_BUFFER_ION_FLAG_SECURE            (ION_FLAG_PROTECTED)
 
 typedef enum exynos_camera_buffer_type {
@@ -189,7 +189,6 @@ struct ExynosCameraBuffer {
     int                             acquireFence[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
     int                             releaseFence[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
 
-    const char      *bufMgrNm;
     void            *manager;
 #ifdef __cplusplus
     ExynosCameraBuffer() {
@@ -243,7 +242,6 @@ struct ExynosCameraBuffer {
         status     = other.status;
         type       = other.type;
         tag        = other.tag;
-        bufMgrNm   = other.bufMgrNm;
 
         manager = other.manager;
 

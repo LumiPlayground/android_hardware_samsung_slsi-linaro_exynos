@@ -16,11 +16,14 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraInterface"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraInterface.h"
 #include "ExynosCameraAutoTimer.h"
-#include "ExynosCameraTimeLogger.h"
+
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraVendorTags.h"
+#endif
 
 namespace android {
 
@@ -60,9 +63,6 @@ static int HAL3_camera_device_open(const struct hw_module_t* module,
     enum CAMERA_STATE state;
     FILE *fp = NULL;
     int ret = 0;
-
-    TIME_LOGGER_INIT(cameraId);
-    TIME_LOGGER_UPDATE(cameraId, 0, 0, CUMULATIVE_CNT, OPEN_START, 0);
 
     CameraMetadata metadata;
     camera_metadata_entry flashAvailable;
@@ -131,7 +131,7 @@ static int HAL3_camera_device_open(const struct hw_module_t* module,
 
     g_cam_openLock[cameraId].lock();
     g_cam_device3[cameraId]->common.tag     = HARDWARE_DEVICE_TAG;
-    g_cam_device3[cameraId]->common.version = CAMERA_DEVICE_API_VERSION_3_4;
+    g_cam_device3[cameraId]->common.version = CAMERA_DEVICE_API_VERSION_3_5;
     g_cam_device3[cameraId]->common.module  = const_cast<hw_module_t *>(module);
     g_cam_device3[cameraId]->common.close   = HAL3_camera_device_close;
     g_cam_device3[cameraId]->ops            = &camera_device3_ops;
@@ -166,7 +166,7 @@ done:
         flashAvailable = metadata.find(ANDROID_FLASH_INFO_AVAILABLE);
 
         ALOGV("INFO(%s[%d]): cameraId(%d), flashAvailable.count(%d), flashAvailable.data.u8[0](%d)",
-            __FUNCTION__, __LINE__, cameraId, flashAvailable.count, flashAvailable.data.u8[0]);
+            __FUNCTION__, __LINE__, cameraId, (int)flashAvailable.count, flashAvailable.data.u8[0]);
 
         if (flashAvailable.count == 1 && flashAvailable.data.u8[0] == 1) {
             hasFlash = true;
@@ -198,8 +198,6 @@ done:
     g_callbacks->torch_mode_status_change(g_callbacks, id, TORCH_MODE_STATUS_NOT_AVAILABLE);
 
     ALOGI("INFO(%s[%d]):camera(%d) out =====", __FUNCTION__, __LINE__, cameraId);
-
-    TIME_LOGGER_UPDATE(cameraId, 0, 0, CUMULATIVE_CNT, OPEN_END, 0);
 
     return 0;
 }
@@ -288,8 +286,6 @@ static int HAL3_camera_device_initialize(const struct camera3_device *dev,
     uint32_t cameraId = obj(dev)->getCameraIdOrigin();
     ALOGI("INFO(%s[%d]):in =====", __FUNCTION__, __LINE__);
 
-    TIME_LOGGER_UPDATE(cameraId, 0, 0, CUMULATIVE_CNT, INITIALIZE_START, 0);
-
     g_cam_configLock[cameraId].lock();
 
     ALOGE("INFO(%s[%d]): dual cam_state[0](%d)", __FUNCTION__, __LINE__, cam_state[0]);
@@ -297,8 +293,46 @@ static int HAL3_camera_device_initialize(const struct camera3_device *dev,
 #ifdef PIP_CAMERA_SUPPORTED
     if (cameraId != 0 && g_cam_device3[0] != NULL
         && cam_state[0] != CAMERA_NONE && cam_state[0] != CAMERA_CLOSED) {
+        ret = obj(g_cam_device3[0])->getAvailablePIPMode();
+        if (ret == false) {
+            ALOGE("ERR(%s[%d]):camera(%d) PIP scenario can not be supported after Front camera open.",
+                __FUNCTION__, __LINE__, cameraId);
+            g_cam_configLock[cameraId].unlock();
+            return BAD_VALUE;
+        }
+
         /* Set PIP mode into Rear Camera */
         ret = obj(g_cam_device3[0])->setPIPMode(true);
+        if (ret != NO_ERROR) {
+            ALOGE("ERR(%s[%d]):camera(%d) set pipe mode fail. ret %d",
+                    __FUNCTION__, __LINE__, 0, ret);
+        } else {
+            ALOGI("INFO(%s[%d]):camera(%d) set pip mode. Restart stream.",
+                    __FUNCTION__, __LINE__, 0);
+        }
+
+        ret = obj(dev)->setPIPMode(true);
+        if (ret != NO_ERROR) {
+            ALOGE("ERR(%s[%d]):camera(%d) set pip mode fail, ret(%d)",
+                __FUNCTION__, __LINE__, cameraId, ret);
+        } else {
+            ALOGI("INFO(%s[%d]):camera(%d) set pip mode",
+                __FUNCTION__, __LINE__, cameraId);
+        }
+    } else if (cameraId != 1 && g_cam_device3[1] != NULL
+        && cam_state[1] != CAMERA_NONE && cam_state[1] != CAMERA_CLOSED) {
+        /* When rear camera is opened after front camera configuration or run, PIP scenario is fail.
+         * The rear camera must be opened before front camera configuration for PIP scenario*/
+        ret = obj(g_cam_device3[1])->getAvailablePIPMode();
+        if (ret == false) {
+            ALOGE("ERR(%s[%d]):camera(%d) PIP scenario can not be supported after Front camera open.",
+                __FUNCTION__, __LINE__, cameraId);
+            g_cam_configLock[cameraId].unlock();
+            return BAD_VALUE;
+        }
+
+        /* Set PIP mode into Front Camera */
+        ret = obj(g_cam_device3[1])->setPIPMode(true);
         if (ret != NO_ERROR) {
             ALOGE("ERR(%s[%d]):camera(%d) set pipe mode fail. ret %d",
                     __FUNCTION__, __LINE__, 0, ret);
@@ -327,9 +361,6 @@ static int HAL3_camera_device_initialize(const struct camera3_device *dev,
 
     ALOGV("DEBUG(%s):set callback ops - %p", __FUNCTION__, callback_ops);
     ALOGI("INFO(%s[%d]):out =====", __FUNCTION__, __LINE__);
-
-    TIME_LOGGER_UPDATE(cameraId, 0, 0, CUMULATIVE_CNT, INITIALIZE_END, 0);
-
     return ret;
 }
 
@@ -341,11 +372,7 @@ static int HAL3_camera_device_configure_streams(const struct camera3_device *dev
     int ret = OK;
     uint32_t cameraId = obj(dev)->getCameraIdOrigin();
     ALOGI("INFO(%s[%d]):in =====", __FUNCTION__, __LINE__);
-
-    TIME_LOGGER_UPDATE(cameraId, 0, 0, CUMULATIVE_CNT, CONFIGURE_STREAM_START, 0);
-
     g_cam_configLock[cameraId].lock();
-
     ret = obj(dev)->configureStreams(stream_list);
     if (ret) {
         ALOGE("ERR(%s[%d]):configure_streams error!!", __FUNCTION__, __LINE__);
@@ -353,9 +380,6 @@ static int HAL3_camera_device_configure_streams(const struct camera3_device *dev
     }
     g_cam_configLock[cameraId].unlock();
     ALOGI("INFO(%s[%d]):out =====", __FUNCTION__, __LINE__);
-
-    TIME_LOGGER_UPDATE(cameraId, 0, 0, CUMULATIVE_CNT, CONFIGURE_STREAM_END, 0);
-
     return ret;
 }
 
@@ -387,14 +411,7 @@ static int HAL3_camera_device_process_capture_request(const struct camera3_devic
     /* ExynosCameraAutoTimer autoTimer(__FUNCTION__); */
 
     int ret = OK;
-    uint32_t cameraId = obj(dev)->getCameraIdOrigin();
     ALOGV("INFO(%s[%d]):in =====", __FUNCTION__, __LINE__);
-
-    TIME_LOGGER_UPDATE(cameraId, 0, 0, CUMULATIVE_CNT, PROCESS_CAPTURE_REQUEST_START, 0);
-    if (request->frame_number == 0) {
-        TIME_LOGGER_SAVE(cameraId);
-    }
-
     ret = obj(dev)->processCaptureRequest(request);
     if (ret) {
         ALOGE("ERR(%s[%d]):process_capture_request error(%d)!!", __FUNCTION__, __LINE__, ret);
@@ -423,6 +440,22 @@ static int HAL3_camera_device_flush(const struct camera3_device *dev)
     ALOGI("INFO(%s[%d]):out =====", __FUNCTION__, __LINE__);
     return ret;
 }
+
+#ifdef SAMSUNG_TN_FEATURE
+static int HAL3_camera_device_set_parameters(
+        const struct camera3_device *dev,
+        const char *parms)
+{
+    ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+
+    ALOGD("DEBUG(%s[%d]):", __FUNCTION__, __LINE__);
+
+    String8 str(parms);
+    CameraParameters p(str);
+
+    return obj(dev)->setParameters(p);
+}
+#endif
 
 static void HAL3_camera_device_get_metadata_vendor_tag_ops(const struct camera3_device *dev,
                                                             vendor_tag_query_ops_t* ops)
@@ -508,7 +541,7 @@ static int HAL_getCameraInfo(int camera_id, struct camera_info *info)
     }
 
     /* set device API version */
-    info->device_version = CAMERA_DEVICE_API_VERSION_3_4;
+    info->device_version = CAMERA_DEVICE_API_VERSION_3_5;
 
     /* set camera_metadata_t if needed */
     if (info->device_version >= HARDWARE_DEVICE_API_VERSION(2, 0)) {
@@ -682,10 +715,78 @@ static int HAL_init()
     return OK;
 }
 
+/**
+ * HAL_getPhysicalCameraInfo
+ * Returns the static metadata for a physical camera in a logical camera device.
+ */
+static int HAL_getPhysicalCameraInfo(int physical_camera_id,
+           camera_metadata_t **static_metadata)
+{
+    status_t ret = NO_ERROR;
+
+    int cameraId = HAL_getCameraId(physical_camera_id);
+
+    /*
+     *  This function is only called for those physical camera
+     * ID(s) that are not exposed independently.
+     */
+    if (cameraId < 0 || physical_camera_id < HAL_getNumberOfCameras()) {
+        ALOGE("ERR(%s[%d]):Invalid camera ID %d , (%d / %d)", __FUNCTION__, __LINE__, cameraId,
+             physical_camera_id, HAL_getNumberOfCameras());
+        goto FUNC_ERR;
+    }
+
+    if (static_metadata == NULL)
+	goto FUNC_ERR;
+
+    if (g_cam_info[cameraId] == NULL) {
+        ret = ExynosCameraMetadataConverter::constructStaticInfo(cameraId, &g_cam_info[cameraId]);
+        if (ret != 0) {
+            ALOGE("ERR(%s[%d]): static information is NULL", __FUNCTION__, __LINE__);
+            goto FUNC_ERR;
+        }
+    }
+
+    *static_metadata = g_cam_info[cameraId];
+    return NO_ERROR;
+
+FUNC_ERR:
+    if (static_metadata)
+        *static_metadata = NULL;
+
+    return -EINVAL;
+}
+
+/*
+ * HAL_isStreamCombinationSupported
+ * Check for device support of specific camera stream combination
+ */
+static int HAL_isStreamCombinationSupported(int camera_id,
+           const camera_stream_combination_t *streams)
+{
+    /* TODO: stream combination query need to be supported */
+
+    ALOGD("(%s[%d]): (%d , %p)", __FUNCTION__, __LINE__, camera_id, streams);
+
+    return -ENOSYS;
+}
+
 static void HAL_get_vendor_tag_ops(__unused vendor_tag_ops_t* ops)
 {
     ALOGV("INFO(%s):", __FUNCTION__);
-    ALOGV("WARN(%s[%d]):empty operation", __FUNCTION__, __LINE__);
+
+#ifdef SAMSUNG_TN_FEATURE
+    SecCameraVendorTags::Ops = ops;
+
+    ops->get_all_tags = SecCameraVendorTags::get_ext_all_tags;
+    ops->get_tag_count = SecCameraVendorTags::get_ext_tag_count;
+    ops->get_tag_type = SecCameraVendorTags::get_ext_tag_type;
+    ops->get_tag_name = SecCameraVendorTags::get_ext_tag_name;
+    ops->get_section_name = SecCameraVendorTags::get_ext_section_name;
+    ops->reserved[0] = NULL;
+#else
+    ALOGW("WARN(%s[%d]):empty operation", __FUNCTION__, __LINE__);
+#endif
 }
 
 }; /* namespace android */

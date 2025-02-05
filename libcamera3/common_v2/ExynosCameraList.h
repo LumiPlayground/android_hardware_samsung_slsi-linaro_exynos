@@ -111,6 +111,8 @@ public:
     void wakeupAll(void)
     {
         setStatusException(TIMED_OUT);
+
+        Mutex::Autolock lock(m_processQMutex);
         if (m_waitProcessQ)
             m_processQCondition.signal();
     }

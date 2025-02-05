@@ -47,6 +47,12 @@
 #include "ExynosCameraFrame.h"
 #include "ExynosCameraList.h"
 
+
+
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraParameters.h"
+#endif
+
 namespace android {
 
 using namespace std;

@@ -454,7 +454,7 @@ char *HAL_camera_device_get_parameters(struct camera_device *dev)
     CameraParameters parms = obj(dev)->getParameters();
     str = parms.flatten();
 #endif
-    return strdup(str.string());
+    return strdup(str.c_str());
 }
 
 static void HAL_camera_device_put_parameters(
@@ -1355,10 +1355,12 @@ static int HAL_camera_device_dual_set_parameters(
     int funcRet = 0;
 
     if (dev) {
-        String8 str(parms);
-        CameraParameters newWideParams(str);
         int cameraId = obj(dev)->getCameraId();
+
         {
+            String8 str(parms);
+            CameraParameters newWideParams(str);
+
             if (isDualCamera(cameraId) == true) {
                 /*
                  * if dual_mode(PIP), disable dual camera,
@@ -1388,14 +1390,24 @@ static int HAL_camera_device_dual_set_parameters(
 
             int teleCameraId = getTeleCameraId(cameraId);
 
-            CameraParameters wideParams(str);
-            CameraParameters teleParams(str);
+            CameraParameters wideParams = obj(dev)->getParameters();
+            CameraParameters teleParams = obj(g_cam_device[teleCameraId])->getParameters();
 
             int widePreviewW, widePreviewH = 0;
             int telePreviewW, telePreviewH = 0;
 
             int widePictureW, widePictureH = 0;
             int telePictureW, telePictureH = 0;
+
+            /* for zoom */
+            int wideZoom = wideParams.getInt(CameraParameters::KEY_ZOOM);
+            teleParams.set(CameraParameters::KEY_ZOOM, wideZoom);
+
+            /* for recordingHint */
+            const char *wideRecordingHintStr = wideParams.get(CameraParameters::KEY_RECORDING_HINT);
+            if (wideRecordingHintStr != NULL) {
+                teleParams.set(CameraParameters::KEY_RECORDING_HINT, wideRecordingHintStr);
+            }
 
             wideParams.getPreviewSize(&widePreviewW, &widePreviewH);
             teleParams.getPreviewSize(&telePreviewW, &telePreviewH);
@@ -2120,10 +2132,10 @@ void ExynosCameraThreadInterface::m_skipApiQ(enum API_TYPE apiType)
         if (curApiType == apiType) {
             DEBUG_USE_THREAD_ON_DUAL_CAMERA_LOG("curApiType(%s) == apiType(%s). so, skip",
                 m_apiType2Str(curApiType), m_apiType2Str(apiType));
-            r = m_apiQ.erase(r);
-        } else {
-            r++;
+            m_apiQ.erase(r);
         }
+
+        r++;
     } while (r != m_apiQ.end());
 }
 
@@ -2148,16 +2160,16 @@ void ExynosCameraThreadInterface::m_skipApiQ(enum API_TYPE apiType1, enum API_TY
         if (curApiType == apiType1) {
             DEBUG_USE_THREAD_ON_DUAL_CAMERA_LOG("curApiType(%s) == apiType1(%s). so, skip",
                 m_apiType2Str(curApiType), m_apiType2Str(apiType1));
-            r = m_apiQ.erase(r);
+            m_apiQ.erase(r);
         }
 
         if (curApiType == apiType2) {
             DEBUG_USE_THREAD_ON_DUAL_CAMERA_LOG("curApiType(%s) == apiType2(%s). so, skip",
                 m_apiType2Str(curApiType), m_apiType2Str(apiType2));
-            r = m_apiQ.erase(r);
-        } else {
-            r++;
+            m_apiQ.erase(r);
         }
+
+        r++;
     } while (r != m_apiQ.end());
 }
 
@@ -2182,10 +2194,10 @@ void ExynosCameraThreadInterface::m_skipWithoutApiQ(enum API_TYPE apiType)
         if (curApiType != apiType) {
             DEBUG_USE_THREAD_ON_DUAL_CAMERA_LOG("curApiType(%s) != apiType(%s). so, erase",
                 m_apiType2Str(curApiType), m_apiType2Str(apiType));
-            r = m_apiQ.erase(r);
-        } else {
-            r++;
+            m_apiQ.erase(r);
         }
+
+        r++;
     } while (r != m_apiQ.end());
 }
 

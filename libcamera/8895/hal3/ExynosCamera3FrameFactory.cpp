@@ -325,9 +325,6 @@ void ExynosCamera3FrameFactory::setRequest(int pipeId, bool enable)
     case PIPE_MCSC4_REPROCESSING:
         m_requestMCSC4 = enable ? 1 : 0;
         break;
-    case PIPE_GSC_PICTURE:
-        m_requestGSC_PICTURE = enable ? 1 : 0;
-    case PIPE_JPEG:
     case PIPE_HWFC_JPEG_SRC_REPROCESSING:
     case PIPE_HWFC_JPEG_DST_REPROCESSING:
         m_requestJPEG = enable ? 1 : 0;
@@ -355,7 +352,20 @@ void ExynosCamera3FrameFactory::setRequestBayer(bool enable)
 
 void ExynosCamera3FrameFactory::setRequest3AC(bool enable)
 {
+#if 1
     m_request3AC = enable ? 1 : 0;
+#else
+    /* From 74xx, Front will use reprocessing. so, we need to prepare BDS */
+    if (isReprocessing(m_cameraId) == true) {
+        if (m_parameters->getUsePureBayerReprocessing() == true) {
+            m_request3AC = 0;
+        } else {
+            m_request3AC = enable ? 1 : 0;
+        }
+    } else {
+        m_request3AC = 0;
+    }
+#endif
 }
 
 void ExynosCamera3FrameFactory::setRequestISPC(bool enable)
@@ -476,11 +486,9 @@ enum NODE_TYPE ExynosCamera3FrameFactory::getNodeType(uint32_t pipeId)
     case PIPE_MCSC2_REPROCESSING:
         nodeType = CAPTURE_NODE_13;
         break;
-    case PIPE_MCSC3:
     case PIPE_HWFC_JPEG_DST_REPROCESSING:
         nodeType = CAPTURE_NODE_14;
         break;
-    case PIPE_MCSC4:
     case PIPE_HWFC_JPEG_SRC_REPROCESSING:
         nodeType = CAPTURE_NODE_15;
         break;
@@ -490,11 +498,6 @@ enum NODE_TYPE ExynosCamera3FrameFactory::getNodeType(uint32_t pipeId)
     case PIPE_HWFC_THUMB_DST_REPROCESSING:
         nodeType = CAPTURE_NODE_17;
         break;
-#if defined(USE_SW_MCSC) && (USE_SW_MCSC == true)
-    case PIPE_SW_MCSC:
-        nodeType = OUTPUT_NODE;
-        break;
-#endif
     default:
         android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Unexpected pipe_id(%d), assert!!!!",
              __FUNCTION__, __LINE__, pipeId);
@@ -593,20 +596,7 @@ bool ExynosCamera3FrameFactory::isCreated(void)
 {
     Mutex::Autolock lock(m_stateLock);
 
-    bool isCreated = false;
-
-    switch (m_state) {
-    case FRAME_FACTORY_STATE_INIT:
-    case FRAME_FACTORY_STATE_RUN:
-        CLOGW("invalid state(%d)", m_state);
-    case FRAME_FACTORY_STATE_CREATE:
-        isCreated = true;
-        break;
-    default:
-        break;
-    }
-
-    return isCreated;
+    return (m_state == FRAME_FACTORY_STATE_CREATE)? true : false;
 }
 
 bool ExynosCamera3FrameFactory::isRunning(void)
@@ -700,7 +690,7 @@ status_t ExynosCamera3FrameFactory::m_initFrameMetadata(ExynosCameraFrameSP_sptr
         frame->setRequest(PIPE_3AP_REPROCESSING, m_request3AP);
         frame->setRequest(PIPE_ISPC_REPROCESSING, m_requestISPC);
         frame->setRequest(PIPE_ISPP_REPROCESSING, m_requestISPP);
-        if(m_numOfHwChains == 1) {
+        if(m_supportSingleChain == true) {
             frame->setRequest(PIPE_MCSC2_REPROCESSING, m_requestMCSC2);
         }
         frame->setRequest(PIPE_MCSC3_REPROCESSING, m_requestMCSC3);
@@ -724,8 +714,6 @@ status_t ExynosCamera3FrameFactory::m_initFrameMetadata(ExynosCameraFrameSP_sptr
         frame->setRequest(PIPE_MCSC0, m_requestMCSC0);
         frame->setRequest(PIPE_MCSC1, m_requestMCSC1);
         frame->setRequest(PIPE_MCSC2, m_requestMCSC2);
-        frame->setRequest(PIPE_MCSC3, m_requestMCSC3);
-        frame->setRequest(PIPE_MCSC4, m_requestMCSC4);
 
         m_bypassDRC = m_parameters->getDrcEnable();
         m_bypassDNR = m_parameters->getDnrEnable();
@@ -770,15 +758,10 @@ status_t ExynosCamera3FrameFactory::m_initPipelines(ExynosCameraFrameSP_sptr_t f
             }
 
             /* check Image Configuration Equality */
-#if defined(USE_SW_MCSC) && (USE_SW_MCSC == true)
-            if (childEntity->getPipeId() != PIPE_SW_MCSC)
-#endif
-            {
-                ret = m_checkPipeInfo(curEntity->getPipeId(), childEntity->getPipeId());
-                if (ret != NO_ERROR) {
-                    CLOGE("checkPipeInfo fail, Pipe[%d], Pipe[%d]", curEntity->getPipeId(), childEntity->getPipeId());
-                    return ret;
-                }
+            ret = m_checkPipeInfo(curEntity->getPipeId(), childEntity->getPipeId());
+            if (ret != NO_ERROR) {
+                CLOGE("checkPipeInfo fail, Pipe[%d], Pipe[%d]", curEntity->getPipeId(), childEntity->getPipeId());
+                return ret;
             }
 
             curEntity = childEntity;
@@ -1004,7 +987,6 @@ void ExynosCamera3FrameFactory::m_init(void)
     m_requestMCSC3 = false;
     m_requestMCSC4 = false;
 
-    m_requestGSC_PICTURE = false;
     m_requestJPEG = false;
     m_requestThumbnail = false;
 
@@ -1026,9 +1008,7 @@ void ExynosCamera3FrameFactory::m_init(void)
     m_flagReprocessing = false;
     m_supportPureBayerReprocessing = false;
     m_supportSCC = false;
-
-    m_numOfHwChains = 0;
-    m_numOfMcscOutputPorts = 0;
+    m_supportSingleChain = false;
 
     m_state = FRAME_FACTORY_STATE_NONE;
 }

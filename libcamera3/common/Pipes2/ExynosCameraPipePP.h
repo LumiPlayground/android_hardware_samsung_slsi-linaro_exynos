@@ -67,6 +67,10 @@ private:
 private:
     int                     m_nodeNum;
     ExynosCameraPP         *m_pp;
+#ifdef SAMSUNG_TN_FEATURE
+    static ExynosCameraPP  *m_ppScenario[PP_SCENARIO_MAX];
+    int                     m_scenario;
+#endif
 };
 
 }; /* namespace android */

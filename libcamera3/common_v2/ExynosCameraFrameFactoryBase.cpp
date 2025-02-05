@@ -37,15 +37,27 @@ status_t ExynosCameraFrameFactoryBase::create(void)
     CLOGI("");
 
     status_t ret = NO_ERROR;
+    int id;
 
     m_setupConfig();
     m_constructPipes();
 
     for (int i = 0; i < MAX_NUM_PIPES; i++) {
         if (m_pipes[i] != NULL) {
+            if (m_pipes[i]->getPipeStreamLeader()) {
+                /* If it is a stream leader, Set EOS for the Previous PIPE (to start new stream) */
+                id = m_pipes[i]->getPrevPipeID();
+                if (id >= 0) {
+                    ret = this->setStreamEOS(id);
+                    if (ret != NO_ERROR) {
+                        CLOGE("setStreamEOS fail, ret(%d)", ret);
+                        return ret;
+                    }
+                }
+            }
             /* HACK: FLITE must set sensorIds */
-            if (i == PIPE_3AA
-                || ((m_cameraId == CAMERA_ID_FRONT) && i == PIPE_FLITE)) {
+            if (i == PIPE_3AA || i == PIPE_FLITE) {
+                //|| ((m_cameraId == CAMERA_ID_FRONT || getCameraId() == CAMERA_ID_SECURE) && i == PIPE_FLITE)) {
                 ret = m_pipes[i]->create(m_sensorIds[i]);
             } else {
                 ret = m_pipes[i]->create();
@@ -76,7 +88,7 @@ status_t ExynosCameraFrameFactoryBase::precreate(void)
         if (m_pipes[i] != NULL) {
             /* HACK: FLITE must set sensorIds */
             if (i == PIPE_3AA
-                || ((m_cameraId == CAMERA_ID_FRONT) && i == PIPE_FLITE)) {
+                || ((m_cameraId == CAMERA_ID_FRONT || getCameraId() == CAMERA_ID_SECURE) && i == PIPE_FLITE)) {
                 ret = m_pipes[i]->precreate(m_sensorIds[i]);
             } else {
                 ret = m_pipes[i]->precreate();
@@ -328,7 +340,7 @@ status_t ExynosCameraFrameFactoryBase::getInputFrameQToPipe(frame_queue_t **inpu
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameFactoryBase::pushFrameToPipe(ExynosCameraFrameSP_sptr_t newFrame, uint32_t pipeId)
+status_t ExynosCameraFrameFactoryBase::pushFrameToPipe(ExynosCameraFrameSP_dptr_t newFrame, uint32_t pipeId)
 {
     m_pipes[INDEX(pipeId)]->pushFrame(newFrame);
     return NO_ERROR;
@@ -375,6 +387,15 @@ status_t ExynosCameraFrameFactoryBase::getControl(int cid, int *value, uint32_t 
     status_t ret = NO_ERROR;
 
     ret = m_pipes[INDEX(pipeId)]->getControl(cid, value);
+
+    return ret;
+}
+
+status_t ExynosCameraFrameFactoryBase::getControl(int cid, int *value, uint32_t pipeId, enum NODE_TYPE nodeType)
+{
+    status_t ret = NO_ERROR;
+
+    ret = m_pipes[INDEX(pipeId)]->getControl(cid, value, nodeType);
 
     return ret;
 }
@@ -511,6 +532,20 @@ enum FRAME_FACTORY_TYPE ExynosCameraFrameFactoryBase::getFactoryType(void)
     return m_factoryType;
 }
 
+status_t ExynosCameraFrameFactoryBase::setStreamEOS(uint32_t pipeId)
+{
+    int ret = NO_ERROR;
+
+    /* EOS */
+    ret = m_pipes[pipeId]->setControl(V4L2_CID_IS_END_OF_STREAM, 1);
+    if (ret != NO_ERROR) {
+        CLOGE("PIPE_%d V4L2_CID_IS_END_OF_STREAM fail, ret(%d)", pipeId, ret);
+        /* TODO: exception handling */
+        return INVALID_OPERATION;
+    }
+    return ret;
+}
+
 bool ExynosCameraFrameFactoryBase::isCreated(void)
 {
     Mutex::Autolock lock(m_stateLock);
@@ -519,8 +554,8 @@ bool ExynosCameraFrameFactoryBase::isCreated(void)
 
     switch (m_state) {
     case FRAME_FACTORY_STATE_INIT:
-    case FRAME_FACTORY_STATE_RUN:
         CLOGW("invalid state(%d)", m_state);
+    case FRAME_FACTORY_STATE_RUN:
     case FRAME_FACTORY_STATE_CREATE:
         isCreated = true;
         break;
@@ -729,6 +764,7 @@ void ExynosCameraFrameFactoryBase::m_init(void)
     m_bypassDIS = true;
     m_bypassDNR = true;
     m_bypassFD = true;
+    m_useBDSOff = false;
 
     /* setting about H/W OTF mode */
     m_flagFlite3aaOTF = HW_CONNECTION_MODE_NONE;

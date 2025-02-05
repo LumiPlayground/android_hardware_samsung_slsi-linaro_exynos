@@ -31,6 +31,10 @@
 #include "videodev2_exynos_media.h"
 #include "ExynosCameraBuffer.h"
 
+#ifdef SAMSUNG_SENSOR_LISTENER
+#include "sensor_listener_wrapper.h"
+#endif
+
 #define ROUND_OFF(x, dig)           (floor((x) * pow(10.0f, dig)) / pow(10.0f, dig))
 #define GET_MAX_NUM(a, b, c) \
     ((a) < (b) ? \
@@ -84,8 +88,6 @@ bool            isRectNull(ExynosRect *rect);
 bool            isRectNull(ExynosRect2 *rect2);
 bool            isRectEqual(ExynosRect *rect1, ExynosRect *rect2);
 bool            isRectEqual(ExynosRect2 *rect1, ExynosRect2 *rect2);
-
-char            v4l2Format2Char(int v4l2Format, int pos);
 
 ExynosRect2     convertingActualArea2HWArea(ExynosRect2 *srcRect, const ExynosRect *regionRect);
 ExynosRect2     convertingAndroidArea2HWArea(ExynosRect2 *srcRect, const ExynosRect *regionRect);
@@ -213,6 +215,10 @@ void getStreamFrameCount(struct camera2_stream *shot_stream, uint32_t *fcount);
 
 status_t setMetaDmSensorTimeStamp(struct camera2_shot_ext *shot_ext, uint64_t timeStamp);
 nsecs_t getMetaDmSensorTimeStamp(struct camera2_shot_ext *shot_ext);
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+status_t setMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext, uint64_t timeStamp);
+nsecs_t getMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext);
+#endif
 
 void setMetaNodeLeaderRequest(struct camera2_shot_ext* shot_ext, int value);
 void setMetaNodeLeaderVideoID(struct camera2_shot_ext* shot_ext, int value);

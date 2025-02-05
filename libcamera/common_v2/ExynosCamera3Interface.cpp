@@ -21,7 +21,26 @@
 #include "ExynosCamera3Interface.h"
 #include "ExynosCameraAutoTimer.h"
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraVendorTags.h"
+#endif
+
 namespace android {
+
+/* Convert Id to the one for HAL. Refer to the enum CAMERA_ID in ExynosCameraSensorInfoBase.h  */ 
+static int HAL_getCameraId(int id)
+{
+    int cameraId = id;
+    switch (cameraId) {
+    case 3:
+        cameraId = CAMERA_ID_SECURE;
+        break;
+    default:
+        break;
+    }
+
+    return cameraId;
+}
 
 static int HAL3_camera_device_open(const struct hw_module_t* module,
                                     const char *id,
@@ -34,11 +53,20 @@ static int HAL3_camera_device_open(const struct hw_module_t* module,
     FILE *fp = NULL;
     int ret = 0;
 
+    CameraMetadata metadata;
+    camera_metadata_entry flashAvailable;
+    bool hasFlash = false;
+    char flashFilePath[100] = {'\0',};
+
+    cameraId = HAL_getCameraId(cameraId);
+
     /* Validation check */
     ALOGI("INFO(%s[%d]):camera(%d) in ======", __FUNCTION__, __LINE__, cameraId);
     if (cameraId < 0 || cameraId >= HAL_getNumberOfCameras()) {
-        ALOGE("ERR(%s):Invalid camera ID %s", __FUNCTION__, id);
-        return -EINVAL;
+        if (cameraId < CAMERA_ID_HIDDEN_START || cameraId >= CAMERA_ID_HIDDEN_START + HAL_getNumberOfHiddenCameras()) {
+            ALOGE("ERR(%s[%d]):Invalid camera ID %d", __FUNCTION__, __LINE__, cameraId);
+            return -EINVAL;
+        }
     }
 
     /* Check init thread state */
@@ -89,9 +117,29 @@ done:
     cam_state[cameraId] = state;
     cam_stateLock[cameraId].unlock();
 
+    if (g_cam_info[cameraId]) {
+        metadata = g_cam_info[cameraId];
+        flashAvailable = metadata.find(ANDROID_FLASH_INFO_AVAILABLE);
+
+        ALOGV("INFO(%s[%d]): cameraId(%d), flashAvailable.count(%d), flashAvailable.data.u8[0](%d)",
+            __FUNCTION__, cameraId, flashAvailable.count, flashAvailable.data.u8[0]);
+
+        if (flashAvailable.count == 1 && flashAvailable.data.u8[0] == 1) {
+            hasFlash = true;
+        } else {
+            hasFlash = false;
+        }
+    }
+
     /* Turn off torch and update torch status */
-    if(g_cam_torchEnabled) {
-        fp = fopen(TORCH_FILE_PATH, "w+");
+    if(hasFlash && g_cam_torchEnabled[cameraId]) {
+        if (cameraId == CAMERA_ID_BACK) {
+            snprintf(flashFilePath, sizeof(flashFilePath), TORCH_REAR_FILE_PATH);
+        } else {
+            snprintf(flashFilePath, sizeof(flashFilePath), TORCH_FRONT_FILE_PATH);
+        }
+
+        fp = fopen(flashFilePath, "w+");
         if (fp == NULL) {
             ALOGE("ERR(%s[%d]):torch file open fail, ret(%d)", __FUNCTION__, __LINE__, fp);
         } else {
@@ -99,7 +147,7 @@ done:
             fflush(fp);
             fclose(fp);
 
-            g_cam_torchEnabled = false;
+            g_cam_torchEnabled[cameraId] = false;
         }
     }
 
@@ -156,7 +204,7 @@ static int HAL3_camera_device_close(struct hw_device_t* device)
     }
 
     /* Update torch status */
-    g_cam_torchEnabled = false;
+    g_cam_torchEnabled[cameraId] = false;
     snprintf(camid, sizeof(camid), "%d\n", cameraId);
     g_callbacks->torch_mode_status_change(g_callbacks, camid,
         TORCH_MODE_STATUS_AVAILABLE_OFF);
@@ -351,19 +399,34 @@ static int HAL_getNumberOfCameras()
     return getNumOfCamera;
 }
 
-static int HAL_getCameraInfo(int cameraId, struct camera_info *info)
+static int HAL_getNumberOfHiddenCameras()
+{
+    /* ExynosCameraAutoTimer autoTimer(__FUNCTION__); */
+    int getNumOfHiddenCamera = sizeof(sCameraHiddenInfo) / sizeof(sCameraHiddenInfo[0]);
+    ALOGV("DEBUG(%s[%d]):Number of Hidden Camera(%d)", __FUNCTION__, __LINE__, getNumOfHiddenCamera);
+    return getNumOfHiddenCamera;
+}
+
+static int HAL_getCameraInfo(int camera_id, struct camera_info *info)
 {
     /* ExynosCameraAutoTimer autoTimer(__FUNCTION__); */
     status_t ret = NO_ERROR;
 
+    int cameraId = HAL_getCameraId(camera_id);
+
     ALOGI("INFO(%s[%d]):in =====", __FUNCTION__, __LINE__);
     if (cameraId < 0 || cameraId >= HAL_getNumberOfCameras()) {
-        ALOGE("ERR(%s[%d]):Invalid camera ID %d", __FUNCTION__, __LINE__, cameraId);
-        return -ENODEV;
+        if (cameraId < CAMERA_ID_HIDDEN_START || cameraId >= CAMERA_ID_HIDDEN_START + HAL_getNumberOfHiddenCameras()) {
+            ALOGE("ERR(%s[%d]):Invalid camera ID %d", __FUNCTION__, __LINE__, cameraId);
+            return -ENODEV;
+        }
     }
 
     /* set facing and orientation */
-    memcpy(info, &sCameraInfo[cameraId], sizeof(CameraInfo));
+    if (cameraId >= CAMERA_ID_HIDDEN_START)
+        memcpy(info, &sCameraHiddenInfo[cameraId - CAMERA_ID_HIDDEN_START], sizeof(CameraInfo));
+    else
+        memcpy(info, &sCameraInfo[cameraId], sizeof(CameraInfo));
 
     /* set device API version */
     info->device_version = CAMERA_DEVICE_API_VERSION_3_3;
@@ -459,11 +522,16 @@ static int HAL_set_torch_mode(const char* camera_id, bool enabled)
     CameraMetadata metadata;
     camera_metadata_entry flashAvailable;
     int ret = 0;
+    char flashFilePath[100] = {'\0',};
+
+    cameraId = HAL_getCameraId(cameraId);
 
     ALOGI("INFO(%s[%d]):in =====", __FUNCTION__, __LINE__);
     if (cameraId < 0 || cameraId >= HAL_getNumberOfCameras()) {
-        ALOGE("ERR(%s[%d]):Invalid camera ID %d", __FUNCTION__, __LINE__, cameraId);
-        return -EINVAL;
+        if (cameraId < CAMERA_ID_HIDDEN_START || cameraId >= CAMERA_ID_HIDDEN_START + HAL_getNumberOfHiddenCameras()) {
+            ALOGE("ERR(%s[%d]):Invalid camera ID %d", __FUNCTION__, __LINE__, cameraId);
+            return -EINVAL;
+        }
     }
 
     /* Check the android.flash.info.available */
@@ -487,11 +555,17 @@ static int HAL_set_torch_mode(const char* camera_id, bool enabled)
         return -EBUSY;
     }
 
-    /* Add the sysfs file read (sys/class/camera/flash/rear_flash) then set 0 or 1 */
-    fp = fopen(TORCH_FILE_PATH, "w+");
+    /* Add the sysfs file read (sys/class/camera/flash/torch_flash) then set 0 or 1 */
+    if (cameraId == CAMERA_ID_BACK) {
+        snprintf(flashFilePath, sizeof(flashFilePath), TORCH_REAR_FILE_PATH);
+    } else {
+        snprintf(flashFilePath, sizeof(flashFilePath), TORCH_FRONT_FILE_PATH);
+    }
+
+    fp = fopen(flashFilePath, "w+");
     if (fp == NULL) {
         ALOGE("ERR(%s[%d]):torch file open(%s) fail, ret(%d)",
-            __FUNCTION__, __LINE__, TORCH_FILE_PATH, fp);
+            __FUNCTION__, __LINE__, flashFilePath, fp);
         return -ENOSYS;
     }
 
@@ -509,11 +583,11 @@ static int HAL_set_torch_mode(const char* camera_id, bool enabled)
     }
 
     if (enabled) {
-        g_cam_torchEnabled = true;
+        g_cam_torchEnabled[cameraId] = true;
         g_callbacks->torch_mode_status_change(g_callbacks,
             camera_id, TORCH_MODE_STATUS_AVAILABLE_ON);
     } else {
-        g_cam_torchEnabled = false;
+        g_cam_torchEnabled[cameraId] = false;
         g_callbacks->torch_mode_status_change(g_callbacks,
             camera_id, TORCH_MODE_STATUS_AVAILABLE_OFF);
     }
@@ -523,7 +597,7 @@ static int HAL_set_torch_mode(const char* camera_id, bool enabled)
     return NO_ERROR;
 }
 
-void *init_func(void *data)
+void *init_func(__unused void *data)
 {
     ExynosCameraAutoTimer autoTimer(__FUNCTION__);
 
@@ -578,6 +652,11 @@ static int HAL_camera_device_open(
     int cameraId = atoi(id);
     FILE *fp = NULL;
 
+    CameraMetadata metadata;
+    camera_metadata_entry flashAvailable;
+    bool hasFlash;
+    char flashFilePath[100] = {'\0',};
+
 #ifdef BOARD_BACK_CAMERA_USES_EXTERNAL_CAMERA
     if (cameraId == 0) {
         return HAL_ext_camera_device_open_wrapper(module, id, device);
@@ -595,10 +674,14 @@ static int HAL_camera_device_open(
     enum CAMERA_STATE state;
     int ret = 0;
 
+    cameraId = HAL_getCameraId(cameraId);
+
     ALOGI("INFO(%s[%d]):camera(%d) in", __FUNCTION__, __LINE__, cameraId);
     if (cameraId < 0 || cameraId >= HAL_getNumberOfCameras()) {
-        ALOGE("ERR(%s):Invalid camera ID %s", __FUNCTION__, id);
-        return -EINVAL;
+        if (cameraId < CAMERA_ID_HIDDEN_START || cameraId >= CAMERA_ID_HIDDEN_START + HAL_getNumberOfHiddenCameras()) {
+            ALOGE("ERR(%s[%d]):Invalid camera ID %d", __FUNCTION__, __LINE__, cameraId);
+            return -EINVAL;
+        }
     }
 
     /* Check init thread state */
@@ -616,46 +699,60 @@ static int HAL_camera_device_open(
         return -1;
     }
 
-    if ((unsigned int)cameraId < (sizeof(sCameraInfo) / sizeof(sCameraInfo[0]))) {
-        if (g_cam_device[cameraId]) {
-            ALOGE("DEBUG(%s):returning existing camera ID %s", __FUNCTION__, id);
-            *device = (hw_device_t *)g_cam_device[cameraId];
-            goto done;
-        }
-
-        g_cam_device[cameraId] = (camera_device_t *)malloc(sizeof(camera_device_t));
-        if (!g_cam_device[cameraId])
-            return -ENOMEM;
-
-        g_cam_openLock[cameraId].lock();
-        g_cam_device[cameraId]->common.tag     = HARDWARE_DEVICE_TAG;
-        g_cam_device[cameraId]->common.version = 1;
-        g_cam_device[cameraId]->common.module  = const_cast<hw_module_t *>(module);
-        g_cam_device[cameraId]->common.close   = HAL_camera_device_close;
-
-        g_cam_device[cameraId]->ops = &camera_device_ops;
-
-        ALOGD("DEBUG(%s):open camera %s", __FUNCTION__, id);
-        g_cam_device[cameraId]->priv = new ExynosCamera(cameraId, g_cam_device[cameraId]);
+    if (g_cam_device[cameraId]) {
+        ALOGE("DEBUG(%s):returning existing camera ID %s", __FUNCTION__, id);
         *device = (hw_device_t *)g_cam_device[cameraId];
-        ALOGI("INFO(%s[%d]):camera(%d) out from new g_cam_device[%d]->priv()",
-            __FUNCTION__, __LINE__, cameraId, cameraId);
-
-        g_cam_openLock[cameraId].unlock();
-        ALOGI("INFO(%s[%d]):camera(%d) unlocked..", __FUNCTION__, __LINE__, cameraId);
-    } else {
-        ALOGE("DEBUG(%s):camera(%s) open fail - must front camera open first",
-            __FUNCTION__, id);
-        return -EINVAL;
+        goto done;
     }
+
+    g_cam_device[cameraId] = (camera_device_t *)malloc(sizeof(camera_device_t));
+    if (!g_cam_device[cameraId])
+        return -ENOMEM;
+
+    g_cam_openLock[cameraId].lock();
+    g_cam_device[cameraId]->common.tag     = HARDWARE_DEVICE_TAG;
+    g_cam_device[cameraId]->common.version = 1;
+    g_cam_device[cameraId]->common.module  = const_cast<hw_module_t *>(module);
+    g_cam_device[cameraId]->common.close   = HAL_camera_device_close;
+
+    g_cam_device[cameraId]->ops = &camera_device_ops;
+
+    ALOGD("DEBUG(%s):open camera %s", __FUNCTION__, id);
+    g_cam_device[cameraId]->priv = new ExynosCamera(cameraId, g_cam_device[cameraId]);
+    *device = (hw_device_t *)g_cam_device[cameraId];
+    ALOGI("INFO(%s[%d]):camera(%d) out from new g_cam_device[%d]->priv()",
+        __FUNCTION__, __LINE__, cameraId, cameraId);
+
+    g_cam_openLock[cameraId].unlock();
+    ALOGI("INFO(%s[%d]):camera(%d) unlocked..", __FUNCTION__, __LINE__, cameraId);
 
 done:
     cam_stateLock[cameraId].lock();
     cam_state[cameraId] = state;
     cam_stateLock[cameraId].unlock();
 
-    if(g_cam_torchEnabled) {
-        fp = fopen(TORCH_FILE_PATH, "w+");
+    if (g_cam_info[cameraId]) {
+        metadata = g_cam_info[cameraId];
+        flashAvailable = metadata.find(ANDROID_FLASH_INFO_AVAILABLE);
+
+        ALOGV("INFO(%s[%d]): cameraId(%d), flashAvailable.count(%d), flashAvailable.data.u8[0](%d)",
+            __FUNCTION__, cameraId, flashAvailable.count, flashAvailable.data.u8[0]);
+
+        if (flashAvailable.count == 1 && flashAvailable.data.u8[0] == 1) {
+            hasFlash = true;
+        } else {
+            hasFlash = false;
+        }
+    }
+
+    if(hasFlash && g_cam_torchEnabled[cameraId]) {
+        if (cameraId == CAMERA_ID_BACK) {
+            snprintf(flashFilePath, sizeof(flashFilePath), TORCH_REAR_FILE_PATH);
+        } else {
+            snprintf(flashFilePath, sizeof(flashFilePath), TORCH_FRONT_FILE_PATH);
+        }
+
+        fp = fopen(flashFilePath, "w+");
         if (fp == NULL) {
             ALOGE("ERR(%s[%d]):torch file open fail, ret(%d)", __FUNCTION__, __LINE__, fp);
         } else {
@@ -663,7 +760,7 @@ done:
             fflush(fp);
             fclose(fp);
 
-            g_cam_torchEnabled = false;
+            g_cam_torchEnabled[cameraId] = false;
             g_callbacks->torch_mode_status_change(g_callbacks, id, TORCH_MODE_STATUS_AVAILABLE_OFF);
         }
     }
@@ -797,7 +894,11 @@ static int HAL_camera_device_start_preview(struct camera_device *dev)
 #ifdef DUAL_CAMERA_SUPPORTED
     if (cameraId != 0 && g_cam_device[0] != NULL
         && cam_state[0] != CAMERA_NONE && cam_state[0] != CAMERA_CLOSED) {
+#ifdef SAMSUNG_QUICK_SWITCH
+        ret = obj(dev)->setDualMode(!obj(dev)->getQuickSwitchFlag());
+#else
         ret = obj(dev)->setDualMode(true);
+#endif
         if (ret != NO_ERROR) {
             ALOGE("ERR(%s[%d]):camera(%d) set dual mode fail, ret(%d)",
                 __FUNCTION__, __LINE__, cameraId, ret);
@@ -1046,7 +1147,7 @@ char *HAL_camera_device_get_parameters(struct camera_device *dev)
     CameraParameters parms = obj(dev)->getParameters();
     str = parms.flatten();
 #endif
-    return strdup(str.string());
+    return strdup(str.c_str());
 }
 
 static void HAL_camera_device_put_parameters(
@@ -1112,11 +1213,22 @@ static int HAL_camera_device_dump(struct camera_device *dev, int fd)
 }
 #endif
 
-static void HAL_get_vendor_tag_ops(vendor_tag_ops_t* ops)
+static void HAL_get_vendor_tag_ops(__unused vendor_tag_ops_t* ops)
 {
     ALOGV("INFO(%s):", __FUNCTION__);
 
+#ifdef SAMSUNG_TN_FEATURE
+    SecCameraVendorTags::Ops = ops;
+
+    ops->get_all_tags = SecCameraVendorTags::get_ext_all_tags;
+    ops->get_tag_count = SecCameraVendorTags::get_ext_tag_count;
+    ops->get_tag_type = SecCameraVendorTags::get_ext_tag_type;
+    ops->get_tag_name = SecCameraVendorTags::get_ext_tag_name;
+    ops->get_section_name = SecCameraVendorTags::get_ext_section_name;
+    ops->reserved[0] = NULL;
+#else
     ALOGW("WARN(%s[%d]):empty operation", __FUNCTION__, __LINE__);
+#endif
 }
 
 }; /* namespace android */

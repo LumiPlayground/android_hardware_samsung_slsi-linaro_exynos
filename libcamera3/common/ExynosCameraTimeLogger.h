@@ -38,35 +38,24 @@
 #include "ExynosCameraSensorInfoBase.h"
 
 #define TIME_LOGGER_SIZE (1024 * 100) /* 100K * logger */
-#ifdef CAMERA_GED_FEATURE
-#define TIME_LOGGER_PATH "/data/camera/exynos_camera_time_logger_cam%d_%lld.csv"
-#else
 #define TIME_LOGGER_PATH "/data/media/0/exynos_camera_time_logger_cam%d_%lld.csv"
-#endif
-
-#define TIME_LOGGER_INIT_BASE(logger, cameraId)          \
-            ({ (logger)->init(cameraId); })
-#define TIME_LOGGER_UPDATE_BASE(logger, cameraId, key, pipeId, type, category, userData)  \
-            ({ (logger)->update(cameraId, key, pipeId, LOGGER_TYPE_ ## type, LOGGER_CATEGORY_ ## category, userData); })
-#define TIME_LOGGER_SAVE_BASE(logger, cameraId)          \
-            ({ (logger)->save(cameraId); })
 
 #ifdef TIME_LOGGER_ENABLE
 #define TIME_LOGGER_INIT(cameraId)          \
         ({                                  \
             ExynosCameraTimeLogger *logger = ExynosCameraSingleton<ExynosCameraTimeLogger>::getInstance(); \
-            TIME_LOGGER_INIT_BASE(logger, cameraId);    \
+            logger->init(cameraId);         \
         })
 /* you can remove "LOGGER_TYPE_", "LOGGER_CATEGORRY_" prefix */
 #define TIME_LOGGER_UPDATE(cameraId, key, pipeId, type, category, userData)  \
         ({                                                                \
             ExynosCameraTimeLogger *logger = ExynosCameraSingleton<ExynosCameraTimeLogger>::getInstance(); \
-            TIME_LOGGER_UPDATE_BASE(logger, cameraId, key, pipeId, type, category, userData); \
+            logger->update(cameraId, key, pipeId, LOGGER_TYPE_ ## type, LOGGER_CATEGORY_ ## category, userData); \
         })
 #define TIME_LOGGER_SAVE(cameraId)          \
         ({                                  \
             ExynosCameraTimeLogger *logger = ExynosCameraSingleton<ExynosCameraTimeLogger>::getInstance(); \
-            TIME_LOGGER_SAVE_BASE(logger, cameraId);         \
+            logger->save(cameraId);         \
         })
 #else
 #define TIME_LOGGER_INIT(cameraId)
@@ -91,6 +80,11 @@ typedef enum LOGGER_CATEGORY {
     /* for fixed purporse */
     LOGGER_CATEGORY_QBUF,
     LOGGER_CATEGORY_DQBUF,
+    LOGGER_CATEGORY_RECORDING_CALLBACK,
+    LOGGER_CATEGORY_RECORDING_RELEASE_FRAME,
+    LOGGER_CATEGORY_PREVIEW_TRIGGER,  /* push the frame to previewThread */
+    LOGGER_CATEGORY_PREVIEW_SERVICE_ENQUEUE,
+    LOGGER_CATEGORY_PREVIEW_CALLBACK,
     /* for genral purpose */
     LOGGER_CATEGORY_POINT0,
     LOGGER_CATEGORY_POINT1,
@@ -102,41 +96,6 @@ typedef enum LOGGER_CATEGORY {
     LOGGER_CATEGORY_POINT7,
     LOGGER_CATEGORY_POINT8,
     LOGGER_CATEGORY_POINT9,
-    /* for launching time purpose */
-    LOGGER_CATEGORY_LAUNCHING_TIME_START,
-    LOGGER_CATEGORY_OPEN_START,
-    LOGGER_CATEGORY_OPEN_END,
-    LOGGER_CATEGORY_INITIALIZE_START,
-    LOGGER_CATEGORY_INITIALIZE_END,
-    LOGGER_CATEGORY_FIRST_SET_PARAMETERS_START,
-    LOGGER_CATEGORY_READ_ROM_THREAD_JOIN_START,
-    LOGGER_CATEGORY_READ_ROM_THREAD_JOIN_END,
-    LOGGER_CATEGORY_FIRST_SET_PARAMETERS_END,
-    LOGGER_CATEGORY_CONFIGURE_STREAM_START,
-    LOGGER_CATEGORY_FASTEN_AE_THREAD_JOIN_START,
-    LOGGER_CATEGORY_FASTEN_AE_THREAD_JOIN_END,
-    LOGGER_CATEGORY_STREAM_BUFFER_ALLOC_START,
-    LOGGER_CATEGORY_STREAM_BUFFER_ALLOC_END,
-    LOGGER_CATEGORY_FACTORY_CREATE_THREAD_JOIN_START,
-    LOGGER_CATEGORY_FACTORY_CREATE_THREAD_JOIN_END,
-    LOGGER_CATEGORY_CONFIGURE_STREAM_END,
-    LOGGER_CATEGORY_PROCESS_CAPTURE_REQUEST_START,
-    LOGGER_CATEGORY_SET_BUFFER_THREAD_JOIN_START,
-    LOGGER_CATEGORY_SET_BUFFER_THREAD_JOIN_END,
-    LOGGER_CATEGORY_FACTORY_START_THREAD_START,
-    LOGGER_CATEGORY_FACTORY_INIT_PIPES_START,
-    LOGGER_CATEGORY_FACTORY_INIT_PIPES_END,
-    LOGGER_CATEGORY_FACTORY_START_START,
-    LOGGER_CATEGORY_HFD_CREATE_START,
-    LOGGER_CATEGORY_HFD_CREATE_END,
-    LOGGER_CATEGORY_FACTORY_START_END,
-    LOGGER_CATEGORY_SLAVE_FACTORY_INIT_PIPES_START,
-    LOGGER_CATEGORY_SLAVE_FACTORY_INIT_PIPES_END,
-    LOGGER_CATEGORY_SLAVE_FACTORY_START_START,
-    LOGGER_CATEGORY_SLAVE_FACTORY_START_END,
-    LOGGER_CATEGORY_PREVIEW_STREAM_THREAD,
-    LOGGER_CATEGORY_RESULT_CALLBACK,
-    LOGGER_CATEGORY_LAUNCHING_TIME_END,
     LOGGER_CATEGORY_MAX,
 };
 
@@ -187,11 +146,6 @@ public:
      * save all information to file
      */
     status_t save(int cameraId);
-
-    /*
-     * check define condition to do logging
-     */
-    bool checkCondition(LOGGER_CATEGORY category);
 
     friend class ExynosCameraSingleton<ExynosCameraTimeLogger>;
     ExynosCameraTimeLogger();

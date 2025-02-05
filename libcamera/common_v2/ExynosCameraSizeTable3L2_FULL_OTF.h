@@ -290,14 +290,22 @@ static int VIDEO_SIZE_LUT_60FPS_HIGH_SPEED_3L2[][SIZE_OF_LUT] =
        BNS ratio = 1.0
        BDS       = OFF */
 
-    /*  FHD_60  16:9 (Single) */
+    /*  FHD 60fps  16:9 */
+    { SIZE_RATIO_16_9,
+     (2056 + 16),( 1156 + 10),   /* [sensor ] */
+      2072      ,  1166      ,   /* [bns    ] */
+      2048      ,  1156      ,   /* [bcrop  ] */
+      2048      ,  1156      ,   /* [bds    ] */
+      2048      ,  1156      ,   /* [target ] */
+    },
+    /*  60fps  4:3 */
     { SIZE_RATIO_4_3,
-     ( 992 + 16),( 744 + 10),   /* [sensor ] */
-      1008      ,  754      ,   /* [bns    ] */
-       992      ,  744      ,   /* [bcrop  ] */
-       992      ,  744      ,   /* [bds    ] */
-       992      ,  744      ,   /* [target ] */
-    }
+     (2056 + 16),(1542 + 10),   /* [sensor ] */
+      2072      , 1552      ,   /* [bns    ] */
+      2048      , 1536      ,   /* [bcrop  ] */
+      2048      , 1536      ,   /* [bds    ] */
+      2048      , 1536      ,   /* [target ] */
+    },
 };
 
 static int VIDEO_SIZE_LUT_120FPS_HIGH_SPEED_3L2[][SIZE_OF_LUT] =
@@ -306,14 +314,22 @@ static int VIDEO_SIZE_LUT_120FPS_HIGH_SPEED_3L2[][SIZE_OF_LUT] =
        BNS ratio = 1.0
        BDS       = OFF */
 
-    /*   HD_120  16:9 (Single) */
+    /*   120fps  16:9 */
     { SIZE_RATIO_16_9,
      ( 992 + 16),( 558 + 10),   /* [sensor ] */
       1008      ,  568      ,   /* [bns    ] */
        992      ,  558      ,   /* [bcrop  ] */
        992      ,  558      ,   /* [bds    ] */
        992      ,  558      ,   /* [target ] */
-    }
+    },
+    /*   120fps  4:3 */
+    { SIZE_RATIO_4_3,
+     ( 992 + 16),( 744 + 10),   /* [sensor ] */
+      1008      ,  754      ,   /* [bns    ] */
+       992      ,  744      ,   /* [bcrop  ] */
+       992      ,  744      ,   /* [bds    ] */
+       992      ,  744      ,   /* [target ] */
+    },
 };
 
 static int VTCALL_SIZE_LUT_3L2[][SIZE_OF_LUT] =
@@ -322,33 +338,33 @@ static int VTCALL_SIZE_LUT_3L2[][SIZE_OF_LUT] =
     { SIZE_RATIO_16_9,
      (2056 + 16),(1542 + 10),   /* [sensor ] */
       2072      , 1552      ,   /* [bns    ] */
-      1280      ,  720      ,   /* [bcrop  ] */
-      1280      ,  720      ,   /* [bds    ] */
-      1280      ,  720      ,   /* [target ] */
+      2048      , 1152      ,   /* [bcrop  ] */
+      2048      , 1152      ,   /* [bds    ] */
+      2048      , 1152      ,   /* [target ] */
     },
     /* 4:3 (VT_Call) */
     { SIZE_RATIO_4_3,
      (2056 + 16),(1542 + 10),   /* [sensor ] */
       2072      , 1552      ,   /* [bns    ] */
-       960      ,  720      ,   /* [bcrop  ] */
-       960      ,  720      ,   /* [bds    ] */
-       960      ,  720      ,   /* [target ] */
+      2048      , 1536      ,   /* [bcrop  ] */
+      2048      , 1536      ,   /* [bds    ] */
+      2048      , 1536      ,   /* [target ] */
     },
     /* 1:1 (VT_Call) */
     { SIZE_RATIO_1_1,
      (2056 + 16),(1542 + 10),   /* [sensor ] */
       2072      , 1552      ,   /* [bns    ] */
-       720      ,  720      ,   /* [bcrop  ] */
-       720      ,  720      ,   /* [bds  ] */
-       720      ,  720      ,   /* [target ] */
+      1536      , 1536      ,   /* [bcrop  ] */
+      1536      , 1536      ,   /* [bds  ] */
+      1536      , 1536      ,   /* [target ] */
     },
     /* 11:9 (VT_Call) */
     { SIZE_RATIO_11_9,
      (2056 + 16),(1542 + 10),   /* [sensor ] */
       2072      , 1552      ,   /* [bns    ] */
-      1760      , 1440      ,   /* [bcrop  ] */
-      1760      , 1440      ,   /* [bds  ] */
-       352      ,  288      ,   /* [target ] */
+      1872      , 1536      ,   /* [bcrop  ] */
+      1872      , 1536      ,   /* [bds  ] */
+      1872      , 1536      ,   /* [target ] */
     }
 };
 
@@ -373,6 +389,7 @@ static int S5K3L2_PREVIEW_LIST[][SIZE_OF_RESOLUTION] =
     {  640,  480, SIZE_RATIO_4_3},
     {  352,  288, SIZE_RATIO_11_9},
     {  320,  240, SIZE_RATIO_4_3},
+    {  256,  144, SIZE_RATIO_16_9},
 };
 
 static int S5K3L2_HIDDEN_PREVIEW_LIST[][SIZE_OF_RESOLUTION] =
@@ -385,8 +402,11 @@ static int S5K3L2_HIDDEN_PREVIEW_LIST[][SIZE_OF_RESOLUTION] =
     { 1920, 1080, SIZE_RATIO_16_9}, // for USE_ADAPTIVE_CSC_RECORDING
 #endif
     { 1056,  864, SIZE_RATIO_11_9},
+    {  960,  540, SIZE_RATIO_16_9}, // Gear VR
+    {  800,  600, SIZE_RATIO_4_3},  // Gear VR
     {  800,  480, SIZE_RATIO_5_3},
     {  672,  448, SIZE_RATIO_3_2},
+    {  640,  360, SIZE_RATIO_16_9}, // Gear VR
     {  528,  432, SIZE_RATIO_11_9},
     {  480,  320, SIZE_RATIO_3_2},
     {  480,  270, SIZE_RATIO_16_9},
@@ -404,7 +424,10 @@ static int S5K3L2_PICTURE_LIST[][SIZE_OF_RESOLUTION] =
     { 1920, 1080, SIZE_RATIO_16_9},
     { 1280,  720, SIZE_RATIO_16_9},
     {  960,  720, SIZE_RATIO_4_3},
+    {  720,  480, SIZE_RATIO_4_3},
     {  640,  480, SIZE_RATIO_4_3},
+    {  320,  240, SIZE_RATIO_4_3},
+    {  256,  144, SIZE_RATIO_11_9},
 };
 
 static int S5K3L2_HIDDEN_PICTURE_LIST[][SIZE_OF_RESOLUTION] =
@@ -418,6 +441,10 @@ static int S5K3L2_HIDDEN_PICTURE_LIST[][SIZE_OF_RESOLUTION] =
     { 2560, 1920, SIZE_RATIO_4_3},
     { 2448, 2448, SIZE_RATIO_1_1},
     { 2048, 1536, SIZE_RATIO_4_3},
+    { 1872, 1536, SIZE_RATIO_11_9},
+    { 1536, 1536, SIZE_RATIO_1_1},
+    {  992,  744, SIZE_RATIO_4_3},
+    {  992,  558, SIZE_RATIO_16_9},
 };
 
 static int S5K3L2_THUMBNAIL_LIST[][SIZE_OF_RESOLUTION] =
@@ -451,13 +478,45 @@ static int S5K3L2_HIDDEN_VIDEO_LIST[][SIZE_OF_RESOLUTION] =
 #endif
 };
 
+static int S5K3L2_YUV_LIST[][SIZE_OF_RESOLUTION] =
+{
+    { 4128, 3096, SIZE_RATIO_4_3},
+    { 4128, 2322, SIZE_RATIO_16_9},
+    { 3264, 2448, SIZE_RATIO_4_3},
+    { 3264, 1836, SIZE_RATIO_16_9},
+    { 3088, 3088, SIZE_RATIO_1_1},
+    { 2048, 1536, SIZE_RATIO_4_3},
+    { 2048, 1152, SIZE_RATIO_16_9},
+    { 1920, 1080, SIZE_RATIO_16_9},
+    { 1280,  720, SIZE_RATIO_16_9},
+    {  960,  720, SIZE_RATIO_4_3},
+    {  720,  480, SIZE_RATIO_3_2},
+    {  640,  480, SIZE_RATIO_4_3},
+    {  352,  288, SIZE_RATIO_11_9},
+    {  320,  240, SIZE_RATIO_4_3},
+    {  256,  144, SIZE_RATIO_16_9},
+    {  176,  144, SIZE_RATIO_11_9},
+};
+
+static int S5K3L2_HIGH_SPEED_VIDEO_LIST[][SIZE_OF_RESOLUTION] =
+{
+    { 1280,  720, SIZE_RATIO_16_9},
+};
+
+static int S5K3L2_HIGH_SPEED_VIDEO_FPS_RANGE_LIST[][2] =
+{
+    {  30000, 120000},
+    { 120000, 120000},
+};
+
 static int S5K3L2_FPS_RANGE_LIST[][2] =
 {
-    {   5000,   5000},
+//    {   5000,   5000},
     {   7000,   7000},
     {  15000,  15000},
     {  24000,  24000},
-    {   4000,  30000},
+//    {   4000,  30000},
+    {   8000,  30000},
     {  10000,  30000},
     {  15000,  30000},
     {  30000,  30000},
@@ -465,9 +524,41 @@ static int S5K3L2_FPS_RANGE_LIST[][2] =
 
 static int S5K3L2_HIDDEN_FPS_RANGE_LIST[][2] =
 {
+    {  10000,  24000},
     {  30000,  60000},
     {  60000,  60000},
     {  60000, 120000},
     { 120000, 120000},
+};
+
+static camera_metadata_rational UNIT_MATRIX_3L2_3X3[] =
+{
+    {128, 128}, {0, 128}, {0, 128},
+    {0, 128}, {128, 128}, {0, 128},
+    {0, 128}, {0, 128}, {128, 128}
+};
+
+static camera_metadata_rational COLOR_MATRIX1_3L2_3X3[] = {
+    {1094, 1024}, {-306, 1024}, {-146, 1024},
+    {-442, 1024}, {1388, 1024}, {52, 1024},
+    {-104, 1024}, {250, 1024}, {600, 1024}
+};
+
+static camera_metadata_rational COLOR_MATRIX2_3L2_3X3[] = {
+    {2263, 1024}, {-1364, 1024}, {-145, 1024},
+    {-194, 1024}, {1257, 1024}, {-56, 1024},
+    {-24, 1024}, {187, 1024}, {618, 1024}
+};
+
+static camera_metadata_rational FORWARD_MATRIX1_3L2_3X3[] = {
+    {612, 1024}, {233, 1024}, {139, 1024},
+    {199, 1024}, {831, 1024}, {-6, 1024},
+    {15, 1024}, {-224, 1024}, {1049, 1024}
+};
+
+static camera_metadata_rational FORWARD_MATRIX2_3L2_3X3[] = {
+    {441, 1024}, {317, 1024}, {226, 1024},
+    {29, 1024}, {908, 1024}, {87, 1024},
+    {9, 1024}, {-655, 1024}, {1486, 1024}
 };
 #endif

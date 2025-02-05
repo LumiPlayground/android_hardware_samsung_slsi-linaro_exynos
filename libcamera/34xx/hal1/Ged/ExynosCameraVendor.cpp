@@ -27,6 +27,12 @@ void ExynosCamera::vendorSpecificConstructor(__unused int cameraId, __unused cam
 {
     CLOGI("INFO(%s[%d]): -IN-", __FUNCTION__, __LINE__);
 
+#ifdef RAWDUMP_CAPTURE
+    /* RawCaptureDump Thread */
+    m_RawCaptureDumpThread = new mainCameraThread(this, &ExynosCamera::m_RawCaptureDumpThreadFunc, "m_RawCaptureDumpThread");
+    CLOGD("DEBUG(%s):RawCaptureDumpThread created", __FUNCTION__);
+#endif
+
     CLOGI("INFO(%s[%d]): -OUT-", __FUNCTION__, __LINE__);
 
     return;
@@ -522,6 +528,55 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
     return NO_ERROR;
 }
 
+status_t ExynosCamera::m_fastenAeStable(void)
+{
+    int ret = 0;
+    ExynosCameraBuffer fastenAeBuffer[NUM_FASTAESTABLE_BUFFER];
+    ExynosCameraBufferManager *skipBufferMgr = NULL;
+    m_createInternalBufferManager(&skipBufferMgr, "SKIP_BUF");
+
+    unsigned int planeSize[EXYNOS_CAMERA_BUFFER_MAX_PLANES] = {0};
+    unsigned int bytesPerLine[EXYNOS_CAMERA_BUFFER_MAX_PLANES] = {0};
+    planeSize[0] = 32 * 64 * 2;
+    int planeCount  = 2;
+    int bufferCount = NUM_FASTAESTABLE_BUFFER;
+
+    if (skipBufferMgr == NULL) {
+        CLOGE("ERR(%s[%d]):createBufferManager failed", __FUNCTION__, __LINE__);
+        goto func_exit;
+    }
+
+    ret = m_allocBuffers(skipBufferMgr, planeCount, planeSize, bytesPerLine, bufferCount, true, false);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):m_3aaBufferMgr m_allocBuffers(bufferCount=%d) fail",
+            __FUNCTION__, __LINE__, bufferCount);
+        return ret;
+    }
+
+    for (int i = 0; i < bufferCount; i++) {
+        int index = i;
+        ret = skipBufferMgr->getBuffer(&index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &fastenAeBuffer[i]);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):getBuffer fail", __FUNCTION__, __LINE__);
+            goto done;
+        }
+    }
+
+    ret = m_previewFrameFactory->fastenAeStable(bufferCount, fastenAeBuffer);
+    if (ret < 0) {
+        ret = INVALID_OPERATION;
+        // doing some error handling
+    }
+
+done:
+    skipBufferMgr->deinit();
+    delete skipBufferMgr;
+    skipBufferMgr = NULL;
+
+func_exit:
+    return ret;
+}
+
 status_t ExynosCamera::m_startRecordingInternal(void)
 {
     int ret = 0;
@@ -567,12 +622,24 @@ status_t ExynosCamera::m_startRecordingInternal(void)
         m_recordingBufAvailable[i] = true;
     }
 
+    if (m_recordingCallbackHeap != NULL) {
+        m_recordingCallbackHeap->release(m_recordingCallbackHeap);
+        m_recordingCallbackHeap = NULL;
+    }
+
     /* alloc recording Callback Heap */
-    m_recordingCallbackHeap = m_getMemoryCb(-1, sizeof(struct VideoNativeHandleMetadata), m_recordingBufferCount, &heapFd);
+    m_recordingCallbackHeap = m_getMemoryCb(-1, sizeof(struct VideoNativeHandleMetadata), m_recordingBufferCount, m_callbackCookie);
+
     if (!m_recordingCallbackHeap || m_recordingCallbackHeap->data == MAP_FAILED) {
         CLOGE("ERR(%s[%d]):m_getMemoryCb(%zd) fail", __FUNCTION__, __LINE__, sizeof(struct addrs));
         ret = INVALID_OPERATION;
         goto func_exit;
+    }
+
+    /* Initialize recording callback heap available flags */
+    memset(m_recordingCallbackHeapAvailable, 0x00, sizeof(m_recordingCallbackHeapAvailable));
+    for (int i = 0; i < m_recordingBufferCount; i++) {
+        m_recordingCallbackHeapAvailable[i] = true;
     }
 
     if (m_doCscRecording == true) {
@@ -748,6 +815,8 @@ bool ExynosCamera::m_recordingThreadFunc(void)
         && (m_recordingStartTimeStamp <= timeStamp)) {
         if (m_getRecordingEnabled() == true
             && m_parameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)) {
+            int heapIndex = -1;
+            native_handle* handle = NULL;
 #ifdef CHECK_MONOTONIC_TIMESTAMP
             CLOGD("DEBUG(%s[%d]):m_dataCbTimestamp::recordingFrameIndex=%d, recordingTimeStamp=%lld",
                 __FUNCTION__, __LINE__, buffer.index, timeStamp);
@@ -764,15 +833,23 @@ bool ExynosCamera::m_recordingThreadFunc(void)
             if (m_recordingCallbackHeap != NULL) {
                 struct VideoNativeHandleMetadata *recordAddrs = NULL;
 
-                recordAddrs = (struct VideoNativeHandleMetadata *) m_recordingCallbackHeap->data;
-                recordAddrs[buffer.index].eType = kMetadataBufferTypeNativeHandleSource;
+                ret = m_getAvailableRecordingCallbackHeapIndex(&heapIndex);
+                if (ret != NO_ERROR || heapIndex < 0 || heapIndex >= m_recordingBufferCount) {
+                    CLOGE("ERR(%s[%d]):Failed to getAvailableRecordingCallbackHeapIndex %d",
+                            __FUNCTION__, __LINE__,
+                            heapIndex);
+                    goto func_exit;
+                }
 
-                native_handle* handle = native_handle_create(2, 1);
+                recordAddrs = (struct VideoNativeHandleMetadata *) m_recordingCallbackHeap->data;
+                recordAddrs[heapIndex].eType = kMetadataBufferTypeNativeHandleSource;
+
+                handle = native_handle_create(2, 1);
                 handle->data[0] = (int32_t) buffer.fd[0];
                 handle->data[1] = (int32_t) buffer.fd[1];
                 handle->data[2] = (int32_t) buffer.index;
 
-                recordAddrs[buffer.index].pHandle = handle;
+                recordAddrs[heapIndex].pHandle = handle;
 
                 m_recordingBufAvailable[buffer.index] = false;
                 m_lastRecordingTimeStamp = timeStamp;
@@ -786,10 +863,13 @@ bool ExynosCamera::m_recordingThreadFunc(void)
                         timeStamp,
                         CAMERA_MSG_VIDEO_FRAME,
                         m_recordingCallbackHeap,
-                        buffer.index,
+                        heapIndex,
                         m_callbackCookie);
             }
-        }
+
+            if (handle != NULL) {
+                native_handle_delete(handle);
+            }
     } else {
         CLOGW("WARN(%s[%d]):recordingFrameIndex=%d, timeStamp(%lld) invalid -"
             " lastTimeStamp(%lld), systemTime(%lld), recordingStart(%lld)",
@@ -1877,6 +1957,100 @@ status_t ExynosCamera::m_getBufferManager(uint32_t pipeId, ExynosCameraBufferMan
     return ret;
 }
 
+#ifdef RAWDUMP_CAPTURE
+bool ExynosCamera::m_RawCaptureDumpThreadFunc(void)
+{
+    ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+    CLOGI("DEBUG(%s[%d]):", __FUNCTION__, __LINE__);
+
+    int ret = 0;
+    int sensorMaxW, sensorMaxH;
+    int sensorMarginW, sensorMarginH;
+    bool bRet;
+    char filePath[70];
+    ExynosCameraBufferManager *bufferMgr = NULL;
+    int bayerPipeId = 0;
+    ExynosCameraBuffer bayerBuffer;
+    ExynosCameraFrame *newFrame = NULL;
+    ExynosCameraFrame *inListFrame = NULL;
+    unsigned int fliteFcount = 0;
+
+    ret = m_RawCaptureDumpQ->waitAndPopProcessQ(&newFrame);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):wait and pop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        // TODO: doing exception handling
+        goto CLEAN;
+    }
+    if (newFrame == NULL) {
+        CLOGE("ERR(%s[%d]):newFrame is NULL", __FUNCTION__, __LINE__);
+        goto CLEAN;
+    }
+
+    bayerPipeId = newFrame->getFirstEntity()->getPipeId();
+    ret = newFrame->getDstBuffer(bayerPipeId, &bayerBuffer);
+    ret = m_getBufferManager(bayerPipeId, &bufferMgr, DST_BUFFER_DIRECTION);
+
+    /* Rawdump capture is available in pure bayer only */
+    if (m_parameters->getUsePureBayerReprocessing() == true) {
+        camera2_shot_ext *shot_ext = NULL;
+        shot_ext = (camera2_shot_ext *)(bayerBuffer.addr[1]);
+        if (shot_ext != NULL)
+            fliteFcount = shot_ext->shot.dm.request.frameCount;
+        else
+            ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+    } else {
+        camera2_stream *shot_stream = NULL;
+        shot_stream = (camera2_stream *)(bayerBuffer.addr[1]);
+        if (shot_stream != NULL)
+            fliteFcount = shot_stream->fcount;
+        else
+            ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+    }
+
+    memset(filePath, 0, sizeof(filePath));
+    snprintf(filePath, sizeof(filePath), "/data/media/0/RawCapture%d_%d.raw",
+        m_parameters->getCameraId(), fliteFcount);
+    /* Pure Bayer Buffer Size == MaxPictureSize + Sensor Margin == Max Sensor Size */
+    m_parameters->getMaxSensorSize(&sensorMaxW, &sensorMaxH);
+
+    CLOGD("INFO(%s[%d]):Raw Dump start (%s)", __FUNCTION__, __LINE__, filePath);
+
+    bRet = dumpToFile((char *)filePath,
+        bayerBuffer.addr[0],
+        sensorMaxW * sensorMaxH * 2);
+    if (bRet != true)
+        ALOGE("couldn't make a raw file", __FUNCTION__, __LINE__);
+
+    ret = bufferMgr->putBuffer(bayerBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, bayerBuffer.index);
+        bufferMgr->printBufferState();
+        bufferMgr->printBufferQState();
+    }
+
+CLEAN:
+
+    if (newFrame != NULL) {
+        newFrame->frameUnlock();
+
+        ret = m_searchFrameFromList(&m_processList, newFrame->getFrameCount(), &inListFrame);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):searchFrameFromList fail", __FUNCTION__, __LINE__);
+        } else {
+            if (inListFrame == NULL) {
+                CLOGD("DEBUG(%s[%d]): Selected frame(%d) complete, Delete",
+                    __FUNCTION__, __LINE__, newFrame->getFrameCount());
+                newFrame->decRef();
+                m_frameMgr->deleteFrame(newFrame);
+            }
+            newFrame = NULL;
+        }
+    }
+
+    return ret;
+}
+#endif
+
 status_t ExynosCamera::m_getBayerBuffer(uint32_t pipeId, ExynosCameraBuffer *buffer, camera2_shot_ext *updateDmShot)
 {
     status_t ret = NO_ERROR;
@@ -1888,13 +2062,24 @@ status_t ExynosCamera::m_getBayerBuffer(uint32_t pipeId, ExynosCameraBuffer *buf
     ExynosCameraFrame *bayerFrame = NULL;
 
     m_captureSelector->setWaitTime(200000000);
+#ifdef RAWDUMP_CAPTURE
+    for (int i = 0; i < 2; i++) {
+        bayerFrame = m_captureSelector->selectFrames(m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount);
+
+        if(i == 0) {
+            m_RawCaptureDumpQ->pushProcessQ(&bayerFrame);
+        } else if (i == 1) {
+            m_parameters->setRawCaptureModeOn(false);
+        }
+    }
+#else
     if (pipeId == PIPE_3AA
         && m_parameters->isUseYuvReprocessing() == true
         && m_parameters->isUsing3acForIspc() == true)
         bayerFrame = m_sccCaptureSelector->selectFrames(m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount);
     else
         bayerFrame = m_captureSelector->selectFrames(m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount);
-
+#endif
     if (bayerFrame == NULL) {
         CLOGE("ERR(%s[%d]):bayerFrame is NULL", __FUNCTION__, __LINE__);
         ret = INVALID_OPERATION;
@@ -2026,11 +2211,58 @@ bool ExynosCamera::m_visionThreadFunc(void)
 
 status_t ExynosCamera::m_startCompanion(void)
 {
+#if defined(SAMSUNG_COMPANION)
+    if(m_use_companion == true) {
+        if (m_companionNode == NULL) {
+            m_companionThread = new mainCameraThread(this, &ExynosCamera::m_companionThreadFunc,
+                                                      "companionshotThread", PRIORITY_URGENT_DISPLAY);
+            if (m_companionThread != NULL) {
+                m_companionThread->run();
+                CLOGD("DEBUG(%s): companionThread starts", __FUNCTION__);
+            } else {
+                CLOGE("(%s):failed the m_companionThread.", __FUNCTION__);
+            }
+        } else {
+            CLOGW("WRN(%s[%d]):m_companionNode != NULL. so, it already running", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
     return NO_ERROR;
 }
 
 status_t ExynosCamera::m_stopCompanion(void)
 {
+#if defined(SAMSUNG_COMPANION)
+    if(m_use_companion == true) {
+        if (m_companionThread != NULL) {
+            CLOGI("INFO(%s[%d]): wait m_companionThread", __FUNCTION__, __LINE__);
+            m_companionThread->requestExitAndWait();
+            CLOGI("INFO(%s[%d]): wait m_companionThread end", __FUNCTION__, __LINE__);
+        } else {
+            CLOGI("INFO(%s[%d]): m_companionThread is NULL", __FUNCTION__, __LINE__);
+        }
+
+        if (m_companionNode != NULL) {
+            ExynosCameraDurationTimer timer;
+
+            timer.start();
+
+            if (m_companionNode->close() != NO_ERROR) {
+                CLOGE("ERR(%s):close fail", __FUNCTION__);
+            }
+            delete m_companionNode;
+            m_companionNode = NULL;
+
+            CLOGD("DEBUG(%s):Companion Node(%d) closed", __FUNCTION__, MAIN_CAMERA_COMPANION_NUM);
+
+            timer.stop();
+            CLOGD("DEBUG(%s[%d]):duration time(%5d msec)", __FUNCTION__, __LINE__, (int)timer.durationMsecs());
+
+        }
+    }
+#endif
+
     return NO_ERROR;
 }
 
@@ -2157,7 +2389,7 @@ status_t ExynosCamera::startPreview()
             m_captureSelector = new ExynosCameraFrameSelector(m_parameters, bufMgr, m_frameMgr);
 
             if (m_parameters->isReprocessing() == true) {
-                ret = m_captureSelector->setFrameHoldCount(REPROCESSING_BAYER_HOLD_COUNT + 2);
+                ret = m_captureSelector->setFrameHoldCount(REPROCESSING_BAYER_HOLD_COUNT);
                 if (ret < 0)
                     CLOGE("ERR(%s[%d]): setFrameHoldCount(%d) is fail", __FUNCTION__, __LINE__, REPROCESSING_BAYER_HOLD_COUNT);
             }
@@ -2181,6 +2413,10 @@ status_t ExynosCamera::startPreview()
         if (m_sccCaptureSelector != NULL)
             m_sccCaptureSelector->release();
 
+#ifdef RAWDUMP_CAPTURE
+        ExynosCameraActivitySpecialCapture *m_sCapture = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+        m_sCapture->resetRawCaptureFcount();
+#endif
         if (m_previewFrameFactory->isCreated() == false) {
             ret = m_previewFrameFactory->create();
             if (ret < 0) {
@@ -2190,7 +2426,22 @@ status_t ExynosCamera::startPreview()
             CLOGD("DEBUG(%s):FrameFactory(previewFrameFactory) created", __FUNCTION__);
         }
 
-        if (m_parameters->getDualMode() == true) {
+        if (m_parameters->getUseFastenAeStable() == true &&
+            m_parameters->getCameraId() == CAMERA_ID_BACK &&
+            m_parameters->getDualMode() == false &&
+            m_parameters->getRecordingHint() == false &&
+            m_isFirstStart == true) {
+
+            ret = m_fastenAeStable();
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):m_fastenAeStable() failed", __FUNCTION__, __LINE__);
+                ret = INVALID_OPERATION;
+                goto err;
+            } else {
+                skipFrameCount = 0;
+                m_parameters->setUseFastenAeStable(false);
+            }
+        } else if(m_parameters->getDualMode() == true) {
             skipFrameCount = INITIAL_SKIP_FRAME + 2;
         }
 
@@ -2283,7 +2534,7 @@ status_t ExynosCamera::startPreview()
         if (m_previewWindow != NULL)
             m_previewWindow->set_timestamp(m_previewWindow, systemTime(SYSTEM_TIME_MONOTONIC));
 
-#if defined(DEBUG_RAWDUMP)
+#if defined(RAWDUMP_CAPTURE) || defined(DEBUG_RAWDUMP)
         m_mainSetupQThread[INDEX(PIPE_FLITE)]->run(PRIORITY_URGENT_DISPLAY);
 #endif
         /* setup frame thread */
@@ -2343,6 +2594,20 @@ status_t ExynosCamera::startPreview()
 #ifdef USE_FD_AE
         m_startFaceDetection(m_parameters->getFaceDetectionMode());
 #endif
+
+        if (m_parameters->getUseFastenAeStable() == true &&
+            m_parameters->getCameraId() == CAMERA_ID_BACK &&
+            m_parameters->getDualMode() == false &&
+            m_parameters->getRecordingHint() == false &&
+            m_isFirstStart == true) {
+            /* AF mode is setted as INFINITY in fastenAE, and we should update that mode */
+            m_exynosCameraActivityControl->setAutoFocusMode(FOCUS_MODE_INFINITY);
+
+            m_parameters->setUseFastenAeStable(false);
+            m_exynosCameraActivityControl->setAutoFocusMode(m_parameters->getFocusMode());
+            m_isFirstStart = false;
+            m_parameters->setIsFirstStartFlag(m_isFirstStart);
+        }
     }
 
 #ifdef BURST_CAPTURE
@@ -2942,7 +3207,10 @@ status_t ExynosCamera::m_startPreviewInternal(void)
                 taaBufferManager[m_previewFrameFactory->getNodeType(PIPE_3AA)] = m_3aaBufferMgr;
                 if (m_parameters->isUsing3acForIspc() == true)
                     taaBufferManager[m_previewFrameFactory->getNodeType(PIPE_3AC)] = m_sccBufferMgr;
-
+#ifndef RAWDUMP_CAPTURE
+                else
+                    taaBufferManager[m_previewFrameFactory->getNodeType(PIPE_3AC)] = m_bayerBufferMgr;
+#endif
                 taaBufferManager[m_previewFrameFactory->getNodeType(PIPE_SCP)] = m_scpBufferMgr;
             }
         } else {
@@ -3153,6 +3421,14 @@ status_t ExynosCamera::m_startPreviewInternal(void)
     }
 #endif
 
+#ifdef RAWDUMP_CAPTURE
+    /* s_ctrl HAL version for selecting dvfs table */
+    ret = m_previewFrameFactory->setControl(V4L2_CID_IS_HAL_VERSION, IS_HAL_VER_3_2, PIPE_3AA);
+    ALOGD("WARN(%s): V4L2_CID_IS_HAL_VERSION_%d pipe(%d)", __FUNCTION__, IS_HAL_VER_3_2, PIPE_3AA);
+    if (ret < 0)
+        ALOGW("WARN(%s): V4L2_CID_IS_HAL_VERSION is fail", __FUNCTION__);
+#endif
+
     /* stream on pipes */
     ret = m_previewFrameFactory->startPipes();
     if (ret < 0) {
@@ -3216,6 +3492,13 @@ status_t ExynosCamera::m_stopPreviewInternal(void)
     m_recordingListLock.unlock();
     CLOGD("DEBUG(%s[%d]):Recording m_recordingProcessList(%d) OUT",
         __FUNCTION__, __LINE__, m_recordingProcessList.size());
+
+    CLOGD("Recording m_recordingCallbackHeap free IN");
+    if (m_recordingCallbackHeap != NULL) {
+        m_recordingCallbackHeap->release(m_recordingCallbackHeap);
+        m_recordingCallbackHeap = NULL;
+    }
+    CLOGD("Recording m_recordingCallbackHeap free OUT");
 
     m_pipeFrameDoneQ->release();
 
@@ -3493,7 +3776,7 @@ status_t ExynosCamera::m_restartPreviewInternal(void)
         err = ret;
     }
 
-#if defined(DEBUG_RAWDUMP)
+#if defined(RAWDUMP_CAPTURE) || defined(DEBUG_RAWDUMP)
     m_mainSetupQThread[INDEX(PIPE_FLITE)]->run(PRIORITY_URGENT_DISPLAY);
     m_mainSetupQThread[INDEX(PIPE_3AA)]->run(PRIORITY_URGENT_DISPLAY);
 #else
@@ -3628,6 +3911,9 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
     ExynosCameraFrame *fdFrame = NULL;
 
     ExynosCameraBuffer buffer;
+#ifdef SUPPORT_SW_VDIS
+    ExynosCameraBuffer vs_InputBuffer;
+#endif /*SUPPORT_SW_VDIS*/
     ExynosCameraBuffer t3acBuffer;
     int pipeID = 0;
     /* to handle the high speed frame rate */
@@ -3755,15 +4041,35 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
                     break;
                 }
             } else {
-                ret = m_captureSelector->manageFrameHoldList(frame, entity->getPipeId(), false);
-                if (ret < 0) {
-                    CLOGE("ERR(%s[%d]):manageFrameHoldList fail", __FUNCTION__, __LINE__);
-                    return ret;
-                }
 #ifdef DEBUG_RAWDUMP
-        newFrame = m_frameMgr->createFrame(m_parameters, 0);
-        m_mainSetupQ[INDEX(entity->getPipeId())]->pushProcessQ(&newFrame);
+                newFrame = m_frameMgr->createFrame(m_parameters, 0);
+                m_mainSetupQ[INDEX(entity->getPipeId())]->pushProcessQ(&newFrame);
+
+                /* When the RawDump is ongoing, new bayer buffer must not be delivered
+                 * to FrameSelector to make the currently dumped bayer buffer not be queued
+                 */
+                if (isRawDumpOngoing == true) {
+                    ret = frame->getDstBuffer(entity->getPipeId(), &buffer);
+                    if (ret < 0) {
+                        CLOGE("ERR(%s[%d]):getDstBuffer fail, pipeId(%d), ret(%d)",
+                                __FUNCTION__, __LINE__, entity->getPipeId(), ret);
+                        return ret;
+                    }
+
+                    ret = m_putBuffers(m_bayerBufferMgr, buffer.index);
+                    if (ret < 0) {
+                        CLOGE("ERR(%s[%d]):m_putBuffers(%d) fail", __FUNCTION__, __LINE__, buffer.index);
+                        break;
+                    }
+                } else
 #endif
+                {
+                    ret = m_captureSelector->manageFrameHoldList(frame, entity->getPipeId(), false);
+                    if (ret < 0) {
+                        CLOGE("ERR(%s[%d]):manageFrameHoldList fail", __FUNCTION__, __LINE__);
+                        return ret;
+                    }
+                }
             }
         }
 
@@ -4011,25 +4317,16 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
         } else if (entity->getDstBufState() == ENTITY_BUFFER_STATE_COMPLETE) {
             m_debugFpsCheck(entity->getPipeId());
 
-            if (frame->getRequest(PIPE_SCP) == true) {
-                ret = m_doZoomPrviewWithCSC(entity->getPipeId(), PIPE_GSC, frame);
-                if (ret < 0) {
-                    CLOGW("WARN(%s[%d]):[F%d]m_doPrviewWithCSC failed. Drop frame",
-                            __FUNCTION__, __LINE__, frame->getFrameCount());
-                } else {
-                    ret = frame->getDstBuffer(entity->getPipeId(), &buffer, m_previewFrameFactory->getNodeType(PIPE_SCP));
-                    if (ret < 0) {
-                        CLOGE("ERR(%s[%d]):getDstBuffer fail, pipeId(%d), ret(%d)",
-                                __FUNCTION__, __LINE__, entity->getPipeId(), ret);
-                        break;
-                    }
-                }
+            ret = m_doZoomPrviewWithCSC(entity->getPipeId(), PIPE_GSC, frame);
+            if (ret < 0) {
+                CLOGW("WARN(%s[%d]):m_doPrviewWithCSC failed", __FUNCTION__, __LINE__);
             }
 
-            if (frame->getRequest(PIPE_SCP) == false || ret < NO_ERROR) {
-                CLOGE("ERR(%s[%d]):[F%d]SCP buffer is dropped! Skip to preview.",
-                    __FUNCTION__, __LINE__, frame->getFrameCount());
-                break;
+            ret = frame->getDstBuffer(entity->getPipeId(), &buffer, m_previewFrameFactory->getNodeType(PIPE_SCP));
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):getDstBuffer fail, pipeId(%d), ret(%d)",
+                    __FUNCTION__, __LINE__, entity->getPipeId(), ret);
+                return ret;
             }
 
             /* TO DO : skip frame for HDR */
@@ -4133,6 +4430,8 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
                                 && (m_recordingStartTimeStamp <= timeStamp)) {
                                 if (m_getRecordingEnabled() == true
                                         && m_parameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)) {
+                                    int heapIndex = -1;
+                                    native_handle* handle = NULL;
 #ifdef CHECK_MONOTONIC_TIMESTAMP
                                     CLOGD("DEBUG(%s[%d]):m_dataCbTimestamp::recordingFrameIndex=%d, recordingTimeStamp=%lld, fd[0]=%d",
                                             __FUNCTION__, __LINE__, buffer.index, timeStamp, buffer.fd[0]);
@@ -4150,41 +4449,41 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
                                                 " timeStamp(%lld) m_recordingBufAvailable(%d)",
                                                 __FUNCTION__, __LINE__, buffer.index, timeStamp, (int)m_recordingBufAvailable[buffer.index]);
                                     } else {
-                                        struct addrs *recordAddrs = NULL;
+                                        struct VideoNativeHandleMetadata *recordAddrs = NULL;
 
-                                        if (m_recordingCallbackHeap != NULL) {
-                                            struct VideoNativeHandleMetadata *recordAddrs = NULL;
-
-                                            recordAddrs = (struct VideoNativeHandleMetadata *) m_recordingCallbackHeap->data;
-                                            recordAddrs[buffer.index].eType = kMetadataBufferTypeNativeHandleSource;
-
-                                            native_handle* handle = native_handle_create(2, 1);
-                                            handle->data[0] = (int32_t) buffer.fd[0];
-                                            handle->data[1] = (int32_t) buffer.fd[1];
-                                            handle->data[2] = (int32_t) buffer.index;
-
-                                            recordAddrs[buffer.index].pHandle = handle;
-
-                                            m_recordingBufAvailable[buffer.index] = false;
-                                            m_lastRecordingTimeStamp = timeStamp;
-                                        } else {
-                                            CLOGD("INFO(%s[%d]):m_recordingCallbackHeap is NULL.", __FUNCTION__, __LINE__);
+                                        ret = m_getAvailableRecordingCallbackHeapIndex(&heapIndex);
+                                        if (ret != NO_ERROR || heapIndex < 0 || heapIndex >= m_recordingBufferCount) {
+                                            CLOGE("ERR(%s[%d]):Failed to getAvailableRecordingCallbackHeapIndex %d",
+                                                    __FUNCTION__, __LINE__,
+                                                    heapIndex);
+                                            goto entity_state_complete;
                                         }
 
+                                        recordAddrs = (struct VideoNativeHandleMetadata *) m_recordingCallbackHeap->data;
+                                        recordAddrs[heapIndex].eType = kMetadataBufferTypeNativeHandleSource;
+
+                                        handle = native_handle_create(2, 1);
+                                        handle->data[0] = (int32_t) buffer.fd[0];
+                                        handle->data[1] = (int32_t) buffer.fd[1];
+                                        handle->data[2] = (int32_t) buffer.index;
+
+                                        recordAddrs[heapIndex].pHandle = handle;
+
+                                        m_recordingBufAvailable[buffer.index] = false;
+                                        m_lastRecordingTimeStamp = timeStamp;
+
                                         if (m_getRecordingEnabled() == true
-                                                && m_parameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)) {
-#ifdef SAMSUNG_HLV
-                                            if (m_HLV) {
-                                                /* Ignore the ERROR .. HLV solution is smart */
-                                                ret = m_ProgramAndProcessHLV(&buffer);
-                                            }
-#endif
+                                            && m_parameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)) {
                                             m_dataCbTimestamp(
                                                     timeStamp,
                                                     CAMERA_MSG_VIDEO_FRAME,
                                                     m_recordingCallbackHeap,
-                                                    buffer.index,
+                                                    heapIndex,
                                                     m_callbackCookie);
+                                        }
+
+                                        if (handle != NULL) {
+                                            native_handle_delete(handle);
                                         }
                                     }
                                 }
@@ -5013,7 +5312,7 @@ status_t ExynosCamera::m_handlePreviewFrameFront(ExynosCameraFrame *frame)
 
         ret = m_putBuffers(m_ispBufferMgr, buffer.index);
         if (ret < 0) {
-            CLOGE("ERR(%s[%d]):m_putbuffer fail, pipeId(%d), ret(%d)",
+            CLOGE("ERR(%s[%d]):m_putBuffer fail, pipeId(%d), ret(%d)",
                 __FUNCTION__, __LINE__, entity->getPipeId(), ret);
             return ret;
         }
@@ -5416,8 +5715,7 @@ status_t ExynosCamera::takePicture()
 
         m_stopBurstShot = false;
 
-        if (m_parameters->isReprocessing() == true
-            && m_parameters->isUseYuvReprocessing() == false)
+        if (m_parameters->isReprocessing() == true)
             m_captureSelector->setIsFirstFrame(true);
         else
             m_sccCaptureSelector->setIsFirstFrame(true);
@@ -5492,6 +5790,23 @@ status_t ExynosCamera::takePicture()
         CLOGD("DEBUG(%s[%d]): currentSeriesShotMode(%d), m_flashMgr->getNeedCaptureFlash(%d)",
             __FUNCTION__, __LINE__, currentSeriesShotMode, m_flashMgr->getNeedCaptureFlash());
 
+#ifdef RAWDUMP_CAPTURE
+        if(m_use_companion == true) {
+            CLOGD("DEBUG(%s[%d]): start set Raw Capture mode", __FUNCTION__, __LINE__);
+            m_sCaptureMgr->resetRawCaptureFcount();
+            m_sCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_RAW);
+
+            m_parameters->setRawCaptureModeOn(true);
+
+            enum aa_capture_intent captureIntent = AA_CAPTRUE_INTENT_STILL_CAPTURE_COMP_BYPASS;
+
+            ret = m_previewFrameFactory->setControl(V4L2_CID_IS_INTENT, captureIntent, PIPE_3AA);
+            if (ret < 0)
+                CLOGE("ERR(%s[%d]):setControl(STILL_CAPTURE_RAW) fail. ret(%d) intent(%d)",
+                __FUNCTION__, __LINE__, ret, captureIntent);
+            m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_START);
+        }
+#else
         if (m_hdrEnabled == true) {
             seriesShotCount = HDR_REPROCESSING_COUNT;
             m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_START);
@@ -5512,10 +5827,11 @@ status_t ExynosCamera::takePicture()
                 m_autoFocusThread->run(PRIORITY_DEFAULT);
             }
         }
-
+#endif /* RAWDUMP_CAPTURE */
+#ifndef RAWDUMP_CAPTURE
         if (currentSeriesShotMode == SERIES_SHOT_MODE_NONE && m_flashMgr->getNeedCaptureFlash() == false)
             m_isZSLCaptureOn = true;
-
+#endif
         m_parameters->setSetfileYuvRange();
 
         m_reprocessingCounter.setCount(seriesShotCount);
@@ -5669,85 +5985,20 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
                 __FUNCTION__, __LINE__, reprocessingBayerMode);
         goto CLEAN_FRAME;
     }
+#ifdef DEBUG_RAWDUMP
+    if (m_parameters->isUseYuvReprocessing() == true)
+        ret |= m_getBayerBuffer(PIPE_FLITE, &rawDumpBuffer);
+#endif
 
     if (ret < 0) {
         CLOGE("ERR(%s[%d]): getBayerBuffer fail, ret(%d)", __FUNCTION__, __LINE__, ret);
         goto CLEAN_FRAME;
     }
 
-#ifdef DEBUG_RAWDUMP
-    if (m_parameters->isUseYuvReprocessing() == true) {
-        bool matched = false;
-        int retryCnt = 3;
-        int bayerFcount = -2;
-        int dumpBayerFcount = -3;
-
-        CLOGD("DEBUG(%s[%d]): Try to select the rawDumpBuffer", __FUNCTION__, __LINE__);
-
-        bayerFcount = getMetaDmRequestFrameCount((struct camera2_shot_ext *)bayerBuffer.addr[1]);
-
-        do {
-            dumpBayerFcount = -2;
-            matched = false;
-            rawDumpBuffer.index = -2;
-
-            ret = m_getBayerBuffer(PIPE_FLITE, &rawDumpBuffer);
-            if (ret < 0) {
-                CLOGE("ERR(%s[%d]): getBayerBuffer fail, ret(%d)", __FUNCTION__, __LINE__, ret);
-                continue;
-            }
-
-            if (rawDumpBuffer.index < 0) {
-                CLOGE("ERR(%s[%d]): getBayerBuffer fail. buffer index is invalid", __FUNCTION__, __LINE__);
-                continue;
-            }
-
-            dumpBayerFcount = getMetaDmRequestFrameCount((struct camera2_shot_ext *)rawDumpBuffer.addr[1]);
-
-            if (bayerFcount == dumpBayerFcount) {
-                matched = true;
-            }
-
-            if (matched == false) {
-                /* put dump bayer buffer */
-                if (rawDumpBuffer.index >= 0 && m_bayerBufferMgr != NULL) {
-                    ret = m_putBuffers(m_bayerBufferMgr, rawDumpBuffer.index);
-                    if (ret < 0) {
-                        CLOGE("ERR(%s[%d]): pure bayer putBuffer fail, index(%d), ret(%d)",
-                                __FUNCTION__, __LINE__, rawDumpBuffer.index, ret);
-                        continue;
-                    }
-                }
-            }
-        } while((bayerFcount > dumpBayerFcount) && (retryCnt-- > 0));
-
-        if(matched == true) {
-            CLOGI("INFO(%s[%d]): matched Frame (bayer : %d / pure dump bayer : %d)", __FUNCTION__, __LINE__,
-                    bayerFcount, dumpBayerFcount);
-        } else {
-            CLOGE("ERR(%s[%d]): mismatched Frame (bayer : %d / pure dump bayer : %d)", __FUNCTION__, __LINE__,
-                    bayerFcount, dumpBayerFcount);
-            /* put dump bayer buffer */
-            if (rawDumpBuffer.index >= 0 && m_bayerBufferMgr != NULL) {
-                ret = m_putBuffers(m_bayerBufferMgr, rawDumpBuffer.index);
-                if (ret < 0) {
-                    CLOGE("ERR(%s[%d]): pure bayer putBuffer fail, index(%d), ret(%d)",
-                            __FUNCTION__, __LINE__, rawDumpBuffer.index, ret);
-                }
-                rawDumpBuffer.index = -2;
-            }
-        }
-    }
-#endif
-
     CLOGD("DEBUG(%s[%d]):bayerBuffer index %d", __FUNCTION__, __LINE__, bayerBuffer.index);
 
-    if (m_parameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC) {
-        if (m_parameters->isUseYuvReprocessing() == true)
-            m_sccCaptureSelector->clearList(m_getBayerPipeId(), false, m_previewFrameFactory->getNodeType(PIPE_3AC));
-        else
-            m_captureSelector->clearList(m_getBayerPipeId(), false, m_previewFrameFactory->getNodeType(PIPE_3AC));
-    }
+    if (m_parameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC)
+        m_captureSelector->clearList(m_getBayerPipeId(), false, m_previewFrameFactory->getNodeType(PIPE_3AC));
 
     if (m_isZSLCaptureOn == false) {
         m_shutterCallbackThread->join();
@@ -6286,6 +6537,7 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
         m_parameters->isSccCapture() == true)
         m_reprocessingFrameFactory->startThread(bayerPipeId);
 
+#ifndef RAWDUMP_CAPTURE
 #ifdef DEBUG_RAWDUMP
     if (m_parameters->checkBayerDumpEnable()) {
         int sensorMaxW, sensorMaxH;
@@ -6305,14 +6557,12 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
         }
 
         if (m_parameters->isUseYuvReprocessing() == true) {
-            if (rawDumpBuffer.index >= 0) {
-                bRet = dumpToFile((char *)filePath,
-                        rawDumpBuffer.addr[0],
-                        rawDumpBuffer.size[0]);
-                bufferRet = m_bayerBufferMgr->putBuffer(rawDumpBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
-                if (bufferRet < 0)
-                    CLOGE("ERR(%s[%d]):putBuffer failed Index is %d", __FUNCTION__, __LINE__, rawDumpBuffer.index);
-            }
+            bRet = dumpToFile((char *)filePath,
+                    rawDumpBuffer.addr[0],
+                    sensorMaxW * sensorMaxH * 2);
+            bufferRet = m_bayerBufferMgr->putBuffer(rawDumpBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+            if (bufferRet < 0)
+                CLOGE("ERR(%s[%d]):putBuffer failed Index is %d", __FUNCTION__, __LINE__, rawDumpBuffer.index);
         } else {
             bRet = dumpToFile((char *)filePath,
                     bayerBuffer.addr[0],
@@ -6323,6 +6573,7 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
             CLOGE("couldn't make a raw file");
     }
 #endif /* DEBUG_RAWDUMP */
+#endif
 
     /* wait ISP done */
     CLOGI("INFO(%s[%d]):wait ISP output", __FUNCTION__, __LINE__);

@@ -41,11 +41,7 @@ ExynosCameraFrame::ExynosCameraFrame(
     m_parameters = params;
     m_frameCount = frameCount;
     m_frameIndex = 0;
-    m_frameMaxIndex = 0;
     m_frameType = frameType;
-#ifdef USE_DUAL_CAMERA
-    m_master3a = DUAL_OPERATION_MODE_MASTER;
-#endif
     memset(m_name, 0x00, sizeof(m_name));
 
     CLOGV(" create frame type(%d), frameCount(%d)", frameType, frameCount);
@@ -60,11 +56,7 @@ ExynosCameraFrame::ExynosCameraFrame(int cameraId)
     m_parameters = NULL;
     m_frameCount = 0;
     m_frameIndex = 0;
-    m_frameMaxIndex = 0;
     m_frameType = FRAME_TYPE_OTHERS;
-#ifdef USE_DUAL_CAMERA
-    m_master3a = DUAL_OPERATION_MODE_MASTER;
-#endif
     memset(m_name, 0x00, sizeof(m_name));
 
     m_init();
@@ -1332,23 +1324,6 @@ status_t ExynosCameraFrame::getDynamicMeta(struct camera2_shot_ext *shot, uint32
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrame::setDynamicMeta(struct camera2_shot_ext *shot, uint32_t srcNodeIndex)
-{
-    if (shot == NULL) {
-        CLOGE(" buffer is NULL");
-        return BAD_VALUE;
-    }
-
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
-    memcpy(&m_metaData[srcNodeIndex].shot.dm, &shot->shot.dm, sizeof(struct camera2_dm));
-
-    return NO_ERROR;
-}
-
 status_t ExynosCameraFrame::getDynamicMeta(struct camera2_dm *dm, uint32_t srcNodeIndex)
 {
     if (dm == NULL) {
@@ -1750,16 +1725,6 @@ int ExynosCameraFrame::getFrameIndex(void)
     return m_frameIndex;
 }
 
-void ExynosCameraFrame::setMaxFrameIndex(int index)
-{
-    m_frameMaxIndex = index;
-}
-
-int ExynosCameraFrame::getMaxFrameIndex(void)
-{
-    return m_frameMaxIndex;
-}
-
 void ExynosCameraFrame::setJpegSize(int size)
 {
     m_jpegSize = size;
@@ -2000,7 +1965,11 @@ status_t ExynosCameraFrame::m_init()
     m_hasRequest = false;
     m_updateResult = false;
 
-    m_scenario.clear();
+#ifdef SAMSUNG_TN_FEATURE
+    for (int i = 0; i < MAX_PIPE_UNI_NUM; i++) {
+        m_scenario[i] = -1;
+    }
+#endif
 
     for (int i = 0; i < RESULT_UPDATE_TYPE_MAX; i++) {
         m_resultUpdatePipeId[i] = MAX_PIPE_NUM;
@@ -2009,17 +1978,20 @@ status_t ExynosCameraFrame::m_init()
 
     m_stateInSelector = FRAME_STATE_IN_SELECTOR_BASE;
 
+    m_needDynamicBayer = false;
     m_releaseDepthBufferFlag = true;
     m_streamTimeStamp = 0;
-
-    m_factoryType = FRAME_FACTORY_TYPE_CAPTURE_PREVIEW;
-    m_requestKey  = 0;
+    m_bufferDondeIndex = -1;
 
 #ifdef USE_DEBUG_PROPERTY
-    m_previousFrameState = FRAME_STATE_READY;
     m_createTimestamp = 0LL;
     m_completeTimestamp = 0LL;
+    m_previousFrameState = FRAME_STATE_INVALID;
 #endif
+
+    m_bvOffset = 0;
+    m_factoryType = FRAME_FACTORY_TYPE_MAX;
+    m_requestKey = 0;
 
     return NO_ERROR;
 }
@@ -2192,153 +2164,76 @@ status_t ExynosCameraFrame::getFlipVertical(uint32_t pipeId)
     return entity->getFlipVertical();
 }
 
-void ExynosCameraFrame::setPPScenario(int pipeId, int scenario)
-{
-    switch (pipeId) {
 #ifdef SAMSUNG_TN_FEATURE
-    case PIPE_PP_UNI_REPROCESSING:
-    case PIPE_PP_UNI_REPROCESSING2:
-    case PIPE_PP_UNI:
-    case PIPE_PP_UNI2:
-#endif
-#ifdef USE_SLSI_PLUGIN
-    case PIPE_PLUGIN_BASE ... PIPE_PLUGIN_MAX:
-    case PIPE_PLUGIN_BASE_REPROCESSING ... PIPE_PLUGIN_MAX_REPROCESSING:
-#endif
-    {
-        Mutex::Autolock l(m_scenarioLock);
-        m_scenario[pipeId] = scenario;
+void ExynosCameraFrame::setPPScenario(int index, int scenario)
+{
+    if (index < MAX_PIPE_UNI_NUM) {
+        m_scenario[index] = scenario;
     }
-        break;
-    default:
-        CLOGE("setScenario failed, pipeID(%d) scenario(%d)", pipeId, scenario);
-        break;
-    }
-
 }
 
 int32_t ExynosCameraFrame::getPPScenario(int pipeId)
 {
-    int ret = -1;
-    map<int, int>::iterator iter;
-
     switch (pipeId) {
-#ifdef SAMSUNG_TN_FEATURE
     case PIPE_PP_UNI_REPROCESSING:
     case PIPE_PP_UNI_REPROCESSING2:
+        return m_scenario[pipeId - PIPE_PP_UNI_REPROCESSING];
+        break;
     case PIPE_PP_UNI:
     case PIPE_PP_UNI2:
-#endif
-#ifdef USE_SLSI_PLUGIN
-    case PIPE_PLUGIN_BASE ... PIPE_PLUGIN_MAX:
-    case PIPE_PLUGIN_BASE_REPROCESSING ... PIPE_PLUGIN_MAX_REPROCESSING:
-#endif
-    {
-        Mutex::Autolock l(m_scenarioLock);
-
-        iter = m_scenario.find(pipeId);
-        if (iter != m_scenario.end()) {
-            ret = iter->second;
-        } else {
-            CLOGE("find failed, pipeId(%d)", pipeId);
-        }
-    }
+    case PIPE_PP_UNI3:
+        return m_scenario[pipeId - PIPE_PP_UNI];
         break;
     default:
-        CLOGE("getScenario failed, pipeId(%d)", pipeId);
+        return -1;
         break;
     }
-
-    return ret;
 }
 
 int32_t ExynosCameraFrame::getPPScenarioIndex(int scenario)
 {
-    int ret = -1;
-    Mutex::Autolock l(m_scenarioLock);
-    map<int, int>::iterator iter;
-
-    for(iter = m_scenario.begin(); iter != m_scenario.end(); iter++)
-    {
-        if (scenario == iter->second) {
-            ret = iter->first;
+    int index = -1;
+    for (int i = 0; i < MAX_PIPE_UNI_NUM; i++) {
+        if (m_scenario[i] == scenario) {
+            index = i;
+            break;
         }
     }
 
-    return ret;
+    return index;
 }
 
 bool ExynosCameraFrame::hasPPScenario(int scenario)
 {
     int ret = false;
-    Mutex::Autolock l(m_scenarioLock);
-    map<int, int>::iterator iter;
-
-    for(iter = m_scenario.begin(); iter != m_scenario.end(); iter++)
-    {
-        if (scenario == iter->second) {
+    for (int i = 0; i < MAX_PIPE_UNI_NUM; i++) {
+        if (m_scenario[i] == scenario) {
             ret = true;
+            break;
         }
     }
 
     return ret;
 }
-
 
 bool ExynosCameraFrame::isLastPPScenarioPipe(int pipeId)
 {
-    map<int, int>::iterator iter;
     int ret = false;
-    switch (pipeId) {
-#ifdef USE_SLSI_PLUGIN
-    case PIPE_PLUGIN_PRE1:
-    case PIPE_PLUGIN_POST1:
-    case PIPE_PLUGIN_PRE1_REPROCESSING:
-    case PIPE_PLUGIN_POST1_REPROCESSING:
-#endif
-#ifdef SAMSUNG_TN_FEATURE
-    case PIPE_PP_UNI:
-    case PIPE_PP_UNI_REPROCESSING:
-#endif
-    {
-        Mutex::Autolock l(m_scenarioLock);
+    int index = pipeId - PIPE_PP_UNI;
 
-        /* check current pipe id and next pipeId */
-        iter = m_scenario.find(pipeId);
-        if (iter != m_scenario.end()) {
-            iter = m_scenario.find(pipeId+1);
-            if (iter == m_scenario.end()) {
-                ret = true;
-            }
-        }
+    if (index < 0 && index >= MAX_PIPE_UNI_NUM) {
+        return false;
     }
-        break;
-#ifdef USE_SLSI_PLUGIN
-    case PIPE_PLUGIN_PRE2:
-    case PIPE_PLUGIN_POST2:
-    case PIPE_PLUGIN_PRE2_REPROCESSING:
-    case PIPE_PLUGIN_POST2_REPROCESSING:
-#endif
-#ifdef SAMSUNG_TN_FEATURE
-    case PIPE_PP_UNI2:
-    case PIPE_PP_UNI_REPROCESSING2:
-#endif
-    {
-        Mutex::Autolock l(m_scenarioLock);
-        /* last Pipe id check current pipie id */
-        iter = m_scenario.find(pipeId);
-        if (iter != m_scenario.end()) {
-            ret = true;
-        }
-    }
-        break;
-    default:
-        CLOGE("getScenario failed, pipeId(%d)", pipeId);
-        break;
+
+    if (index == MAX_PIPE_UNI_NUM - 1) {
+        ret = true;
+    } else if (m_scenario[index + 1] == -1) {
+        ret = true;
     }
 
     return ret;
 }
+#endif
 
 void ExynosCameraFrame::setStreamRequested(int stream, bool flag)
 {
@@ -2590,6 +2485,16 @@ FRAME_STATE_IN_SELECTOR_T ExynosCameraFrame::getRawStateInSelector(void)
 selector_tag_queue_t *ExynosCameraFrame::getSelectorTagList(void)
 {
     return &m_selectorTagQueue;
+}
+
+void ExynosCameraFrame::setNeedDynamicBayer(bool set)
+{
+    m_needDynamicBayer = set;
+}
+
+bool ExynosCameraFrame::getNeedDynamicBayer(void)
+{
+    return m_needDynamicBayer;
 }
 
 /*

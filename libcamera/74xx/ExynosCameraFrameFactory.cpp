@@ -32,6 +32,20 @@ ExynosCameraFrameFactory::~ExynosCameraFrameFactory()
         CLOGE("ERR(%s[%d]):destroy fail", __FUNCTION__, __LINE__);
 }
 
+#ifdef SAMSUNG_COMPANION
+status_t ExynosCameraFrameFactory::precreate(void)
+{
+    CLOGE("ERR(%s[%d]):Must use the concreate class, don't use superclass", __FUNCTION__, __LINE__);
+    return INVALID_OPERATION;
+}
+
+status_t ExynosCameraFrameFactory::postcreate(void)
+{
+    CLOGE("ERR(%s[%d]):Must use the concreate class, don't use superclass", __FUNCTION__, __LINE__);
+    return INVALID_OPERATION;
+}
+#endif
+
 status_t ExynosCameraFrameFactory::destroy(void)
 {
     CLOGI("INFO(%s[%d])", __FUNCTION__, __LINE__);
@@ -102,6 +116,11 @@ int ExynosCameraFrameFactory::m_getFliteNodenum()
 {
     int fliteNodeNim = FIMC_IS_VIDEO_SS0_NUM;
 
+#ifdef SAMSUNG_COMPANION
+    if(m_parameters->getUseCompanion() == true) {
+        fliteNodeNim = FIMC_IS_VIDEO_SS0_NUM;
+    } else
+#endif
     {
         fliteNodeNim = (m_cameraId == CAMERA_ID_BACK)?MAIN_CAMERA_FLITE_NUM:FRONT_CAMERA_FLITE_NUM;
     }
@@ -738,6 +757,12 @@ int ExynosCameraFrameFactory::m_initFlitePipe(void)
     }
 #endif
 
+#ifdef SAMSUNG_DNG
+    if (m_parameters->getDNGCaptureModeOn()) {
+        bayerFormat = CAMERA_DUMP_BAYER_FORMAT;
+    }
+#endif
+
     struct ExynosConfigInfo *config = m_parameters->getConfig();
 
     m_parameters->getMaxSensorSize(&maxSensorW, &maxSensorH);
@@ -756,19 +781,10 @@ int ExynosCameraFrameFactory::m_initFlitePipe(void)
     memset(&streamParam, 0x0, sizeof(v4l2_streamparm));
     m_parameters->getPreviewFpsRange(&min, &max);
 
-#ifdef SCALABLE_SENSOR
-	frameRate = m_parameters->getFrameRate(hwSensorW, hwSensorH);
-#else //SCALABLE_SENSOR
-#ifdef M_LONG_SHUTTER
-    if (m_parameters->getSceneMode() == SCENE_MODE_LONG_SHUTTER && m_parameters->getSensorExposureTime() >= SEPARATE_POINT_EXP_TIME)
-        frameRate = 1;
-    else
-#endif
-    if (m_parameters->getScalableSensorMode() == true || (hwSensorW == 5344 && hwSensorH == 4016))
+    if (m_parameters->getScalableSensorMode() == true)
         frameRate = 24;
     else
         frameRate = max;
-#endif //SCALABLE_SENSOR
 
     streamParam.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
     streamParam.parm.capture.timeperframe.numerator   = 1;
@@ -792,6 +808,11 @@ int ExynosCameraFrameFactory::m_initFlitePipe(void)
     pipeInfo[0].rectInfo = tempRect;
     pipeInfo[0].bufInfo.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
     pipeInfo[0].bufInfo.memory = V4L2_CAMERA_MEMORY_TYPE;
+#ifdef SAMSUNG_DNG
+    if (m_parameters->getDNGCaptureModeOn()) {
+        pipeInfo[0].bufInfo.count = 4;
+    } else
+#endif
     {
         pipeInfo[0].bufInfo.count = config->current->bufInfo.num_bayer_buffers;
     }
@@ -816,6 +837,12 @@ int ExynosCameraFrameFactory::m_initFlitePipe(void)
     if (m_parameters->getBayerFormat() == V4L2_PIX_FMT_SBGGR12) {
         pipeInfo[0].bytesPerPlane[0] = ROUND_UP(pipeInfo[0].rectInfo.fullW, 10) * 8 / 5;
     } else {
+        pipeInfo[0].bytesPerPlane[0] = ROUND_UP(pipeInfo[0].rectInfo.fullW, 10) * 2;
+    }
+#endif
+
+#ifdef SAMSUNG_DNG
+    if (m_parameters->getDNGCaptureModeOn()) {
         pipeInfo[0].bytesPerPlane[0] = ROUND_UP(pipeInfo[0].rectInfo.fullW, 10) * 2;
     }
 #endif

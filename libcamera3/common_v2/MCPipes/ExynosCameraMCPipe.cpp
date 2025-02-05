@@ -414,6 +414,8 @@ bool ExynosCameraMCPipe::flagStartThread(void)
 
 status_t ExynosCameraMCPipe::sensorStream(bool on)
 {
+    Mutex::Autolock lock(m_sensorStandbyLock);
+
     CLOGD("");
     status_t ret = NO_ERROR;
 
@@ -428,6 +430,11 @@ status_t ExynosCameraMCPipe::sensorStream(bool on)
 
             return ret;
         }
+    }
+
+    /* Set flag for prevent to duplication setting */
+    if (on == false) {
+        m_flagSensorStandby = SENSOR_STANDBY_ON;
     }
 
     CLOGE("All Nodes is NULL");
@@ -681,7 +688,7 @@ status_t ExynosCameraMCPipe::setParam(struct v4l2_streamparm streamParam)
     return INVALID_OPERATION;
 }
 
-status_t ExynosCameraMCPipe::pushFrame(ExynosCameraFrameSP_sptr_t newFrame)
+status_t ExynosCameraMCPipe::pushFrame(ExynosCameraFrameSP_dptr_t newFrame)
 {
     Mutex::Autolock lock(m_pipeframeLock);
     if (newFrame == NULL) {
@@ -1446,7 +1453,7 @@ bool ExynosCameraMCPipe::m_getBufferThreadFunc(void)
     }
 
     m_sensorStandbyLock.lock();
-    if (m_flagSensorStandby >= SENSOR_STANDBY_ON_READY
+    if (m_flagSensorStandby == SENSOR_STANDBY_ON_READY
         && m_flagStartPipe == true
         && m_requestFrameQ->getSizeOfProcessQ() == 0) {
         ret = m_sensorStandby(true);
@@ -1890,7 +1897,7 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
     int v4l2Colorformat = 0;
     int planeCount[OTF_NODE_BASE] = {0};
     int bufferIndex[OTF_NODE_BASE];
-    uint32_t captureNodeFrameCount[OTF_NODE_BASE];
+    int32_t captureNodeFrameCount[OTF_NODE_BASE];
     for (int i = OUTPUT_NODE; i < MAX_CAPTURE_NODE; i++) {
         bufferIndex[i] = -2;
         captureNodeFrameCount[i] = -1;
@@ -2098,7 +2105,7 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
                 /* TODO: doing exception handling */
 
                 if (bufferIndex[i] >= 0) {
-                    if (newFrame->getFrameCount() != captureNodeFrameCount[i]) {
+                    if ((int32_t)newFrame->getFrameCount() != captureNodeFrameCount[i]) {
                         CLOGW("output and capture node frame count do not match. (expect: %d != current: %d), pipeID(%d)",
                                 newFrame->getFrameCount(), captureNodeFrameCount[i], pipeId);
                     } else {
@@ -2192,6 +2199,7 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
                         memcpy(&shot_ext_dst->shot.uctl, &shot_ext_src->shot.uctl, sizeof(struct camera2_uctl));
                         memcpy(&shot_ext_dst->shot.udm, &shot_ext_src->shot.udm, sizeof(struct camera2_udm));
                         memcpy(&shot_ext_dst->shot.dm, &shot_ext_src->shot.dm, sizeof(struct camera2_dm));
+                        memcpy(&shot_ext_dst->tuning_info, &shot_ext_src->tuning_info, sizeof(struct camera2_tuning_info));
 
                         shot_ext_dst->setfile = shot_ext_src->setfile;
                         shot_ext_dst->drc_bypass = shot_ext_src->drc_bypass;
@@ -2265,7 +2273,7 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
                 continue;
 
             if (newFrame->getRequest(dstPipeId) == true) {
-                if (newFrame->getFrameCount() != captureNodeFrameCount[i]) {
+                if ((int32_t)newFrame->getFrameCount() != captureNodeFrameCount[i]) {
                     if (captureNodeFrameCount[i] < 0) {
                         CLOGE("invalid captureNodeFrameCount, Pipe Id(%d), frameCount(%d)",
                             dstPipeId, newFrame->getFrameCount());
@@ -2338,7 +2346,7 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
     }
 
     /* 8. Push frame to out of Pipe */
-/* TODO: doing exception handling 
+/* TODO: doing exception handling
 CLEAN:
 */
     m_outputFrameQ->pushProcessQ(&newFrame);
@@ -2405,15 +2413,6 @@ status_t ExynosCameraMCPipe::m_updateMetadataFromFrame(ExynosCameraFrameSP_sptr_
             memset(captureNodeName[i], 0, EXYNOS_CAMERA_NAME_STR_SIZE);
 
         frame->getMetaData(shot_ext);
-
-#ifdef USE_DUAL_CAMERA
-#ifdef USE_SLSI_PLUGIN
-        if (INDEX(getPipeId()) == (uint32_t)m_parameters->getPerFrameControlPipe()
-            || getPipeId() == (uint32_t)m_parameters->getPerFrameControlReprocessingPipe()) {
-            m_setMaster3a(frame, shot_ext);
-        }
-#endif
-#endif
 
         if (m_reprocessing == false)
             m_activityControl->activityBeforeExecFunc(getPipeId(), (void *)buffer);
@@ -2567,16 +2566,6 @@ status_t ExynosCameraMCPipe::m_updateMetadataToFrame(void *metadata, int index, 
         CLOGE("storeUserDynamicMeta() fail, ret(%d)", ret);
         return ret;
     }
-
-#ifdef USE_DUAL_CAMERA
-#ifdef USE_SLSI_PLUGIN
-    if (INDEX(getPipeId()) == (uint32_t)m_parameters->getPerFrameControlPipe()
-        || getPipeId() == (uint32_t)m_parameters->getPerFrameControlReprocessingPipe()) {
-        enum DUAL_OPERATION_MODE master3A = m_getMaster3a(shot_ext, frame);
-        frame->setMaster3a(master3A);
-    }
-#endif
-#endif
 
     if (shot_ext->shot.dm.request.frameCount != 0)
         ret = frame->setMetaDataEnable(true);
@@ -2914,6 +2903,15 @@ status_t ExynosCameraMCPipe::m_setNodeInfo(ExynosCameraNode *node, camera_pipe_i
                             (enum v4l2_memory)pipeInfos->bufInfo.memory);
 
         if (flagValidSetFormatInfo == true) {
+#ifdef SAMSUNG_DNG
+            if (m_parameters->getDNGCaptureModeOn() && strcmp(node->getName(), "BAYER") == 0) {
+                CLOGV(" DNG flite node->setFormat() getPipeId()(%d)", getPipeId());
+                if (node->setFormat() != NO_ERROR) {
+                    CLOGE(" node->setFormat() fail");
+                    return INVALID_OPERATION;
+                }
+            } else
+#endif // SAMSUNG_DNG
             {
                 ret = node->setFormat(pipeInfos->bytesPerPlane);
                 if (ret != NO_ERROR) {
@@ -3192,13 +3190,15 @@ status_t ExynosCameraMCPipe::m_setJpegInfo(int nodeType, ExynosCameraFrameSP_spt
     }
 
     m_configurations->getSize(CONFIGURATION_PICTURE_SIZE, (uint32_t *)&pictureRect.w, (uint32_t *)&pictureRect.h);
-    m_configurations->getSize(CONFIGURATION_THUMBNAIL_SIZE, (uint32_t *)&thumbnailRect.w, (uint32_t *)&thumbnailRect.h);
     jpegQuality = m_configurations->getModeValue(CONFIGURATION_JPEG_QUALITY);
-    thumbnailQuality = m_configurations->getModeValue(CONFIGURATION_THUMBNAIL_QUALITY);
+    thumbnailRect.w = shot_ext.shot.ctl.jpeg.thumbnailSize[0];
+    thumbnailRect.h = shot_ext.shot.ctl.jpeg.thumbnailSize[1];
+    thumbnailQuality = shot_ext.shot.ctl.jpeg.thumbnailQuality;
     debugInfo = m_parameters->getDebugAttribute();
 
     /* 3. Set JPEG node perframe control information for each node */
     pipeId = m_deviceInfo->pipeId[nodeType];
+    CLOGD("pipeId-%d thumbnailRect[%d %d] thumbnailQuality %d", pipeId, thumbnailRect.w, thumbnailRect.h, thumbnailQuality);
 
     switch (pipeId) {
     case PIPE_HWFC_JPEG_DST_REPROCESSING:
@@ -3232,12 +3232,25 @@ status_t ExynosCameraMCPipe::m_setJpegInfo(int nodeType, ExynosCameraFrameSP_spt
     case PIPE_HWFC_JPEG_SRC_REPROCESSING:
         /* JPEG HAL setSize */
         ret = m_node[nodeType]->setSize(pictureRect.w, pictureRect.h);
-        if (ret != NO_ERROR) {
+        if (ret != NO_ERROR)
             CLOGE("Failed to set size %dx%d into %s, ret %d",
                     pictureRect.w, pictureRect.h,
                     m_deviceInfo->nodeName[nodeType], ret);
-        }
 
+#ifdef SAMSUNG_JQ
+        if (m_parameters->getJpegQtableOn() == true && m_parameters->getJpegQtableStatus() != JPEG_QTABLE_DEINIT) {
+            if (m_parameters->getJpegQtableStatus() == JPEG_QTABLE_UPDATED) {
+                CLOGD("[JQ]:Get JPEG Q-table");
+                m_parameters->setJpegQtableStatus(JPEG_QTABLE_RETRIEVED);
+                m_parameters->getJpegQtable(m_qtable);
+            }
+
+            CLOGD("[JQ]:Set JPEG Q-table");
+            ret = m_node[nodeType]->setQuality(m_qtable);
+            if (ret != NO_ERROR)
+                CLOGE("[JQ]:m_node[nodeType]->setQuality(qtable[]) fail");
+        } else
+#endif
         {
             /* JPEG HAL setQuality */
             CLOGV("m_node[nodeType]->setQuality(int)");
@@ -3558,199 +3571,6 @@ status_t ExynosCameraMCPipe::m_checkPolling(ExynosCameraNode *node)
     return NO_ERROR;
 }
 
-#ifdef USE_DUAL_CAMERA
-void ExynosCameraMCPipe::m_setMaster3a(ExynosCameraFrameSP_sptr_t frame, struct camera2_shot_ext *shot_ext)
-{
-    frame_type_t frameType = (frame_type_t)frame->getFrameType();
-    enum DUAL_OPERATION_MODE master3a = frame->getMaster3a();
-
-    enum aa_cameraMode  cameraMode = AA_CAMERAMODE_SINGLE;
-    enum aa_sensorPlace sensorPlace = AA_SENSORPLACE_REAR;
-
-    if (m_configurations->getMode(CONFIGURATION_DUAL_MODE) == true) {
-        if (m_configurations->getBokehBlurStrength() == true) {
-            cameraMode  = AA_CAMERAMODE_DUAL_SYNC_SAME_TIME_CONTROL;
-        } else {
-            switch (frameType) {
-            case FRAME_TYPE_PREVIEW:
-            case FRAME_TYPE_REPROCESSING:
-            case FRAME_TYPE_INTERNAL:
-                cameraMode  = AA_CAMERAMODE_DUAL_ONE_SENSOR_OFF;
-                break;
-            case FRAME_TYPE_PREVIEW_DUAL_MASTER:
-            case FRAME_TYPE_PREVIEW_DUAL_SLAVE:
-            case FRAME_TYPE_REPROCESSING_DUAL_MASTER:
-            case FRAME_TYPE_REPROCESSING_DUAL_SLAVE:
-                cameraMode  = AA_CAMERAMODE_DUAL_ASYNC;
-                break;
-            case FRAME_TYPE_PREVIEW_SLAVE:
-            case FRAME_TYPE_REPROCESSING_SLAVE:
-                cameraMode  = AA_CAMERAMODE_DUAL_ONE_SENSOR_OFF;
-                break;
-            default:
-                CLOGE("Invalid frameType(%d). so, just set like AA_CAMERAMODE_DUAL_ONE_SENSOR_OFF", frameType);
-                cameraMode  = AA_CAMERAMODE_DUAL_ONE_SENSOR_OFF;
-                break;
-            }
-        }
-
-        switch (master3a) {
-        case DUAL_OPERATION_MODE_MASTER:
-        case DUAL_OPERATION_MODE_SYNC:
-            sensorPlace = AA_SENSORPLACE_REAR;
-            break;
-        case DUAL_OPERATION_MODE_SLAVE:
-            sensorPlace = AA_SENSORPLACE_REAR_SECOND;
-            break;
-        default:
-            CLOGE("Invalid master3a(%d). so, just set AA_SENSORPLACE_REAR", master3a);
-            sensorPlace = AA_SENSORPLACE_REAR;
-            break;
-        }
-    } else {
-        cameraMode = AA_CAMERAMODE_SINGLE;
-
-        if (m_cameraId == CAMERA_ID_BACK) {
-            sensorPlace = AA_SENSORPLACE_REAR;
-        } else {
-            sensorPlace = AA_SENSORPLACE_FRONT;
-        }
-    }
-
-    setMetaCtlMasterCamera(shot_ext, cameraMode, sensorPlace);
-
-    if (m_oldCameraMode2Meta  != cameraMode ||
-        m_oldSensorPlace2Meta != sensorPlace) {
-        CLOGD("[F%d] frameType(%d), master3a(%d), cameraMode(%d), sensorPlace(%d), getDualCameraMode(%d), getBokehMode(%d)",
-            frame->getFrameCount(),
-            frameType,
-            master3a,
-            cameraMode,
-            sensorPlace,
-            m_configurations->getMode(CONFIGURATION_DUAL_MODE),
-            m_configurations->getBokehBlurStrength());
-
-        m_oldCameraMode2Meta  = cameraMode;
-        m_oldSensorPlace2Meta = sensorPlace;
-    }
-
-    //m_checkMaster3a(frame, shot_ext);
-}
-
-enum DUAL_OPERATION_MODE ExynosCameraMCPipe::m_getMaster3a(struct camera2_shot_ext *shot_ext, ExynosCameraFrameSP_sptr_t frame)
-{
-    enum aa_cameraMode  cameraMode = AA_CAMERAMODE_SINGLE;
-    enum aa_sensorPlace sensorPlace = AA_SENSORPLACE_REAR;
-    enum DUAL_OPERATION_MODE master3a = DUAL_OPERATION_MODE_MASTER;
-
-    getMetaCtlMasterCamera(shot_ext, &cameraMode, &sensorPlace);
-
-    switch (sensorPlace) {
-    case AA_SENSORPLACE_REAR:
-        master3a = DUAL_OPERATION_MODE_MASTER;
-        break;
-    case AA_SENSORPLACE_FRONT:
-        master3a = DUAL_OPERATION_MODE_MASTER;
-        break;
-    case AA_SENSORPLACE_REAR_SECOND:
-        master3a = DUAL_OPERATION_MODE_SLAVE;
-        break;
-    case AA_SENSORPLACE_FRONT_SECOND:
-        master3a = DUAL_OPERATION_MODE_SLAVE;
-        break;
-    default:
-        CLOGE("Invalid sensorPlace value(%d). so, fail", sensorPlace);
-        break;
-    }
-
-    if (m_oldMeta2CameraMode  != cameraMode ||
-        m_oldMeta2SensorPlace != sensorPlace) {
-        CLOGD("[F%d] cameraMode(%d), sensorPlace(%d), master3a(%d)",
-            frame->getFrameCount(),
-            cameraMode,
-            sensorPlace,
-            master3a);
-
-        m_oldMeta2CameraMode  = cameraMode;
-        m_oldMeta2SensorPlace = sensorPlace;
-    }
-
-    return master3a;
-}
-
-void ExynosCameraMCPipe::m_checkMaster3a(ExynosCameraFrameSP_sptr_t frame, struct camera2_shot_ext *shot_ext)
-{
-    int frameType = frame->getFrameType();
-    int cameraMode = shot_ext->shot.uctl.cameraMode;
-    int sensorPlace = shot_ext->shot.uctl.masterCamera;
-    bool flagValid = true;
-
-    if (m_configurations->getMode(CONFIGURATION_DUAL_MODE) == true) {
-        if (m_configurations->getBokehBlurStrength() == true) {
-            if (cameraMode  != AA_CAMERAMODE_DUAL_SYNC_SAME_TIME_CONTROL ||
-                sensorPlace != AA_SENSORPLACE_REAR) {
-                flagValid = false;
-            }
-        } else {
-            switch (frameType) {
-            case FRAME_TYPE_PREVIEW:
-            case FRAME_TYPE_REPROCESSING:
-                if (cameraMode  != AA_CAMERAMODE_DUAL_ONE_SENSOR_OFF ||
-                    sensorPlace != AA_SENSORPLACE_REAR) {
-                    flagValid = false;
-                }
-                break;
-            case FRAME_TYPE_PREVIEW_DUAL_MASTER:
-            case FRAME_TYPE_PREVIEW_DUAL_SLAVE:
-            case FRAME_TYPE_REPROCESSING_DUAL_MASTER:
-            case FRAME_TYPE_REPROCESSING_DUAL_SLAVE:
-                if (cameraMode  != AA_CAMERAMODE_DUAL_ASYNC) {
-                    flagValid = false;
-                }
-                break;
-            case FRAME_TYPE_PREVIEW_SLAVE:
-            case FRAME_TYPE_REPROCESSING_SLAVE:
-                if (cameraMode  != AA_CAMERAMODE_DUAL_ONE_SENSOR_OFF ||
-                    sensorPlace != AA_SENSORPLACE_REAR_SECOND) {
-                    flagValid = false;
-                }
-                break;
-            default:
-                flagValid = false;
-                break;
-            }
-        }
-    } else {
-        if (cameraMode != AA_CAMERAMODE_SINGLE)
-            flagValid = false;
-
-        if (m_cameraId  == CAMERA_ID_BACK &&
-            sensorPlace != AA_SENSORPLACE_REAR) {
-            flagValid = false;
-        } else if(m_cameraId == CAMERA_ID_FRONT &&
-            sensorPlace != AA_SENSORPLACE_FRONT) {
-            flagValid = false;
-        }
-    }
-
-    if (flagValid == true) {
-        CLOGD("flagValid(%d) [F%d] getDualCameraMode(%d), getBokehMode(%d), frameType(%d), cameraMode(%d), sensorPlace(%d)",
-            flagValid,
-            frame->getFrameCount(),
-            m_configurations->getMode(CONFIGURATION_DUAL_MODE),
-            m_configurations->getBokehBlurStrength(),
-            frameType, cameraMode, sensorPlace);
-    } else {
-        CLOGE("flagValid(%d) [F%d] getDualCameraMode(%d), getBokehMode(%d), frameType(%d), cameraMode(%d), sensorPlace(%d)",
-            flagValid,
-            frame->getFrameCount(),
-            m_configurations->getMode(CONFIGURATION_DUAL_MODE),
-            m_configurations->getBokehBlurStrength(),
-            frameType, cameraMode, sensorPlace);
-    }
-}
-#endif // USE_DUAL_CAMERA
-
 void ExynosCameraMCPipe::m_init(camera_device_info_t *deviceInfo)
 {
     if (deviceInfo != NULL)
@@ -3795,12 +3615,6 @@ void ExynosCameraMCPipe::m_init(camera_device_info_t *deviceInfo)
 
     m_lastFrameCount = 0;
     m_lastMetaFrameCount = 0;
-
-    m_oldCameraMode2Meta = AA_CAMERAMODE_SINGLE;
-    m_oldSensorPlace2Meta = AA_SENSORPLACE_REAR;
-
-    m_oldMeta2CameraMode = AA_CAMERAMODE_SINGLE;
-    m_oldMeta2SensorPlace = AA_SENSORPLACE_REAR;
 }
 
 status_t ExynosCameraMCPipe::m_createSensorNode(int32_t *sensorIds)

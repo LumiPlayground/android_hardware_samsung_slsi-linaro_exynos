@@ -22,6 +22,10 @@
 #include "ExynosCameraInterface.h"
 #include "ExynosCameraAutoTimer.h"
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraVendorTags.h"
+#endif
+
 namespace android {
 
 static int HAL_camera_device_open(
@@ -559,7 +563,7 @@ char *HAL_camera_device_get_parameters(struct camera_device *dev)
     CameraParameters parms = obj(dev)->getParameters();
     str = parms.flatten();
 #endif
-    return strdup(str.string());
+    return strdup(str.c_str());
 }
 
 static void HAL_camera_device_put_parameters(

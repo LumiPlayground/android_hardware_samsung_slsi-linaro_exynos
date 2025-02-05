@@ -235,17 +235,17 @@ static int VIDEO_SIZE_LUT_3M3[][SIZE_OF_LUT] =
 {
     /* Binning   = OFF
        BNS ratio = 1.0
-       BDS       = 1080p */
+       BDS       = 1440p */
 
-    /* 16:9 (Single) */
+    /* 16:9 (Single, Dual) */
     { SIZE_RATIO_16_9,
      (4032 + 0) ,(2268 + 0) ,   /* [sensor ] */
       4032      , 2268      ,   /* [bns    ] */
       4032      , 2268      ,   /* [bcrop  ] */
-      2688      , 1512      ,   /* [bds    ] *//* UHD (3840x2160) special handling in ExynosCameraParameters class */
+      2688      , 1512      ,   /* [bds    ] */
       1920      , 1080      ,   /* [target ] */
     },
-    /* 4:3 (Single) */
+    /* 4:3 (Single, Dual) */
     { SIZE_RATIO_4_3,
      (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
       4032      , 3024      ,   /* [bns    ] */
@@ -261,7 +261,7 @@ static int VIDEO_SIZE_LUT_3M3[][SIZE_OF_LUT] =
       2016      , 2016      ,   /* [bds    ] */
       1080      , 1080      ,   /* [target ] */
     },
-    /* 3:2 (Single) */
+    /* 3:2 (Single, Dual) */
     { SIZE_RATIO_3_2,
      (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
       4032      , 3024      ,   /* [bns    ] */
@@ -269,7 +269,7 @@ static int VIDEO_SIZE_LUT_3M3[][SIZE_OF_LUT] =
       2688      , 1792      ,   /* [bds    ] */
       1616      , 1080      ,   /* [target ] */
     },
-    /* 5:4 (Single) */
+    /* 5:4 (Single, Dual) */
     { SIZE_RATIO_5_4,
      (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
       4032      , 3024      ,   /* [bns    ] */
@@ -277,7 +277,7 @@ static int VIDEO_SIZE_LUT_3M3[][SIZE_OF_LUT] =
       2480      , 1984      ,   /* [bds    ] */
       1344      , 1080      ,   /* [target ] */
     },
-    /* 5:3 (Single) */
+    /* 5:3 (Single, Dual) */
     { SIZE_RATIO_5_3,
      (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
       4032      , 3024      ,   /* [bns    ] */
@@ -285,13 +285,21 @@ static int VIDEO_SIZE_LUT_3M3[][SIZE_OF_LUT] =
       2640      , 1584      ,   /* [bds    ] */
       1792      , 1080      ,   /* [target ] */
     },
-    /* 11:9 (Single) */
+    /* 11:9 (Single, Dual) */
     { SIZE_RATIO_11_9,
      (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
       4032      , 3024      ,   /* [bns    ] */
       3696      , 3024      ,   /* [bcrop  ] */
       2464      , 2016      ,   /* [bds    ] */
       1312      , 1080      ,   /* [target ] */
+    },
+    /* 18.5:9 (Single, Dual) */
+    { SIZE_RATIO_18P5_9,
+     (4032 + 0) ,(1960 + 0) ,	/* [sensor ] */
+      4032      , 1960      ,	/* [bns    ] */
+      4032      , 1960      ,	/* [bcrop  ] */
+      2688      , 1306      ,	/* [bds    ] */
+      2224      , 1080      ,	/* [target ] */
     }
 };
 
@@ -640,6 +648,7 @@ static int S5K3M3_FPS_RANGE_LIST[][2] =
     //{   7000,   7000},
     {  15000,  15000},
     {  10000,  24000},
+    {  15000,  24000},
     {  24000,  24000},
     //{   4000,  30000},
     {   7000,  30000},
@@ -659,7 +668,11 @@ static int S5K3M3_HIGH_SPEED_VIDEO_FPS_RANGE_LIST[][2] =
 static int S5K3M3_AVAILABLE_VIDEO_LIST[][7] =
 {
 #ifdef USE_UHD_RECORDING
+#ifdef SAMSUNG_SW_VDIS_UHD_20MARGIN
+    { 3840, 2160, 30000, 30000, 4608, 2592, 600},
+#else
     { 3840, 2160, 30000, 30000, 4032, 2268, 600},
+#endif
 #endif
 #ifdef USE_WQHD_RECORDING
     { 2560, 1440, 30000, 30000, 3072, 1728, 0},
@@ -672,13 +685,6 @@ static int S5K3M3_AVAILABLE_VIDEO_LIST[][7] =
     {  640,  480, 30000, 30000, 0, 0, 0},
     {  320,  240, 30000, 30000, 0, 0, 0},    /* For support the CameraProvider lib of Message app*/
     {  176,  144, 30000, 30000, 0, 0, 0},    /* For support the CameraProvider lib of Message app*/
-};
-
-/* effect fps range */
-static int S5K3M3_EFFECT_FPS_RANGE_LIST[][2] =
-{
-    {  10000,  24000},
-    {  24000,  24000},
 };
 
 static camera_metadata_rational COLOR_MATRIX1_3M3_3X3[] =

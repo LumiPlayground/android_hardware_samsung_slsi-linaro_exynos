@@ -20,7 +20,6 @@
 
 #include <utils/List.h>
 
-#include "ExynosCameraNode.h"
 #include "ExynosCameraParameters.h"
 #include "ExynosCameraSensorInfo.h"
 #include "ExynosCameraBuffer.h"
@@ -43,12 +42,11 @@ namespace android {
 
 /* Frame type for debugging */
 typedef enum FRAME_TYPE {
-    FRAME_TYPE_BASE                     = 0,
-    FRAME_TYPE_OTHERS                   = 1,
-    FRAME_TYPE_PREVIEW                  = 2,
-    FRAME_TYPE_PREVIEW_FRONT            = 3,
-    FRAME_TYPE_REPROCESSING             = 4,
-    FRAME_TYPE_INTERNAL                 = 5,
+    FRAME_TYPE_OTHERS                   = 0,
+    FRAME_TYPE_PREVIEW                  = 1,
+    FRAME_TYPE_PREVIEW_FRONT            = 2,
+    FRAME_TYPE_REPROCESSING             = 3,
+    FRAME_TYPE_INTERNAL                 = 4,
     /*
      * "Transition" means that
      * Master or Slave camera was ready to enter "INTERNAL" mode
@@ -56,8 +54,7 @@ typedef enum FRAME_TYPE {
      * This type is necessary to avoid frame drop
      * by changing from "INTERNAL" to "NORMAL" in opposite camera.
      */
-    FRAME_TYPE_TRANSITION               = 6,
-    FRAME_TYPE_MAX,
+    FRAME_TYPE_TRANSITION               = 5,
 } frame_type_t;
 
 typedef enum entity_type {
@@ -97,13 +94,13 @@ typedef enum entity_buffer_state {
 enum DST_BUFFER_COUNT
 {
     DST_BUFFER_DEFAULT = 0,
-    DST_BUFFER_COUNT_MAX = MAX_NODE, /* this must same with MAX_NODE */
+    DST_BUFFER_COUNT_MAX = 34, /* this must same with MAX_NODE */
 };
 
 enum SRC_BUFFER_COUNT
 {
     SRC_BUFFER_DEFAULT = 0,
-    SRC_BUFFER_COUNT_MAX = OUTPUT_NODE_3, /* this must same with MAX_OUTPUT_NODE */
+    SRC_BUFFER_COUNT_MAX = 5, /* this must same with MAX_OUTPUT_NODE */
 };
 
 /*
@@ -412,8 +409,6 @@ public:
     sync_type_t     getSyncType(void);
     status_t        setSyncType(sync_type_t type);
 
-    int             getCameraId(void);
-
     /* backup for reprocessing */
     void            setReprocessingFrameType(frame_type_t frameType);
     uint32_t        getReprocessingFrameType(void);
@@ -426,8 +421,10 @@ public:
     int             getJpegSize(void);
 
     int64_t         getTimeStamp(uint32_t srcNodeIndex = 0);
+#ifdef  SAMSUNG_TIMESTAMP_BOOT
+    int64_t         getTimeStampBoot(uint32_t srcNodeIndex = 0);
+#endif
     void            getFpsRange(uint32_t *min, uint32_t *max, uint32_t srcNodeIndex = 0);
-    void            setFpsRange(uint32_t min, uint32_t max, uint32_t srcNodeIndex = 0);
 
     void            setIspDone(bool done);
     void            set3aaDrop(bool flag);

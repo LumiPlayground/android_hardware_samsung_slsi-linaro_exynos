@@ -251,6 +251,8 @@ status_t ExynosCameraRequest::m_init()
     m_isSkipCaptureResult = false;
     m_dsInputPortId = MCSC_PORT_NONE;
 
+    m_bvOffset = 0;
+
     return ret;
 }
 
@@ -961,6 +963,11 @@ CameraMetadata ExynosCameraRequest::getShutterMeta()
     __unused uint8_t entry = 1;
     CameraMetadata minimal_resultMeta;
 
+#ifdef SAMSUNG_TN_FEATURE
+    minimal_resultMeta.update(SAMSUNG_ANDROID_CONTROL_SHUTTER_NOTIFICATION, &entry, 1);
+    CLOGV2("SAMSUNG_ANDROID_CONTROL_SHUTTER_NOTIFICATION is (%d)", entry);
+#endif
+
     return minimal_resultMeta;
 }
 
@@ -1202,6 +1209,16 @@ status_t ExynosCameraRequest::setStreamBufferStatus(int streamId, camera3_buffer
 camera3_buffer_status_t ExynosCameraRequest::getStreamBufferStatus(int streamId)
 {
     return m_getStreamBufferStatus(streamId, &m_streamStatusLock);
+}
+
+void ExynosCameraRequest::setBvOffset(uint32_t bvOffset)
+{
+    m_bvOffset = bvOffset;
+}
+
+uint32_t ExynosCameraRequest::getBvOffset(void)
+{
+    return m_bvOffset;
 }
 
 ExynosCameraRequestManager::ExynosCameraRequestManager(int cameraId, ExynosCameraConfigurations *configurations)
@@ -1836,7 +1853,7 @@ status_t ExynosCameraRequestManager::flush()
                 notifyMsg->message.error.frame_number = requestKey;
 
                 if (request->getCallbackDone(EXYNOS_REQUEST_RESULT::CALLBACK_PARTIAL_3AA) == true
-                    || request->getCompleteBufferCount() > 0) {
+                        || (request->getCompleteBufferCount() > 0)) {
                     notifyMsg->message.error.error_code = CAMERA3_MSG_ERROR_RESULT;
                 } else {
                     notifyMsg->message.error.error_code = CAMERA3_MSG_ERROR_REQUEST;
@@ -2236,6 +2253,13 @@ status_t ExynosCameraRequestManager::m_callbackOpsCaptureResult(camera3_capture_
 #endif
 
 #ifdef DEBUG_IRIS_LEAK
+    if (m_cameraId == CAMERA_ID_SECURE) {
+        if (result->num_output_buffers == 1
+            && result->output_buffers[0].status == CAMERA3_BUFFER_STATUS_ERROR)
+            CLOGD("[IRIS_LEAK] R(%d), T(%d) BUF_ERR", result->frame_number, type);
+        else
+            CLOGD("[IRIS_LEAK] R(%d), T(%d)", result->frame_number, type);
+    }
 #endif
 
     TIME_LOGGER_UPDATE(m_cameraId, result->frame_number, result->partial_result, INTERVAL, UPDATE_RESULT, 0);
@@ -2260,6 +2284,10 @@ status_t ExynosCameraRequestManager::m_callbackOpsNotify(camera3_notify_msg_t *m
     status_t ret = NO_ERROR;
 
 #ifdef DEBUG_IRIS_LEAK
+    if (m_cameraId == CAMERA_ID_SECURE) {
+        CLOGD("[IRIS_LEAK] R(%d), T(%d) E(%d)",
+            msg->message.error.frame_number, msg->type, msg->message.error.error_code);
+    }
 #endif
 
     switch (msg->type) {
@@ -2708,6 +2736,28 @@ bool ExynosCameraRequestManager::m_bufferOnlyCallback(ExynosCameraRequestSP_sprt
     privStreamInfo = static_cast<ExynosCameraStream*>(resultStream->priv);
     privStreamInfo->getID(&resultStreamId);
 
+#ifdef SAMSUNG_TN_FEATURE
+    streamBuffer->stream->stream_timestamp = 0;
+    streamBuffer->stream->minFps = 0;
+    streamBuffer->stream->maxFps = 0;
+    for (int i = 0; i < 4; i++) {
+        streamBuffer->stream->cropInfo[i] = 0;
+    }
+
+    if (result->getStreamTimeStamp() > 0) {
+        streamBuffer->stream->stream_timestamp = result->getStreamTimeStamp();
+        CLOGV("[R%d S%d(%d)] BufferOnlyCallback state(%d) stream_timestamp(%lld)",
+                curRequest->getKey(), resultStreamId, resultStreamId % HAL_STREAM_ID_MAX,
+                curRequest->getCallbackDone(cbType), streamBuffer->stream->stream_timestamp);
+    }
+
+    if (m_configurations->getSamsungCamera() == true) {
+        m_configurations->getPreviewFpsRange(&min_fps, &max_fps);
+        streamBuffer->stream->minFps = min_fps;
+        streamBuffer->stream->maxFps = max_fps;
+    }
+#endif
+
     CLOGV("[R%d S%d(%d)] BufferOnlyCallback state(%d)",
             curRequest->getKey(), resultStreamId, resultStreamId % HAL_STREAM_ID_MAX,
             curRequest->getCallbackDone(cbType));
@@ -2750,7 +2800,6 @@ bool ExynosCameraRequestManager::m_bufferOnlyCallback(ExynosCameraRequestSP_sprt
         CLOGW("[R%d S%d(%d)] BufferOnly result is already sent.",
             curRequest->getKey(), resultStreamId, resultStreamId % HAL_STREAM_ID_MAX);
     }
-
 
     CLOGV("-END-");
 
@@ -2829,22 +2878,46 @@ void ExynosCameraRequestManager::m_adjustFaceDetectMetadata(ExynosCameraRequestS
     }
 
     if (shot_ext->shot.ctl.stats.faceDetectMode > FACEDETECT_MODE_OFF) {
-        if (m_faceDetectMeta.frameCount > shot_ext->shot.dm.request.frameCount) {
+        if (m_faceDetectMeta.frameCount > shot_ext->shot.dm.request.frameCount
+#ifdef USE_DUAL_CAMERA
+            && (m_faceDetectMeta.cameraMode == shot_ext->shot.uctl.cameraMode)
+            && (m_faceDetectMeta.masterCamPosition == shot_ext->shot.uctl.masterCamera)
+#endif
+        ) {
             memcpy(shot_ext->shot.dm.stats.faceIds, m_faceDetectMeta.faceIds, sizeof(m_faceDetectMeta.faceIds));
             memcpy(shot_ext->shot.dm.stats.faceLandmarks, m_faceDetectMeta.faceLandmarks, sizeof(m_faceDetectMeta.faceLandmarks));
             memcpy(shot_ext->shot.dm.stats.faceRectangles, m_faceDetectMeta.faceRectangles, sizeof(m_faceDetectMeta.faceRectangles));
             memcpy(shot_ext->shot.dm.stats.faceScores, m_faceDetectMeta.faceScores, sizeof(m_faceDetectMeta.faceScores));
             m_converter->updateFaceDetectionMetaData(request);
-            CLOGV("[R%d F%d(%d)]Older Meta. Change FaceDetectMeta.",
+
+#ifdef USE_DUAL_CAMERA
+            CLOGV("[R%d F%d(%d/%d) Cam(%d %d/%d %d)]Older Meta. Change FaceDetectMeta.",
                     request->getKey(),
                     request->getFrameCount(),
-                    shot_ext->shot.dm.request.frameCount);
+                    shot_ext->shot.dm.request.frameCount,
+                    m_faceDetectMeta.frameCount,
+                    m_faceDetectMeta.masterCamPosition,
+                    m_faceDetectMeta.cameraMode,
+                    shot_ext->shot.uctl.cameraMode,
+                    shot_ext->shot.uctl.masterCamera);
+#else
+            CLOGV("[R%d F%d(%d/%d)]Older Meta. Change FaceDetectMeta.",
+                    request->getKey(),
+                    request->getFrameCount(),
+                    shot_ext->shot.dm.request.frameCount,
+                    m_faceDetectMeta.frameCount);
+#endif
         } else {
+#ifdef USE_DUAL_CAMERA
+            m_faceDetectMeta.cameraMode = shot_ext->shot.uctl.cameraMode;
+            m_faceDetectMeta.masterCamPosition = shot_ext->shot.uctl.masterCamera;
+#endif
             m_faceDetectMeta.frameCount = shot_ext->shot.dm.request.frameCount;
             memcpy(m_faceDetectMeta.faceIds, shot_ext->shot.dm.stats.faceIds, sizeof(shot_ext->shot.dm.stats.faceIds));
             memcpy(m_faceDetectMeta.faceLandmarks, shot_ext->shot.dm.stats.faceLandmarks, sizeof(shot_ext->shot.dm.stats.faceLandmarks));
             memcpy(m_faceDetectMeta.faceRectangles, shot_ext->shot.dm.stats.faceRectangles, sizeof(shot_ext->shot.dm.stats.faceRectangles));
             memcpy(m_faceDetectMeta.faceScores, shot_ext->shot.dm.stats.faceScores, sizeof(shot_ext->shot.dm.stats.faceScores));
+
             CLOGV("[R%d F%d(%d)]Keep new FaceDetectMeta. %d,%d %dx%d",
                     request->getKey(),
                     request->getFrameCount(),

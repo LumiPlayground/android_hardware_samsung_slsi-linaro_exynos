@@ -17,13 +17,13 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraFrameFactoryPreviewSec"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraFrameFactoryPreview.h"
 
 namespace android {
 
-ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryPreview::createNewFrame(uint32_t frameCount, bool useJpegFlag)
+ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryPreview::createNewFrame(uint32_t frameCount, __unused bool useJpegFlag)
 {
     status_t ret = NO_ERROR;
     ExynosCameraFrameEntity *newEntity[MAX_NUM_PIPES] = {0};
@@ -83,6 +83,23 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryPreview::createNewFrame(uint3
         requestEntityCount++;
     }
 
+#ifdef SAMSUNG_TN_FEATURE
+    /* set PostProcessing pipe to linkageList */
+    pipeId = PIPE_PP_UNI;
+    if (m_request[pipeId] == true) {
+        newEntity[pipeId] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
+        frame->addSiblingEntity(NULL, newEntity[pipeId]);
+        requestEntityCount++;
+    }
+
+    pipeId = PIPE_PP_UNI2;
+    if (m_request[pipeId] == true) {
+        newEntity[pipeId] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
+        frame->addSiblingEntity(NULL, newEntity[pipeId]);
+        requestEntityCount++;
+    }
+#endif
+	
     /* set GDC pipe to linkageList */
     if (m_parameters->getGDCEnabledMode() == true && m_request[PIPE_GDC] == true) {
         pipeId = PIPE_GDC;
@@ -180,6 +197,12 @@ status_t ExynosCameraFrameFactoryPreview::m_setupConfig()
         return ret;
     }
 
+#ifdef SAMSUNG_TN_FEATURE	
+    /* PostProcessing for Preview */
+    m_nodeNums[INDEX(PIPE_PP_UNI)][OUTPUT_NODE] = UNIPLUGIN_NODE_NUM;
+    m_nodeNums[INDEX(PIPE_PP_UNI2)][OUTPUT_NODE] = UNIPLUGIN_NODE_NUM;
+#endif
+	
 #if defined(SUPPORT_HW_GDC)
     /* GDC */
     m_nodeNums[INDEX(PIPE_GDC)][OUTPUT_NODE] = FIMC_IS_VIDEO_GDC_NUM;
@@ -235,6 +258,19 @@ status_t ExynosCameraFrameFactoryPreview::m_constructPipes()
     m_pipes[pipeId]->setPipeId(pipeId);
     m_pipes[pipeId]->setPipeName("PIPE_MCSC");
 
+#ifdef SAMSUNG_TN_FEATURE	
+    /* PostProcessing for Preview */
+    pipeId = PIPE_PP_UNI;
+    m_pipes[pipeId] = (ExynosCameraPipe*)new ExynosCameraPipePP(m_cameraId, m_parameters, m_flagReprocessing, m_nodeNums[pipeId]);
+    m_pipes[pipeId]->setPipeId(pipeId);
+    m_pipes[pipeId]->setPipeName("PIPE_PP_UNI");
+
+    pipeId = PIPE_PP_UNI2;
+    m_pipes[pipeId] = (ExynosCameraPipe*)new ExynosCameraPipePP(m_cameraId, m_parameters, m_flagReprocessing, m_nodeNums[pipeId]);
+    m_pipes[pipeId]->setPipeId(pipeId);
+    m_pipes[pipeId]->setPipeName("PIPE_PP_UNI2");
+#endif
+
 #if defined(SUPPORT_HW_GDC)
     /* GDC */
     pipeId = PIPE_GDC;
@@ -251,10 +287,12 @@ status_t ExynosCameraFrameFactoryPreview::m_constructPipes()
 
 #ifdef SUPPORT_HFD
     /* HFD */
-    pipeId = PIPE_HFD;
-    m_pipes[pipeId] = (ExynosCameraPipe*)new ExynosCameraPipeHFD(m_cameraId, m_parameters, m_flagReprocessing, m_nodeNums[pipeId]);
-    m_pipes[pipeId]->setPipeId(pipeId);
-    m_pipes[pipeId]->setPipeName("PIPE_HFD");
+    if (m_parameters->getHfdMode() == true) {
+        pipeId = PIPE_HFD;
+        m_pipes[pipeId] = (ExynosCameraPipe*)new ExynosCameraPipeHFD(m_cameraId, m_parameters, m_flagReprocessing, m_nodeNums[pipeId]);
+        m_pipes[pipeId]->setPipeId(pipeId);
+        m_pipes[pipeId]->setPipeName("PIPE_HFD");
+    }
 #endif
 
     /* GSC */
@@ -314,11 +352,14 @@ status_t ExynosCameraFrameFactoryPreview::m_initFrameMetadata(ExynosCameraFrameS
     frame->setRequest(PIPE_3AP, m_request[PIPE_3AP]);
     frame->setRequest(PIPE_ISPC, m_request[PIPE_ISPC]);
     frame->setRequest(PIPE_ISPP, m_request[PIPE_ISPP]);
-    frame->setRequest(PIPE_ME,   m_request[PIPE_ME]);
     frame->setRequest(PIPE_MCSC0, m_request[PIPE_MCSC0]);
     frame->setRequest(PIPE_MCSC1, m_request[PIPE_MCSC1]);
     frame->setRequest(PIPE_MCSC2, m_request[PIPE_MCSC2]);
     frame->setRequest(PIPE_GSC, m_request[PIPE_GSC]);
+#ifdef SAMSUNG_TN_FEATURE	
+	frame->setRequest(PIPE_PP_UNI, m_request[PIPE_PP_UNI]);
+    frame->setRequest(PIPE_PP_UNI2, m_request[PIPE_PP_UNI2]);
+#endif
     frame->setRequest(PIPE_GDC, m_request[PIPE_GDC]);
     frame->setRequest(PIPE_MCSC5, m_request[PIPE_MCSC5]);
     frame->setRequest(PIPE_VRA, m_request[PIPE_VRA]);
@@ -350,20 +391,28 @@ status_t ExynosCameraFrameFactoryPreview::m_initFrameMetadata(ExynosCameraFrameS
 void ExynosCameraFrameFactoryPreview::connectScenario(int pipeId, int scenario)
 {
     CLOGV("pipeId(%d), scenario(%d)", pipeId, scenario);
+
+#ifdef SAMSUNG_TN_FEATURE	
+    if (pipeId == PIPE_PP_UNI || pipeId == PIPE_PP_UNI2) {
+        ExynosCameraPipePP *pipe;
+        pipe = (ExynosCameraPipePP *)(m_pipes[INDEX(pipeId)]);
+        pipe->connectScenario(scenario);
+    }
+#endif
 }
 status_t ExynosCameraFrameFactoryPreview::startPipes(void)
 {
     Mutex::Autolock lock(m_sensorStandbyLock);
 
     status_t ret = NO_ERROR;
-    int width = 0, height = 0;
-    uint32_t minfps = 0, maxfps = 0;
 
 #ifdef SUPPORT_HFD
-    ret = m_pipes[PIPE_HFD]->start();
-    if (ret != NO_ERROR) {
-        CLOGE("HFD start fail, ret(%d)", ret);
-        return INVALID_OPERATION;
+    if (m_parameters->getHfdMode() == true) {
+        ret = m_pipes[PIPE_HFD]->start();
+        if (ret != NO_ERROR) {
+            CLOGE("HFD start fail, ret(%d)", ret);
+            return INVALID_OPERATION;
+        }
     }
 #endif
 
@@ -444,8 +493,25 @@ status_t ExynosCameraFrameFactoryPreview::startPipes(void)
         return ret;
     }
 
+#ifdef SAMSUNG_SSRM
+    int width = 0, height = 0;
+    uint32_t minfps = 0, maxfps = 0;
+    struct ssrmCameraInfo cameraInfo;
+    memset(&cameraInfo, 0, sizeof(cameraInfo));
+
     m_parameters->getMaxYuvSize(&width, &height);
     m_parameters->getPreviewFpsRange(&minfps, &maxfps);
+
+    cameraInfo.operation = SSRM_CAMERA_INFO_SET;
+    cameraInfo.cameraId = m_cameraId;
+    cameraInfo.width = width;
+    cameraInfo.height = height;
+    cameraInfo.minFPS = (int)minfps;
+    cameraInfo.maxFPS = (int)maxfps;
+    cameraInfo.sensorOn = 1;
+
+    storeSsrmCameraInfo(&cameraInfo);
+#endif
 
     CLOGI("Starting Success!");
 
@@ -516,7 +582,8 @@ status_t ExynosCameraFrameFactoryPreview::stopPipes(void)
     }
 
 #ifdef SUPPORT_HFD
-    if (m_pipes[PIPE_HFD]->isThreadRunning() == true) {
+    if (m_parameters->getHfdMode() == true
+        && m_pipes[PIPE_HFD]->isThreadRunning() == true) {
         ret = m_pipes[PIPE_HFD]->stopThread();
         if (ret != NO_ERROR) {
             CLOGE("PIPE_HFD stopThread fail, ret(%d)", ret);
@@ -623,10 +690,12 @@ status_t ExynosCameraFrameFactoryPreview::stopPipes(void)
     }
 
 #ifdef SUPPORT_HFD
-    ret = m_pipes[PIPE_HFD]->stop();
-    if (ret != NO_ERROR) {
-        CLOGE("HFD stop fail, ret(%d)", ret);
-        funcRet |= ret;
+    if (m_parameters->getHfdMode() == true) {
+        ret = m_pipes[PIPE_HFD]->stop();
+        if (ret != NO_ERROR) {
+            CLOGE("HFD stop fail, ret(%d)", ret);
+            funcRet |= ret;
+        }
     }
 #endif
 
@@ -650,6 +719,15 @@ status_t ExynosCameraFrameFactoryPreview::stopPipes(void)
         funcRet |= ret;
     }
 
+#ifdef SAMSUNG_SSRM
+    struct ssrmCameraInfo cameraInfo;
+    memset(&cameraInfo, 0, sizeof(cameraInfo));
+
+    cameraInfo.operation = SSRM_CAMERA_INFO_CLEAR;
+    cameraInfo.cameraId = m_cameraId;
+    storeSsrmCameraInfo(&cameraInfo);
+#endif
+
     CLOGI("Stopping  Success!");
 
     return funcRet;
@@ -658,16 +736,48 @@ status_t ExynosCameraFrameFactoryPreview::stopPipes(void)
 void ExynosCameraFrameFactoryPreview::startScenario(int pipeId)
 {
     CLOGD("pipeId(%d)", pipeId);
+
+#ifdef SAMSUNG_TN_FEATURE	
+    if (pipeId == PIPE_PP_UNI || pipeId == PIPE_PP_UNI2) {
+        ExynosCameraPipePP *pipe;
+        pipe = (ExynosCameraPipePP *)(m_pipes[INDEX(pipeId)]);
+        pipe->startScenario();
+    }
+#endif
 }
 
 void ExynosCameraFrameFactoryPreview::stopScenario(int pipeId, bool suspendFlag)
 {
     CLOGD("pipeId(%d), suspendFlag(%d)", pipeId, suspendFlag);
+
+#ifdef SAMSUNG_TN_FEATURE	
+    if (pipeId == PIPE_PP_UNI || pipeId == PIPE_PP_UNI2) {
+        ExynosCameraPipePP *pipe;
+        pipe = (ExynosCameraPipePP *)(m_pipes[INDEX(pipeId)]);
+        pipe->stopScenario(suspendFlag);
+    }
+#endif
 }
 
-int ExynosCameraFrameFactoryPreview::getScenario(int pipeId)
+int ExynosCameraFrameFactoryPreview::getScenario(
+#ifndef SAMSUNG_TN_FEATURE	
+    __unused
+#endif
+    int pipeId)
 {
     int scenario = -1;
+
+#ifdef SAMSUNG_TN_FEATURE	
+    scenario = PP_SCENARIO_NONE;
+
+    if (pipeId == PIPE_PP_UNI || pipeId == PIPE_PP_UNI2) {
+        ExynosCameraPipePP *pipe;
+        pipe = (ExynosCameraPipePP *)(m_pipes[INDEX(pipeId)]);
+        scenario = pipe->getScenario();
+
+        CLOGV("pipeId(%d), scenario(%d)", pipeId, scenario);
+    }
+#endif
 
     return scenario;
 }

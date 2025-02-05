@@ -26,11 +26,6 @@ plugin_subdirs += \
     libVDIS
 endif
 
-ifeq ($(BOARD_CAMERA_USES_HIFI_LLS_CAPTURE), true)
-plugin_subdirs += \
-    libhifills
-endif
-
 # external plugins
 include $(call all-named-subdir-makefiles,$(plugin_subdirs))
 

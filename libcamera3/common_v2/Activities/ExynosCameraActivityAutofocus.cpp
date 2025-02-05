@@ -42,6 +42,9 @@ ExynosCameraActivityAutofocus::ExynosCameraActivityAutofocus(int cameraId) : Exy
     m_metaCtlAFMode = -1;
     m_frameCount = 0;
 
+#ifdef SAMSUNG_DOF
+    m_flagLensMoveStart = false;
+#endif
     m_macroPosition = AUTOFOCUS_MACRO_POSITION_BASE;
 
     m_af_mode_info = 0;
@@ -54,6 +57,10 @@ ExynosCameraActivityAutofocus::ExynosCameraActivityAutofocus(int cameraId) : Exy
     m_af_factory_info = 0;
     m_paf_from_info = 0;
     m_paf_error_code = 0;
+
+#ifdef SAMSUNG_OT
+    memset(&m_OTfocusData, 0, sizeof(UniPluginFocusData_t));
+#endif
 }
 
 ExynosCameraActivityAutofocus::~ExynosCameraActivityAutofocus()

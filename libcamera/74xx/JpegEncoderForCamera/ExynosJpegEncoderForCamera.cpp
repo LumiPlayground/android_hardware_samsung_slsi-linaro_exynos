@@ -25,6 +25,11 @@
 #include "exynos_format.h"
 #include "csc.h"
 
+#ifdef USE_CSC_FEATURE
+#include <cutils/properties.h>
+#include <SecNativeFeature.h>
+#endif
+
 #include "ExynosJpegEncoderForCamera.h"
 
 static const char ExifAsciiPrefix[] = { 0x41, 0x53, 0x43, 0x49, 0x49, 0x0, 0x0, 0x0 };
@@ -432,6 +437,24 @@ int ExynosJpegEncoderForCamera::encode(int *size, exif_attribute_t *exifInfo, ch
         //            __FUNCTION__, exifLen - thumbLen, EXIF_INFO_LIMIT_SIZE);
         }
 
+#ifdef SAMSUNG_DEBUG_MARKER
+        if (debugInfo != NULL && debugInfo->num_of_appmarker > 0) {
+            SecAppMarker *m_debugMarker;
+            char *startDbgAddr = NULL;
+            m_debugMarker = new SecAppMarker;
+            m_debugMarker->setExifStartAddr((char *)exifOut, exifLen);
+            startDbgAddr = debugInfo->debugData[debugInfo->idx[0][0]];
+            m_debugMarker->setDebugStartAddr(startDbgAddr, totalDbgSize);
+            m_debugMarker->pushDebugData((void *)debugInfo);
+            debugOut = m_debugMarker->getResultData();
+            exifLen = m_debugMarker->getResultDataSize();
+            ALOGD("AppMarker exif + debug size = %d", exifLen);
+            memcpy((void *)exifOut, (void *)debugOut, exifLen);
+            m_debugMarker->destroy();
+            delete m_debugMarker;
+            m_debugMarker = NULL;
+        }
+#endif
         ALOGD("DEBUG(%s[%d]):wait JPEG main encoder", __FUNCTION__, __LINE__);
         m_jpegMainEncodeThread->join();
 
@@ -548,7 +571,11 @@ int ExynosJpegEncoderForCamera::makeExif (unsigned char *exifOut,
     /* 2 0th IFD Exif Private Tags */
     pCur = pIfdStart + LongerTagOffest;
 
+#ifdef SAMSUNG_EXIF_SUBSEC_TIME  /* SUBSEC_TIME Tags for non-legacy devices.(CTS Ver2. testJpegExif) */
+    tmp = NUM_0TH_IFD_EXIF;
+#else
     tmp = NUM_0TH_IFD_EXIF - 3;
+#endif
     memcpy(pCur, &tmp, NUM_SIZE);
     pCur += NUM_SIZE;
 
@@ -584,6 +611,14 @@ int ExynosJpegEncoderForCamera::makeExif (unsigned char *exifOut,
                  1, exifInfo->flash);
     writeExifIfd(&pCur, EXIF_TAG_FOCAL_LENGTH, EXIF_TYPE_RATIONAL,
                  1, &exifInfo->focal_length, &LongerTagOffest, pIfdStart);
+#ifdef SAMSUNG_EXIF_SUBSEC_TIME  // Optional Tag : Vague EXIF SPEC
+    writeExifIfd(&pCur, EXIF_TAG_SUBSEC_TIME, EXIF_TYPE_ASCII,
+                 5, exifInfo->sec_time, &LongerTagOffest, pIfdStart);
+    writeExifIfd(&pCur, EXIF_TAG_SUBSEC_TIME_ORIG, EXIF_TYPE_ASCII,
+                 5, exifInfo->sec_time, &LongerTagOffest, pIfdStart);
+    writeExifIfd(&pCur, EXIF_TAG_SUBSEC_TIME_DIG, EXIF_TYPE_ASCII,
+                 5, exifInfo->sec_time, &LongerTagOffest, pIfdStart);
+#endif
     if (exifInfo->maker_note_size > 0) {
         writeExifIfd(&pCur, EXIF_TAG_MAKER_NOTE, EXIF_TYPE_UNDEFINED,
                      exifInfo->maker_note_size, exifInfo->maker_note, &LongerTagOffest, pIfdStart);

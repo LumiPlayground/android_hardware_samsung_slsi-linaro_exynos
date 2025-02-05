@@ -30,7 +30,6 @@
 #include <binder/MemoryBase.h>
 #include <binder/MemoryHeapBase.h>
 #include <hardware/camera.h>
-#include <hardware/gralloc.h>
 #include <camera/Camera.h>
 #include <camera/CameraParameters.h>
 #include <media/hardware/MetadataBufferType.h>
@@ -46,6 +45,12 @@
 #include "ExynosCameraThread.h"
 #include "ExynosCameraFrame.h"
 #include "ExynosCameraList.h"
+
+
+
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraParameters.h"
+#endif
 
 namespace android {
 
@@ -154,7 +159,6 @@ public:
     virtual Mutex*          getLock() = 0;
 
     virtual status_t        execute(ExynosCameraFrameSP_sptr_t inframe, ExynosCameraFrameSP_dptr_t outframe) = 0;
-    virtual status_t        setMargin(int32_t max, int32_t min) = 0;
     virtual status_t        start() = 0;
     virtual status_t        stop() = 0;
     virtual status_t        dump();
@@ -224,7 +228,6 @@ public:
     virtual Mutex*          getLock();
 
     virtual status_t        execute(ExynosCameraFrameSP_sptr_t inframe, ExynosCameraFrameSP_dptr_t outframe);
-    virtual status_t        setMargin(int32_t max, int32_t min);
     virtual status_t        start();
     virtual status_t        stop();
 
@@ -280,7 +283,6 @@ public:
     virtual Mutex*          getLock();
 
     virtual status_t        execute(ExynosCameraFrameSP_sptr_t inframe, ExynosCameraFrameSP_dptr_t outframe);
-    virtual status_t        setMargin(int32_t max, int32_t min);
     virtual status_t        start();
     virtual status_t        stop();
     virtual status_t        dump();

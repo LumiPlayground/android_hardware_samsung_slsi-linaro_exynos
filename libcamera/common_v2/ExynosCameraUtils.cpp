@@ -21,6 +21,8 @@
 
 #include "ExynosCameraUtils.h"
 
+#define ADD_BAYER_BY_NEON
+
 namespace android {
 
 status_t getCropRectAlign(
@@ -522,44 +524,6 @@ ExynosRect2 convertingSrcArea2DstArea(ExynosRect2 *srcRect, const ExynosRect *sr
     return newRect2;
 }
 
-#ifdef GED_DNG
-status_t getMatrixList(String8 &string8Buf, camera_metadata_rational* matrix, int max)
-{
-    char strBuf[32] = {0, };
-
-    if (max < 0) return BAD_VALUE;
-
-    for (int i = 0; i < max; i++) {
-        if (i == 0) {
-            snprintf(strBuf, sizeof(strBuf), "%d,%d", matrix[i].numerator, matrix[i].denominator);
-            string8Buf.append(strBuf);
-        } else {
-            snprintf(strBuf, sizeof(strBuf), ",%d,%d", matrix[i].numerator, matrix[i].denominator);
-            string8Buf.append(strBuf);
-        }
-    }
-
-    return NO_ERROR;
-}
-
-status_t getNeutralColorPointList(String8 &string8Buf, struct rational *neutralColor)
-{
-    char strBuf[32] = {0, };
-
-    for (int i = 0; i < 4; i++) {
-        if (i == 0) {
-            snprintf(strBuf, sizeof(strBuf), "%d,%d", neutralColor[i].num, neutralColor[i].den);
-            string8Buf.append(strBuf);
-        } else {
-            snprintf(strBuf, sizeof(strBuf), ",%d,%d", neutralColor[i].num, neutralColor[i].den);
-            string8Buf.append(strBuf);
-        }
-    }
-
-    return NO_ERROR;
-}
-#endif
-
 status_t getResolutionList(String8 &string8Buf, struct ExynosSensorInfoBase *sensorInfo,
                             int *w, int *h, int mode, int camid)
 {
@@ -625,7 +589,7 @@ status_t getResolutionList(String8 &string8Buf, struct ExynosSensorInfoBase *sen
                 if ((mode == MODE_PICTURE || mode == MODE_THUMBNAIL) &&
                     ((max_w) / 16 > RESOLUTION_LIST[i][0] ||
                      (max_h / 16) > RESOLUTION_LIST[i][1])) {
-                    ALOGI("INFO(%s)skipped: size(%d x %d)",
+                    ALOGI("INFO(%s)skipped : size(%d x %d)",
                         __FUNCTION__, RESOLUTION_LIST[i][0], RESOLUTION_LIST[i][1]);
                     continue;
                 }
@@ -841,6 +805,13 @@ void getMetaCtlCaptureExposureTime(struct camera2_shot_ext *shot_ext, uint32_t *
     *exposureTime = shot_ext->shot.ctl.aa.vendor_captureExposureTime;
 }
 
+#ifdef SUPPORT_DEPTH_MAP
+void setMetaCtlDisparityMode(struct camera2_shot_ext *shot_ext, enum companion_disparity_mode disparity_mode)
+{
+    shot_ext->shot.uctl.companionUd.disparity_mode = disparity_mode;
+}
+#endif
+
 void setMetaCtlWbLevel(struct camera2_shot_ext *shot_ext, int32_t wbLevel)
 {
     shot_ext->shot.ctl.aa.vendor_awbValue = wbLevel;
@@ -850,17 +821,6 @@ void getMetaCtlWbLevel(struct camera2_shot_ext *shot_ext, int32_t *wbLevel)
 {
     *wbLevel = shot_ext->shot.ctl.aa.vendor_awbValue;
 }
-
-#ifdef USE_FW_ZOOMRATIO
-void setMetaCtlZoom(struct camera2_shot_ext *shot_ext, float data)
-{
-    shot_ext->shot.uctl.zoomRatio = data;
-}
-void getMetaCtlZoom(struct camera2_shot_ext *shot_ext, float *data)
-{
-    *data = shot_ext->shot.uctl.zoomRatio;
-}
-#endif
 
 status_t setMetaCtlCropRegion(
         struct camera2_shot_ext *shot_ext,
@@ -1111,6 +1071,21 @@ void setMetaCtlSceneMode(struct camera2_shot_ext *shot_ext, enum aa_mode mode, e
         shot_ext->shot.ctl.edge.strength = default_edge_strength;
         shot_ext->shot.ctl.color.vendor_saturation = 3; /* "3" is default. */
         break;
+#ifdef SAMSUNG_FOOD_MODE
+    case AA_SCENE_MODE_FOOD:
+        shot_ext->shot.ctl.aa.aeMode = AA_AEMODE_MATRIX;
+
+        shot_ext->shot.ctl.aa.awbMode = AA_AWBMODE_WB_AUTO;
+        shot_ext->shot.ctl.aa.vendor_isoMode = AA_ISOMODE_AUTO;
+        shot_ext->shot.ctl.aa.vendor_isoValue = 0;
+        shot_ext->shot.ctl.sensor.sensitivity = 0;
+        shot_ext->shot.ctl.noise.mode = default_noise_mode;
+        shot_ext->shot.ctl.noise.strength = default_noise_strength;
+        shot_ext->shot.ctl.edge.mode = default_edge_mode;
+        shot_ext->shot.ctl.edge.strength = default_edge_strength;
+        shot_ext->shot.ctl.color.vendor_saturation = 3; /* "3" is default. */
+        break;
+#endif
     case AA_SCENE_MODE_AQUA:
         /* set default setting */
         if (shot_ext->shot.ctl.aa.aeMode == AA_AEMODE_OFF)
@@ -1284,16 +1259,6 @@ void getMetaCtlIso(struct camera2_shot_ext *shot_ext, enum aa_isomode *mode, uin
     *iso = shot_ext->shot.ctl.aa.vendor_isoValue;
 }
 
-void setMetaCtlFocusDistance(struct camera2_shot_ext *shot_ext, float distance)
-{
-    shot_ext->shot.ctl.lens.focusDistance = distance;
-}
-
-void getMetaCtlFocusDistance(struct camera2_shot_ext *shot_ext, float *distance)
-{
-    *distance = shot_ext->shot.ctl.lens.focusDistance;
-}
-
 void setMetaCtlFdMode(struct camera2_shot_ext *shot_ext, enum facedetect_mode mode)
 {
     shot_ext->shot.ctl.stats.faceDetectMode = mode;
@@ -1330,6 +1295,30 @@ nsecs_t getMetaDmSensorTimeStamp(struct camera2_shot_ext *shot_ext)
     }
     return shot_ext->shot.dm.sensor.timeStamp;
 }
+
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+status_t setMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext, uint64_t timeStamp)
+{
+    status_t status = NO_ERROR;
+    if (shot_ext == NULL) {
+        ALOGE("ERR(%s[%d]):buffer is NULL", __FUNCTION__, __LINE__);
+        status = INVALID_OPERATION;
+        return status;
+    }
+
+    shot_ext->shot.udm.sensor.timeStampBoot = timeStamp;
+    return status;
+}
+
+nsecs_t getMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext)
+{
+    if (shot_ext == NULL) {
+        ALOGE("ERR(%s[%d]):buffer is NULL", __FUNCTION__, __LINE__);
+        return 0;
+    }
+    return shot_ext->shot.udm.sensor.timeStampBoot;
+}
+#endif
 
 void setMetaNodeLeaderRequest(struct camera2_shot_ext* shot_ext, int value)
 {
@@ -1749,6 +1738,97 @@ int displayExynosBuffer( ExynosCameraBuffer *buffer) {
         return 0;
 }
 
+#ifdef SENSOR_NAME_GET_FROM_FILE
+int getSensorIdFromFile(int camId)
+{
+    FILE *fp = NULL;
+    int numread = -1;
+    char sensor_name[50];
+    int sensorName = -1;
+    bool ret = true;
+
+    if (camId == CAMERA_ID_BACK) {
+        fp = fopen(SENSOR_NAME_PATH_BACK, "r");
+        if (fp == NULL) {
+            ALOGE("ERR(%s[%d]):failed to open sysfs entry", __FUNCTION__, __LINE__);
+            goto err;
+        }
+#if defined(SENSOR_NAME_PATH_SECURE)
+    } else if (camId == CAMERA_ID_SECURE) {
+        fp = fopen(SENSOR_NAME_PATH_SECURE, "r");
+        if (fp == NULL) {
+            ALOGE("ERR(%s[%d]):failed to open sysfs entry", __FUNCTION__, __LINE__);
+            goto err;
+        }
+#endif
+    } else {
+        fp = fopen(SENSOR_NAME_PATH_FRONT, "r");
+        if (fp == NULL) {
+            ALOGE("ERR(%s[%d]):failed to open sysfs entry", __FUNCTION__, __LINE__);
+            goto err;
+        }
+    }
+
+    if (fgets(sensor_name, sizeof(sensor_name), fp) == NULL) {
+        ALOGE("ERR(%s[%d]):failed to read sysfs entry", __FUNCTION__, __LINE__);
+	    goto err;
+    }
+
+    numread = strlen(sensor_name);
+    ALOGD("DEBUG(%s[%d]):Sensor name is %s(%d)", __FUNCTION__, __LINE__, sensor_name, numread);
+
+    /* TODO: strncmp for check sensor name, str is vendor specific sensor name
+     * ex)
+     *    if (strncmp((const char*)sensor_name, "str", numread - 1) == 0) {
+     *        sensorName = SENSOR_NAME_IMX135;
+     *    }
+     */
+    sensorName = atoi(sensor_name);
+
+err:
+    if (fp != NULL)
+        fclose(fp);
+
+    return sensorName;
+}
+#endif
+
+#ifdef SENSOR_FW_GET_FROM_FILE
+const char *getSensorFWFromFile(struct ExynosSensorInfoBase *info, int camId)
+{
+    FILE *fp = NULL;
+    int numread = -1;
+
+    if (camId == CAMERA_ID_BACK) {
+        fp = fopen(SENSOR_FW_PATH_BACK, "r");
+        if (fp == NULL) {
+            ALOGE("ERR(%s[%d]):failed to open sysfs entry", __FUNCTION__, __LINE__);
+            goto err;
+        }
+    } else {
+        fp = fopen(SENSOR_FW_PATH_FRONT, "r");
+        if (fp == NULL) {
+            ALOGE("ERR(%s[%d]):failed to open sysfs entry", __FUNCTION__, __LINE__);
+            goto err;
+        }
+    }
+    if (fgets(info->sensor_fw, sizeof(info->sensor_fw), fp) == NULL) {
+        ALOGE("ERR(%s[%d]):failed to read sysfs entry", __FUNCTION__, __LINE__);
+	    goto err;
+    }
+
+    numread = strlen(info->sensor_fw);
+    ALOGD("DEBUG(%s[%d]):Sensor fw is %s(%d)", __FUNCTION__, __LINE__, info->sensor_fw, numread);
+
+err:
+    if (fp != NULL)
+        fclose(fp);
+
+    return (const char *)info->sensor_fw;
+}
+#endif
+
+
 int checkBit(unsigned int *target, int index)
 {
     int ret = 0;
@@ -1793,11 +1873,6 @@ status_t addBayerBuffer(struct ExynosCameraBuffer *srcBuf,
                         bool isPacked)
 {
     status_t ret = NO_ERROR;
-
-    if (srcBuf == NULL) {
-        ALOGE("ERR(%s[%d]):srcBuf == NULL",  __FUNCTION__, __LINE__);
-        return BAD_VALUE;
-    }
 
     if (srcBuf == NULL) {
         ALOGE("ERR(%s[%d]):srcBuf == NULL",  __FUNCTION__, __LINE__);
@@ -1871,19 +1946,19 @@ status_t addBayerBufferByNeon(struct ExynosCameraBuffer *srcBuf,
     src1_ptr = srcAddr;
 
     for (unsigned int i = 0; i < realCopySize; i++) {
-        src0_u16x8_0 = vqaddq_u16(vshlq_n_u16(vld1q_u16((uint16_t*)(src0_ptr)), 4),
-                vshlq_n_u16(vld1q_u16((uint16_t*)(src1_ptr)), 4));
-        src0_u16x8_1 = vqaddq_u16(vshlq_n_u16(vld1q_u16((uint16_t*)(src0_ptr + 8)), 4),
-                vshlq_n_u16(vld1q_u16((uint16_t*)(src1_ptr + 8)), 4));
-        src0_u16x8_2 = vqaddq_u16(vshlq_n_u16(vld1q_u16((uint16_t*)(src0_ptr + 16)), 4),
-                vshlq_n_u16(vld1q_u16((uint16_t*)(src1_ptr + 16)), 4));
-        src0_u16x8_3 = vqaddq_u16(vshlq_n_u16(vld1q_u16((uint16_t*)(src0_ptr + 24)), 4),
-                vshlq_n_u16(vld1q_u16((uint16_t*)(src1_ptr + 24)), 4));
+        src0_u16x8_0 = vqaddq_u16(vshlq_n_u16(vld1q_u16((uint16_t*)(src0_ptr)), 6),
+                vshlq_n_u16(vld1q_u16((uint16_t*)(src1_ptr)), 6));
+        src0_u16x8_1 = vqaddq_u16(vshlq_n_u16(vld1q_u16((uint16_t*)(src0_ptr + 8)), 6),
+                vshlq_n_u16(vld1q_u16((uint16_t*)(src1_ptr + 8)), 6));
+        src0_u16x8_2 = vqaddq_u16(vshlq_n_u16(vld1q_u16((uint16_t*)(src0_ptr + 16)), 6),
+                vshlq_n_u16(vld1q_u16((uint16_t*)(src1_ptr + 16)), 6));
+        src0_u16x8_3 = vqaddq_u16(vshlq_n_u16(vld1q_u16((uint16_t*)(src0_ptr + 24)), 6),
+                vshlq_n_u16(vld1q_u16((uint16_t*)(src1_ptr + 24)), 6));
 
-        vst1q_u16((src0_ptr), vshrq_n_u16(src0_u16x8_0, 4));
-        vst1q_u16((src0_ptr + 8), vshrq_n_u16(src0_u16x8_1, 4));
-        vst1q_u16((src0_ptr + 16),vshrq_n_u16(src0_u16x8_2, 4));
-        vst1q_u16((src0_ptr + 24),vshrq_n_u16(src0_u16x8_3, 4));
+        vst1q_u16((src0_ptr), vshrq_n_u16(src0_u16x8_0, 6));
+        vst1q_u16((src0_ptr + 8), vshrq_n_u16(src0_u16x8_1, 6));
+        vst1q_u16((src0_ptr + 16),vshrq_n_u16(src0_u16x8_2, 6));
+        vst1q_u16((src0_ptr + 24),vshrq_n_u16(src0_u16x8_3, 6));
 
         src0_ptr = firstDstAddr + (alignShort * (i + 1));
         src1_ptr = firstSrcAddr + (alignShort * (i + 1));
@@ -2228,76 +2303,5 @@ void checkAndroidVersion(void) {
     else
         ALOGI("Andorid build version release %s", value);
 }
-
-bool isDualCameraMode(int cameraId)
-{
-    bool flagDualCameraMode = false;
-
-    int cameraId_0 = -1;
-    int cameraId_1 = -1;
-
-    getDualCameraId(&cameraId_0, &cameraId_1);
-
-    if (0 <= cameraId_0 && 0 <= cameraId_1) {
-        if (cameraId == cameraId_0)
-            flagDualCameraMode = true;
-        else if (cameraId == cameraId_1)
-            flagDualCameraMode = true;
-        else
-            flagDualCameraMode = false;
-    }
-
-    return flagDualCameraMode;
-}
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-status_t convertExynosCameraToSFLBuffer(ExynosCameraBuffer *inputBuf, int pixelFormat, int width, int height, SFLBuffer *outputBuf)
-{
-    status_t ret = NO_ERROR;
-
-    outputBuf->pixelFormat = pixelFormat;
-    outputBuf->width = width;
-    outputBuf->height = height;
-
-    switch (pixelFormat) {
-        case V4L2_PIX_FMT_NV21:
-            outputBuf->plane[0] = inputBuf->addr[0];
-            outputBuf->plane[1] = outputBuf->plane[0] + (width * height);
-            outputBuf->plane[2] = 0;
-            outputBuf->size[0] = 0;
-            outputBuf->size[1] = width * height;
-            outputBuf->size[2] = width * height / 2;
-            outputBuf->stride[0] = width;
-            outputBuf->stride[1] = width;
-            outputBuf->stride[2] = width;
-            outputBuf->buffer = *inputBuf;
-        break;
-        case V4L2_PIX_FMT_NV21M:
-            outputBuf->plane[0] = inputBuf->addr[0];
-            outputBuf->plane[1] = inputBuf->addr[1];
-            outputBuf->plane[2] = 0;
-            outputBuf->size[0] = width * height;
-            outputBuf->size[1] = width * height / 2;
-            outputBuf->size[2] = 0;
-            outputBuf->stride[0] = width;
-            outputBuf->stride[1] = width;
-            outputBuf->stride[2] = width;
-            outputBuf->buffer = *inputBuf;
-        break;
-        default:
-            ALOGE("ERR(%s[%d]):pixelFormat not supported", __FUNCTION__, __LINE__);
-            ret = BAD_VALUE;
-    }
-
-    return ret;
-}
-
-void makeSFLCommand(CommandInfo* commandInfo, SFL::Command cmd, SFL::BufferType type, SFL::BufferPos pos)
-{
-    commandInfo->cmd  = cmd;
-    commandInfo->type = type;
-    commandInfo->pos  = pos;
-}
-#endif
 
 }; /* namespace android */

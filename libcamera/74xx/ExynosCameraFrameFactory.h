@@ -60,6 +60,10 @@ public:
     virtual ~ExynosCameraFrameFactory();
 
     virtual status_t        create(bool active = true) = 0;
+#ifdef SAMSUNG_COMPANION
+    virtual status_t        precreate(void);
+    virtual status_t        postcreate(void);
+#endif
 
     virtual status_t        setFrameManager(ExynosCameraFrameManager *manager);
     virtual status_t        getFrameManager(ExynosCameraFrameManager **manager);

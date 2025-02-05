@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraFrameReprocessingFactory"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraFrameReprocessingFactory.h"
 
@@ -104,7 +104,6 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
     struct ExynosConfigInfo *config = m_parameters->getConfig();
     int perFramePos = 0;
     int yuvIndex = -1;
-    bool supportJpeg = false;
 
     memset(&nullPipeInfo, 0, sizeof(camera_pipe_info_t));
 
@@ -135,7 +134,11 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
         yuvFormat[yuvIndex] = m_parameters->getYuvFormat(i);
 
         if (m_parameters->getYuvStallPort() == yuvIndex) {
-            if ((yuvWidth[yuvIndex] == 0 && yuvHeight[yuvIndex] == 0)) {
+            if ((yuvWidth[yuvIndex] == 0 && yuvHeight[yuvIndex] == 0)
+#ifdef SAMSUNG_HIFI_CAPTURE
+                || (m_parameters->getLLSOn() == true)
+#endif
+            ) {
                 m_parameters->getMaxPictureSize(&yuvWidth[yuvIndex], &yuvHeight[yuvIndex]);
                 yuvFormat[yuvIndex] = V4L2_PIX_FMT_NV21;
             }
@@ -348,112 +351,94 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
         SET_OUTPUT_DEVICE_BASIC_INFO(mcscPerframeInfoIndex);
     }
 
-    switch (m_parameters->getNumOfMcscOutputPorts()) {
-    case 5:
-        supportJpeg = true;
+    /* MCSC0 */
+    nodeType = getNodeType(PIPE_MCSC0_REPROCESSING);
+    perFramePos = PERFRAME_REPROCESSING_MCSC0_POS;
+    yuvIndex = ExynosCameraParameters::YUV_STALL_0 % ExynosCameraParameters::YUV_MAX;
 
-        /* Jpeg Main */
-        nodeType = getNodeType(PIPE_MCSC_THUMB_REPROCESSING);
-        perFramePos = PERFRAME_REPROCESSING_MCSC_THUMB_POS;
+    /* set v4l2 buffer size */
+    tempRect.fullW = yuvWidth[yuvIndex];
+    tempRect.fullH = yuvHeight[yuvIndex];
+    tempRect.colorFormat = yuvFormat[yuvIndex];
 
-        /* set v4l2 buffer size */
-        tempRect.fullW = maxThumbnailW;
-        tempRect.fullH = maxThumbnailH;
-        tempRect.colorFormat = pictureFormat;
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
+    /* pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW; */
 
-        /* set YUV pixel size */
-        pipeInfo[nodeType].pixelSize = picturePixelSize;
+    /* Set capture node default info */
+    SET_CAPTURE_DEVICE_BASIC_INFO();
 
-        /* set v4l2 video node buffer count */
-        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_reprocessing_buffers;
+    /* MCSC1 */
+    nodeType = getNodeType(PIPE_MCSC1_REPROCESSING);
+    perFramePos = PERFRAME_REPROCESSING_MCSC1_POS;
+    yuvIndex = ExynosCameraParameters::YUV_STALL_1 % ExynosCameraParameters::YUV_MAX;
 
-        /* Set capture node default info */
-        SET_CAPTURE_DEVICE_BASIC_INFO();
+    /* set v4l2 buffer size */
+    tempRect.fullW = yuvWidth[yuvIndex];
+    tempRect.fullH = yuvHeight[yuvIndex];
+    tempRect.colorFormat = yuvFormat[yuvIndex];
 
-        /* Jpeg Thumbnail */
-        nodeType = getNodeType(PIPE_MCSC_JPEG_REPROCESSING);
-        perFramePos = PERFRAME_REPROCESSING_MCSC_JPEG_POS;
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
+    /* pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW; */
 
-        /* set v4l2 buffer size */
-        tempRect.fullW = hwPictureW;
-        tempRect.fullH = hwPictureH;
-        tempRect.colorFormat = pictureFormat;
+    /* Set capture node default info */
+    SET_CAPTURE_DEVICE_BASIC_INFO();
 
-        /* set YUV pixel size */
-        pipeInfo[nodeType].pixelSize = picturePixelSize;
+    /* MCSC2 */
+    nodeType = getNodeType(PIPE_MCSC2_REPROCESSING);
+    perFramePos = PERFRAME_REPROCESSING_MCSC2_POS;
+    yuvIndex = ExynosCameraParameters::YUV_STALL_2 % ExynosCameraParameters::YUV_MAX;
 
-        /* set v4l2 video node buffer count */
-        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_reprocessing_buffers;
+    /* set v4l2 buffer size */
+    tempRect.fullW = yuvWidth[yuvIndex];
+    tempRect.fullH = yuvHeight[yuvIndex];
+    tempRect.colorFormat = yuvFormat[yuvIndex];
 
-        /* Set capture node default info */
-        SET_CAPTURE_DEVICE_BASIC_INFO();
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
+    /* pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW; */
 
-        /* Not break; */
-    case 3:
-        /*
-         * If the number of output was lower than 5,
-         * try to use another reprocessing factory for jpeg
-         * to support full device
-         */
-        /* MCSC2 */
-        nodeType = getNodeType(PIPE_MCSC2_REPROCESSING);
-        perFramePos = PERFRAME_REPROCESSING_MCSC2_POS;
-        yuvIndex = ExynosCameraParameters::YUV_STALL_2 % ExynosCameraParameters::YUV_MAX;
+    /* Set capture node default info */
+    SET_CAPTURE_DEVICE_BASIC_INFO();
 
-        /* set v4l2 buffer size */
-        tempRect.fullW = yuvWidth[yuvIndex];
-        tempRect.fullH = yuvHeight[yuvIndex];
-        tempRect.colorFormat = yuvFormat[yuvIndex];
+    /* MCSC3 */
+    nodeType = getNodeType(PIPE_MCSC3_REPROCESSING);
+    perFramePos = PERFRAME_REPROCESSING_MCSC3_POS;
 
-        /* set v4l2 video node buffer count */
-        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
-        /* pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW; */
+    /* set v4l2 buffer size */
+    tempRect.fullW = hwPictureW;
+    tempRect.fullH = hwPictureH;
+    tempRect.colorFormat = pictureFormat;
 
-        /* Set capture node default info */
-        SET_CAPTURE_DEVICE_BASIC_INFO();
+    /* set YUV pixel size */
+    pipeInfo[nodeType].pixelSize = picturePixelSize;
 
-        /* MCSC1 */
-        nodeType = getNodeType(PIPE_MCSC1_REPROCESSING);
-        perFramePos = PERFRAME_REPROCESSING_MCSC1_POS;
-        yuvIndex = ExynosCameraParameters::YUV_STALL_1 % ExynosCameraParameters::YUV_MAX;
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_reprocessing_buffers;
 
-        /* set v4l2 buffer size */
-        tempRect.fullW = yuvWidth[yuvIndex];
-        tempRect.fullH = yuvHeight[yuvIndex];
-        tempRect.colorFormat = yuvFormat[yuvIndex];
+    /* Set capture node default info */
+    SET_CAPTURE_DEVICE_BASIC_INFO();
 
-        /* set v4l2 video node buffer count */
-        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
-        /* pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW; */
+    /* MCSC4 */
+    nodeType = getNodeType(PIPE_MCSC4_REPROCESSING);
+    perFramePos = PERFRAME_REPROCESSING_MCSC4_POS;
 
-        /* Set capture node default info */
-        SET_CAPTURE_DEVICE_BASIC_INFO();
+    /* set v4l2 buffer size */
+    tempRect.fullW = maxThumbnailW;
+    tempRect.fullH = maxThumbnailH;
+    tempRect.colorFormat = pictureFormat;
 
-        /* Not break; */
-    case 1:
-        /* MCSC0 */
-        nodeType = getNodeType(PIPE_MCSC0_REPROCESSING);
-        perFramePos = PERFRAME_REPROCESSING_MCSC0_POS;
-        yuvIndex = ExynosCameraParameters::YUV_STALL_0 % ExynosCameraParameters::YUV_MAX;
+    /* set YUV pixel size */
+    pipeInfo[nodeType].pixelSize = picturePixelSize;
 
-        /* set v4l2 buffer size */
-        tempRect.fullW = yuvWidth[yuvIndex];
-        tempRect.fullH = yuvHeight[yuvIndex];
-        tempRect.colorFormat = yuvFormat[yuvIndex];
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_reprocessing_buffers;
 
-        /* set v4l2 video node buffer count */
-        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
-        /* pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW; */
+    /* Set capture node default info */
+    SET_CAPTURE_DEVICE_BASIC_INFO();
 
-        /* Set capture node default info */
-        SET_CAPTURE_DEVICE_BASIC_INFO();
-        break;
-    default:
-        CLOG_ASSERT("invalid MCSC output(%d)", m_parameters->getNumOfMcscOutputPorts());
-        break;
-    }
-
-    if (supportJpeg == true && m_flagHWFCEnabled == true) {
+    if (m_flagHWFCEnabled == true) {
 #ifdef SUPPORT_HWFC_SERIALIZATION
         /* Do serialized Q/DQ operation to guarantee the H/W flow control sequence limitation */
         m_pipes[INDEX(pipeId)]->needSerialization(true);
@@ -777,8 +762,6 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
 
 status_t ExynosCameraFrameReprocessingFactory::startInitialThreads(void)
 {
-    status_t ret = NO_ERROR;
-
     CLOGI("start pre-ordered initial pipe thread");
 
     return NO_ERROR;
@@ -831,6 +814,12 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
         m_parameters->getHwYuvSize(&yuvWidth[yuvIndex], &yuvHeight[yuvIndex], i);
         yuvFormat[yuvIndex] = m_parameters->getYuvFormat(i);
     }
+
+#ifdef SAMSUNG_HIFI_CAPTURE
+    if (m_parameters->getHiFiCatureEnable()) {
+        zoomRatio = 1.0f;
+    }
+#endif
 
     memset(&node_group_info_3aa, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_isp, 0x0, sizeof(camera2_node_group));
@@ -917,19 +906,17 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
         node_group_info_temp->capture[perframePosition].pixelformat = yuvFormat[yuvIndex];
         perframePosition++;
 
-        if (m_parameters->getNumOfMcscOutputPorts() > 3) {
-            nodePipeId = PIPE_MCSC_JPEG_REPROCESSING;
-            node_group_info_temp->capture[perframePosition].request = m_request[INDEX(nodePipeId)];
-            node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
-            node_group_info_temp->capture[perframePosition].pixelformat = m_parameters->getHwPictureFormat();
-            perframePosition++;
+        nodePipeId = PIPE_MCSC3_REPROCESSING;
+        node_group_info_temp->capture[perframePosition].request = m_request[INDEX(nodePipeId)];
+        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
+        node_group_info_temp->capture[perframePosition].pixelformat = m_parameters->getHwPictureFormat();
+        perframePosition++;
 
-            nodePipeId = PIPE_MCSC_THUMB_REPROCESSING;
-            node_group_info_temp->capture[perframePosition].request = m_request[INDEX(nodePipeId)];
-            node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
-            node_group_info_temp->capture[perframePosition].pixelformat = m_parameters->getHwPictureFormat();
-            perframePosition++;
-        }
+        nodePipeId = PIPE_MCSC4_REPROCESSING;
+        node_group_info_temp->capture[perframePosition].request = m_request[INDEX(nodePipeId)];
+        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
+        node_group_info_temp->capture[perframePosition].pixelformat = m_parameters->getHwPictureFormat();
+        perframePosition++;
 
         nodePipeId = PIPE_MCSC5_REPROCESSING;
         node_group_info_temp->capture[perframePosition].request = m_request[INDEX(nodePipeId)];

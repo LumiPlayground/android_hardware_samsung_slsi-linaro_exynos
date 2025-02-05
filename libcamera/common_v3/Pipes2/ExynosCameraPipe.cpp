@@ -392,11 +392,8 @@ status_t ExynosCameraPipe::startThread(void)
 
 status_t ExynosCameraPipe::stopThread(void)
 {
-    if (m_mainThread != NULL)
-        m_mainThread->requestExit();
-
-    if (m_inputFrameQ != NULL)
-        m_inputFrameQ->sendCmd(WAKE_UP);
+    m_mainThread->requestExit();
+    m_inputFrameQ->sendCmd(WAKE_UP);
 
     m_dumpRunningFrameList();
 
@@ -414,9 +411,6 @@ status_t ExynosCameraPipe::stopThreadAndWait(int sleep, int times)
     status_t status = NO_ERROR;
     int i = 0;
 
-    if (m_mainThread == NULL)
-        goto done;
-
     for (i = 0; i < times ; i++) {
         if (m_mainThread->isRunning() == false) {
             break;
@@ -424,7 +418,6 @@ status_t ExynosCameraPipe::stopThreadAndWait(int sleep, int times)
         usleep(sleep * 1000);
     }
 
-done:
     if (i >= times) {
         status = TIMED_OUT;
         CLOGE(" stopThreadAndWait failed, waitTime(%d)ms", sleep*times);
@@ -990,9 +983,6 @@ status_t ExynosCameraPipe::setBoosting(bool isBoosting)
 
 bool ExynosCameraPipe::isThreadRunning()
 {
-    if (m_mainThread == NULL)
-        return false;
-
     return m_mainThread->isRunning();
 }
 
@@ -1152,7 +1142,7 @@ status_t ExynosCameraPipe::m_putBuffer(void)
                       * condition 1 : it is not reprocessing
                       * condition 2 : if it is reprocessing, but m_timeLogCount is equals or lower than 0
                       */
-            if (!(m_parameters->isReprocessingCapture() == true && m_timeLogCount <= 0)) {
+            if (!(m_parameters->isReprocessing() == true && m_timeLogCount <= 0)) {
                 m_timeLogCount--;
 #endif
             CLOGW("wait timeout");
@@ -1475,7 +1465,19 @@ status_t ExynosCameraPipe::m_setInput(ExynosCameraNode *nodes[], int32_t *nodeNu
             CLOGD(" setInput(sensorIds : %d)",
                  sensorIds[i]);
 #endif
+#ifdef SAMSUNG_QUICK_SWITCH
+            if (nodeNums[1] == FIMC_IS_VIDEO_SS4_NUM || nodeNums[1] == FIMC_IS_VIDEO_SS5_NUM) {
+                if (m_parameters->getQuickSwitchCmd() == QUICK_SWITCH_CMD_IDLE_TO_STBY) {
+                    ret = nodes[i]->setInput(sensorIds[i] | (SENSOR_SCENARIO_STANDBY << SCENARIO_SHIFT));
+                } else {
+                    /* Skip the setInput for this node in the switching case */
+                }
+            } else {
+                ret = nodes[i]->setInput(sensorIds[i]);
+            }
+#else
             ret = nodes[i]->setInput(sensorIds[i]);
+#endif
             if (ret < 0) {
                 CLOGE(" nodeNums[%d] : %d, setInput(sensorIds : %d fail, ret(%d)",
                          i, nodeNums[i], sensorIds[i],
@@ -1632,7 +1634,15 @@ status_t ExynosCameraPipe::m_setNodeInfo(ExynosCameraNode *node, camera_pipe_inf
                             (enum v4l2_memory)pipeInfos->bufInfo.memory);
 
         if (flagValidSetFormatInfo == true) {
-#if defined(DEBUG_RAWDUMP)
+#ifdef SAMSUNG_DNG
+            if (m_parameters->getDNGCaptureModeOn() && getPipeId() == PIPE_FLITE) {
+                CLOGV(" DNG flite node->setFormat() getPipeId()(%d)",getPipeId());
+                if (node->setFormat() != NO_ERROR) {
+                    CLOGE(" node->setFormat() fail");
+                    return INVALID_OPERATION;
+                }
+            } else
+#elif defined(DEBUG_RAWDUMP)
             if (m_parameters->checkBayerDumpEnable() && flagBayer == true) {
                 //bytesPerLine[0] = (maxW + 16) * 2;
                 if (node->setFormat() != NO_ERROR) {
@@ -2013,12 +2023,17 @@ status_t ExynosCameraPipe::m_handleInvalidFrame(int index, ExynosCameraFrameSP_s
     return ret;
 }
 
+bool ExynosCameraPipe::m_isReprocessing(void)
+{
+    return m_reprocessing == 1 ? true : false;
+}
+
 bool ExynosCameraPipe::m_checkThreadLoop(void)
 {
     Mutex::Autolock lock(m_pipeframeLock);
     bool loop = false;
 
-    if (m_reprocessing == false)
+    if (m_isReprocessing() == false)
         loop = true;
 
     if (m_inputFrameQ->getSizeOfProcessQ() > 0)
@@ -2046,7 +2061,7 @@ void ExynosCameraPipe::m_init(void)
 
     m_pipeId = 0;
     m_cameraId = -1;
-    m_reprocessing = false;
+    m_reprocessing = 0;
     m_oneShotMode = false;
 
     m_parameters = NULL;

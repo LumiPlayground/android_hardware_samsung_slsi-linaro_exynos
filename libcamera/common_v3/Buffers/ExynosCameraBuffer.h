@@ -37,7 +37,7 @@
 #include <ion/ion.h>
 #include <exynos_ion.h>
 
-#include "gralloc_priv.h"
+#include "gralloc1_priv.h"
 
 #include "ExynosCameraMemory.h"
 #include "fimc-is-metadata.h"
@@ -69,6 +69,9 @@ namespace android {
 
 #define EXYNOS_CAMERA_BUFFER_GRALLOC_WARNING_TIME       (3300 + EXYNOS_CAMERA_BUFFER_WARNING_TIME_MARGIN)  /* 3.3ms per 1MB */
 
+#define EXYNOS_CAMERA_BUFFER_ION_MASK_SECURE            (EXYNOS_ION_HEAP_SECURE_CAMERA)
+#define EXYNOS_CAMERA_BUFFER_ION_FLAG_SECURE            (0)
+
 typedef enum exynos_camera_buffer_type {
     EXYNOS_CAMERA_BUFFER_ION_NONCACHED_TYPE = 0,
     EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE    = 1,
@@ -76,6 +79,8 @@ typedef enum exynos_camera_buffer_type {
     EXYNOS_CAMERA_BUFFER_ION_NONCACHED_RESERVED_TYPE = EXYNOS_CAMERA_BUFFER_ION_RESERVED_TYPE,
     EXYNOS_CAMERA_BUFFER_ION_CACHED_RESERVED_TYPE = 3,
     EXYNOS_CAMERA_BUFFER_ION_CACHED_SYNC_FORCE_TYPE = 4,
+    EXYNOS_CAMERA_BUFFER_ION_RESERVED_SECURE_TYPE = 5,
+    EXYNOS_CAMERA_BUFFER_ION_CACHED_RESERVED_SECURE_TYPE = 6, 
     EXYNOS_CAMERA_BUFFER_INVALID_TYPE,
 } exynos_camera_buffer_type_t;
 
@@ -145,7 +150,6 @@ struct ExynosCameraBuffer {
     int             acquireFence;
     int             releaseFence;
 
-    void            *manager;
 #ifdef __cplusplus
     ExynosCameraBuffer() {
         index = -1;
@@ -164,8 +168,6 @@ struct ExynosCameraBuffer {
 
         acquireFence = -1;
         releaseFence = -1;
-
-        manager = NULL;
     }
 
     int getMetaPlaneIndex() {
@@ -197,8 +199,6 @@ struct ExynosCameraBuffer {
         acquireFence = other.acquireFence;
         releaseFence = other.releaseFence;
 
-        manager = other.manager;
-
         return *this;
     }
 
@@ -211,8 +211,7 @@ struct ExynosCameraBuffer {
         || status != other.status
         || type   != other.type
         || acquireFence != other.acquireFence
-        || releaseFence != other.releaseFence
-        || manager != other.manager) {
+        || releaseFence != other.releaseFence) {
             ret = false;
         }
 

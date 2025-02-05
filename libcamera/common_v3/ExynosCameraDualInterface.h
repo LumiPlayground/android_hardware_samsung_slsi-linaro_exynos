@@ -43,7 +43,7 @@
 #endif
 
 /* We want service not to know actual num of cameras. */
-#define EXYNOS_CAMERA_INTERNAL_NUM 5
+#define EXYNOS_CAMERA_INTERNAL_NUM 4
 
 namespace android {
 

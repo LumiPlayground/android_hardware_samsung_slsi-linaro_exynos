@@ -54,7 +54,7 @@ namespace android {
 class ExynosCameraPlugInFakeFusion : public ExynosCameraPlugIn {
 public:
     ExynosCameraPlugInFakeFusion() : ExynosCameraPlugIn() {}
-    ExynosCameraPlugInFakeFusion(int cameraId, int pipeId, int scenario): ExynosCameraPlugIn(cameraId, pipeId, scenario) {
+    ExynosCameraPlugInFakeFusion(int cameraId, int pipeId) : ExynosCameraPlugIn(cameraId, pipeId) {
         strncpy(m_name, "FakeFusionPlugIn", (PLUGIN_NAME_STR_SIZE - 1));
     };
     virtual ~ExynosCameraPlugInFakeFusion() { ALOGD("%s", __FUNCTION__); };

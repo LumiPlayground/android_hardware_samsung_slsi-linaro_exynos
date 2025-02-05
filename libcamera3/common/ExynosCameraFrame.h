@@ -46,8 +46,8 @@ typedef enum FRAME_TYPE {
     FRAME_TYPE_BASE                     = 0,
     FRAME_TYPE_OTHERS                   = 1,
     FRAME_TYPE_PREVIEW                  = 2,
-    FRAME_TYPE_REPROCESSING             = 3,
-    FRAME_TYPE_JPEG_REPROCESSING        = 4,
+    FRAME_TYPE_PREVIEW_FRONT            = 3,
+    FRAME_TYPE_REPROCESSING             = 4,
     FRAME_TYPE_VISION                   = 5,
     FRAME_TYPE_INTERNAL                 = 6,
 #ifdef USE_DUAL_CAMERA
@@ -143,66 +143,6 @@ typedef enum STREAM_TYPE {
     STREAM_TYPE_VISION				= 8,
     STREAM_TYPE_MAX,
 } STREAM_TYPE_T;
-
-typedef enum FRAME_STATE_IN_SELECTOR {
-    FRAME_STATE_IN_SELECTOR_BASE,
-    FRAME_STATE_IN_SELECTOR_PUSHED,
-    FRAME_STATE_IN_SELECTOR_REMOVE,
-    FRAME_STATE_IN_SELECTOR_MAX,
-} FRAME_STATE_IN_SELECTOR_T;
-
-struct ExynosCameraFrameSelectorTag {
-    /* Id for extendibility to support multiple selector */
-    int   selectorId;
-
-    /* information to get the specific buffer from frame */
-
-    /* entity pipe Id */
-    int   pipeId;
-
-    /* it can be nodeIndex in ExynosCameraFrame */
-    int   bufPos;
-
-    /* -1 : invalid, 0 : dst, 1 : src */
-    int   isSrc;
-
-#ifdef __cplusplus
-    ExynosCameraFrameSelectorTag() {
-        selectorId = -1;
-        pipeId = -1;
-        bufPos = -1;
-        isSrc = false;
-    }
-
-    ExynosCameraFrameSelectorTag& operator =(const ExynosCameraFrameSelectorTag &other) {
-        selectorId  = other.selectorId;
-        pipeId      = other.pipeId;
-        bufPos      = other.bufPos;
-        isSrc       = other.isSrc;
-
-        return *this;
-    }
-
-    bool operator ==(const ExynosCameraFrameSelectorTag &other) const {
-        bool ret = true;
-
-        if (selectorId != other.selectorId
-                || pipeId      != other.pipeId
-                || bufPos      != other.bufPos
-                || isSrc       != other.isSrc) {
-            ret = false;
-        }
-
-        return ret;
-    }
-
-    bool operator !=(const ExynosCameraFrameSelectorTag &other) const {
-        return !(*this == other);
-    }
-#endif
-};
-
-typedef List<ExynosCameraFrameSelectorTag> selector_tag_queue_t;
 
 class ExynosCameraFrameEntity {
 public:
@@ -445,7 +385,6 @@ public:
     ExynosCameraFrameEntity *getFrameDoneEntity(uint32_t pipeID);
     ExynosCameraFrameEntity *getFrameDoneFirstEntity(void);
     ExynosCameraFrameEntity *getFrameDoneFirstEntity(uint32_t pipeID);
-    ExynosCameraFrameEntity *getFirstEntityNotComplete(void);
 
     status_t        skipFrame(void);
 
@@ -497,14 +436,6 @@ public:
 
     int             getCameraId(void);
 
-    /*
-     * To use to idenfy continous frames.
-     * You can classify the frame group F10~F12 and F13.
-     * ex. frame(F10, I0), frame(F11, I1), frame(F12, I3), frame(F13, I0)
-     */
-    void            setFrameIndex(int index);
-    int             getFrameIndex(void);
-
     /* backup for reprocessing */
     void            setReprocessingFrameType(frame_type_t frameType);
     uint32_t        getReprocessingFrameType(void);
@@ -517,6 +448,9 @@ public:
     int             getJpegSize(void);
 
     int64_t         getTimeStamp(uint32_t srcNodeIndex = 0);
+#ifdef  SAMSUNG_TIMESTAMP_BOOT
+    int64_t         getTimeStampBoot(uint32_t srcNodeIndex = 0);
+#endif
     void            getFpsRange(uint32_t *min, uint32_t *max, uint32_t srcNodeIndex = 0);
     void            setFpsRange(uint32_t min, uint32_t max, uint32_t srcNodeIndex = 0);
 
@@ -575,6 +509,13 @@ public:
     void setFrameSpecialCaptureStep(uint32_t state) {m_specialCaptureStep = state;};
     uint32_t getFrameSpecialCaptureStep(void) {return m_specialCaptureStep;};
 
+#ifdef SAMSUNG_TN_FEATURE
+    void    setScenario(int index, int scenario);
+    int32_t getScenario(int pipeId);
+    int32_t getScenarioIndex(int scenario);
+    bool    hasScenario(int scenario);
+#endif
+
     void setStreamRequested(int stream, bool flag);
     bool getStreamRequested(int stream);
 
@@ -583,23 +524,6 @@ public:
 
     void setUpdateResult(bool flag);
     bool getUpdateResult(void);
-
-    void                  lockSelectorTagList(void);
-    void                  unlockSelectorTagList(void);
-    status_t              addSelectorTag(int selectorId, int pipeId, int bufPos, bool isSrc);
-    bool                  findSelectorTag(ExynosCameraFrameSelectorTag *compareTag);
-    bool                  removeSelectorTag(ExynosCameraFrameSelectorTag *removeTag);
-    bool                  getFirstSelectorTag(ExynosCameraFrameSelectorTag *tag);
-    void                  setStateInSelector(FRAME_STATE_IN_SELECTOR_T state);
-    FRAME_STATE_IN_SELECTOR_T getStateInSelector(void);
-    /* Below selectorTag functions needs lock */
-    status_t              addRawSelectorTag(int selectorId, int pipeId, int bufPos, bool isSrc);
-    bool                  findRawSelectorTag(ExynosCameraFrameSelectorTag *compareTag);
-    bool                  removeRawSelectorTag(ExynosCameraFrameSelectorTag *removeTag);
-    bool                  getFirstRawSelectorTag(ExynosCameraFrameSelectorTag *tag);
-    void                  setRawStateInSelector(FRAME_STATE_IN_SELECTOR_T state);
-    FRAME_STATE_IN_SELECTOR_T getRawStateInSelector(void);
-    selector_tag_queue_t *getSelectorTagList(void);
 
 private:
     status_t        m_init();
@@ -677,11 +601,11 @@ private:
     frame_key_queue_t          *m_frameQueue;
     bool                        m_hasRequest;
     bool                        m_updateResult;
-    int                         m_frameIndex;
+
+#ifdef SAMSUNG_TN_FEATURE
+    int32_t                     m_scenario[MAX_PIPE_UNI_NUM];
+#endif
     bool                        m_stream[STREAM_TYPE_MAX];
-    mutable Mutex               m_selectorTagQueueLock;
-    selector_tag_queue_t        m_selectorTagQueue;
-    FRAME_STATE_IN_SELECTOR_T   m_stateInSelector;
 };
 
 }; /* namespace android */

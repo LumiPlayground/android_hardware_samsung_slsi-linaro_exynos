@@ -201,6 +201,7 @@ public:
 
         m_cameraId = cameraId;
         m_reprocessing = isReprocessing ? 1 : 0;
+        m_oneShotMode = isReprocessing;
 
         if (nodeNums) {
             for (int i = 0; i < MAX_NODE; i++)
@@ -238,7 +239,9 @@ public:
     virtual status_t        sensorStream(bool on);
     virtual status_t        forceDone(unsigned int cid, int value);
     virtual status_t        setControl(int cid, int value);
+    virtual status_t        setControl(int cid, int value, enum NODE_TYPE nodeType);
     virtual status_t        getControl(int cid, int *value);
+    virtual status_t        setExtControl(struct v4l2_ext_controls *ctrl);
     virtual status_t        setParam(struct v4l2_streamparm streamParam);
 
     virtual status_t        pushFrame(ExynosCameraFrame **newFrame);
@@ -273,7 +276,6 @@ public:
     virtual status_t        getThreadRenew(int **timeRenew);
     virtual status_t        incThreadRenew(void);
     virtual status_t        setStopFlag(void);
-    virtual status_t        setFlagFlipIgnore(bool ignoreFlip);
 
     virtual int             getRunningFrameCount(void);
 
@@ -306,6 +308,7 @@ public:
     virtual status_t        setNodeInfos(camera_node_objects_t *nodeObjects, bool flagReset = false);
     virtual status_t        getNodeInfos(camera_node_objects_t *nodeObjects);
 
+    virtual void            setOneShotMode(bool enable);
 #ifdef USE_MCPIPE_SERIALIZATION_MODE
     virtual void            needSerialization(bool enable);
 #endif
@@ -389,9 +392,9 @@ protected:
     int                         m_numCaptureBuf;
 
     uint32_t                    m_reprocessing;
+    bool                        m_oneShotMode;
     bool                        m_flagStartPipe;
     bool                        m_flagTryStop;
-    bool                        m_flagIgnoreFlip;
     bool                        m_dvfsLocked;
     bool                        m_isBoosting;
     bool                        m_metadataTypeShot;

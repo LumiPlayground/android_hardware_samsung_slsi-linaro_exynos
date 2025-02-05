@@ -94,6 +94,18 @@ status_t ExynosCameraFrameReprocessingFactory::create(__unused bool active)
     CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
             m_pipes[INDEX(PIPE_GSC_REPROCESSING3)]->getPipeName(), PIPE_GSC_REPROCESSING3);
 
+#ifdef STK_PICTURE
+    /* PIPE_STK_PICTURE pipe initialize */
+    CLOGD("DEBUG(%s):STK_PICTURE Pipe(%d) creation start", __FUNCTION__, INDEX(PIPE_STK_PICTURE));
+    ret = m_pipes[INDEX(PIPE_STK_PICTURE)]->create();
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):STK_PICTURE create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        /* TODO: exception handling */
+        return INVALID_OPERATION;
+    }
+    CLOGD("DEBUG(%s):STK_PICTURE Pipe(%d) created", __FUNCTION__, INDEX(PIPE_STK_PICTURE));
+#endif
+
     if (m_flagHWFCEnabled == false
         || m_parameters->isHWFCOnDemand() == true) {
         /* JPEG_REPROCESSING pipe initialize */
@@ -521,6 +533,15 @@ status_t ExynosCameraFrameReprocessingFactory::startPipes(void)
     status_t ret = NO_ERROR;
     CLOGI("INFO(%s[%d])", __FUNCTION__, __LINE__);
 
+#ifdef STK_PICTURE
+    ret = m_pipes[INDEX(PIPE_STK_PICTURE)]->start();
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):PIPE_STK_PICTURE start fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        /* TODO: exception handling */
+        return INVALID_OPERATION;
+    }
+#endif
+
     /* MCSC Reprocessing */
     if (m_parameters->isUseYuvReprocessing() == true
         || (m_flagIspMcscOTF == false && m_flagTpuMcscOTF == false)) {
@@ -655,6 +676,17 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         funcRet |= ret;
     }
 
+#ifdef STK_PICTURE
+    if (m_pipes[INDEX(PIPE_STK_PICTURE)] != NULL) {
+        ret = m_pipes[INDEX(PIPE_STK_PICTURE)]->stop();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):PIPE_STK_PICTURE stop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            funcRet |= ret;
+        }
+    }
+#endif
+
     if (funcRet != NO_ERROR)
         CLOGE("ERR(%s[%d]):Stopping Reprocessing [3AA>MCSC] Fail!", __FUNCTION__, __LINE__);
     else
@@ -752,8 +784,17 @@ ExynosCameraFrame * ExynosCameraFrameReprocessingFactory::createNewFrame(void)
     newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
     frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
     if (m_parameters->getIsThumbnailCallbackOn() == true
+#ifdef SAMSUNG_MAGICSHOT
+        || curShotMode == SHOT_MODE_MAGIC
+#endif
        )
         requestEntityCount++;
+
+#ifdef STK_PICTURE
+    /* set STK_PICTURE pipe to linkageList */
+    newEntity[INDEX(PIPE_STK_PICTURE)] = new ExynosCameraFrameEntity(PIPE_STK_PICTURE, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
+    frame->addSiblingEntity(NULL, newEntity[INDEX(PIPE_STK_PICTURE)]);
+#endif
 
     /* set JPEG pipe to linkageList */
     pipeId = PIPE_JPEG_REPROCESSING;
@@ -995,6 +1036,10 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
     /* GSC3 for Reprocessing */
     m_nodeNums[INDEX(PIPE_GSC_REPROCESSING3)][OUTPUT_NODE] = PICTURE_GSC_NODE_NUM;
 
+#ifdef STK_PICTURE
+    m_nodeNums[INDEX(PIPE_STK_PICTURE)][OUTPUT_NODE] = -1;
+#endif
+
     /* JPEG for Reprocessing */
     m_nodeNums[INDEX(PIPE_JPEG_REPROCESSING)][OUTPUT_NODE] = -1;
 
@@ -1037,6 +1082,12 @@ status_t ExynosCameraFrameReprocessingFactory::m_constructReprocessingPipes(void
     m_pipes[INDEX(pipeId)]->setPipeId(pipeId);
     m_pipes[INDEX(pipeId)]->setPipeName("PIPE_GSC_REPROCESSING3");
 
+#ifdef STK_PICTURE
+    m_pipes[INDEX(PIPE_STK_PICTURE)] = (ExynosCameraPipe*)new ExynosCameraPipeSTK_PICTURE(m_cameraId, m_parameters, true, m_nodeNums[INDEX(PIPE_STK_PICTURE)]);
+    m_pipes[INDEX(PIPE_STK_PICTURE)]->setPipeId(PIPE_STK_PICTURE);
+    m_pipes[INDEX(PIPE_STK_PICTURE)]->setPipeName("PIPE_STK_PICTURE");
+#endif
+
     if (m_flagHWFCEnabled == false
         || m_parameters->isHWFCOnDemand() == true) {
         /* JPEG for Reprocessing */
@@ -1066,6 +1117,12 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
     int zoom = m_parameters->getZoomLevel();
     int pipeId = -1;
     uint32_t perframePosition = 0;
+
+#ifdef SR_CAPTURE
+    if(m_parameters->getSROn()) {
+        zoom = ZOOM_LEVEL_0;
+    }
+#endif
 
     memset(&node_group_info_3aa, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_isp, 0x0, sizeof(camera2_node_group));

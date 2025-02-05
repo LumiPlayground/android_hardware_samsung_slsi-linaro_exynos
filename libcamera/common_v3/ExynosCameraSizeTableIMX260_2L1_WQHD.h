@@ -54,8 +54,8 @@ static int PREVIEW_SIZE_LUT_IMX260_2L1[][SIZE_OF_LUT] =
 
     /* 16:9 (Single, Dual) */
     { SIZE_RATIO_16_9,
-     (4032 + 0) ,(3024 + 0),   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
+     (4032 + 0) ,(2268 + 0),   /* [sensor ] */
+      4032      , 2268      ,   /* [bns    ] */
       4032      , 2268      ,   /* [bcrop  ] */
       2688      , 1512      ,   /* [bds    ] */
       1920      , 1080      ,   /* [target ] */
@@ -70,8 +70,8 @@ static int PREVIEW_SIZE_LUT_IMX260_2L1[][SIZE_OF_LUT] =
     },
     /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-     (4032 + 0),(3024 + 0),   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
+     (3024 + 0),(3024 + 0),   /* [sensor ] */
+      3024      , 3024      ,   /* [bns    ] */
       3024      , 3024      ,   /* [bcrop  ] */
       2016      , 2016      ,   /* [bds    ] */
       1080      , 1080      ,   /* [target ] */
@@ -118,7 +118,7 @@ static int PREVIEW_SIZE_LUT_IMX260_2L1_BNS[][SIZE_OF_LUT] =
 
     /* 16:9 (Single, Dual) */
     { SIZE_RATIO_16_9,
-     (4032 + 0) ,(3024 + 0),   /* [sensor ] */
+     (4032 + 0) ,(2268 + 0),   /* [sensor ] */
       2688      , 1512      ,   /* [bns    ] */
       2688      , 1512      ,   /* [bcrop  ] */
       2688      , 1512      ,   /* [bds    ] */
@@ -134,7 +134,7 @@ static int PREVIEW_SIZE_LUT_IMX260_2L1_BNS[][SIZE_OF_LUT] =
     },
     /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-     (4032 + 0),(3024 + 0),   /* [sensor ] */
+     (3024 + 0),(3024 + 0),   /* [sensor ] */
       2016      , 2016      ,   /* [bns    ] */
       2016      , 2016      ,   /* [bcrop  ] */
       2016      , 2016      ,   /* [bds    ] */
@@ -182,8 +182,8 @@ static int PICTURE_SIZE_LUT_IMX260_2L1[][SIZE_OF_LUT] =
 
     /* 16:9 (Single, Dual) */
     { SIZE_RATIO_16_9,
-     (4032 + 0),(3024 + 0),   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
+     (4032 + 0),(2268 + 0),   /* [sensor ] */
+      4032      , 2268      ,   /* [bns    ] */
       4032      , 2268      ,   /* [bcrop  ] */
       4032      , 2268      ,   /* [bds    ] */
       4032      , 2268      ,   /* [target ] */
@@ -198,8 +198,8 @@ static int PICTURE_SIZE_LUT_IMX260_2L1[][SIZE_OF_LUT] =
     },
     /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-     (4032 + 0),(3024 + 0),   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
+     (3024 + 0),(3024 + 0),   /* [sensor ] */
+      3024      , 3024      ,   /* [bns    ] */
       3024      , 3024      ,   /* [bcrop  ] */
       3024      , 3024      ,   /* [bds    ] */
       3024      , 3024      ,   /* [target ] */
@@ -214,8 +214,8 @@ static int VIDEO_SIZE_LUT_IMX260_2L1[][SIZE_OF_LUT] =
 
     /* 16:9 (Single) */
     { SIZE_RATIO_16_9,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
+     (4032 + 0) ,(2268 + 0) ,   /* [sensor ] */
+      4032      , 2268      ,   /* [bns    ] */
       4032      , 2268      ,   /* [bcrop  ] */
       2688      , 1512      ,   /* [bds    ] *//* UHD (3840x2160) special handling in ExynosCameraParameters class */
       1920      , 1080      ,   /* [target ] */
@@ -230,8 +230,8 @@ static int VIDEO_SIZE_LUT_IMX260_2L1[][SIZE_OF_LUT] =
     },
     /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
+     (3024 + 0) ,(3024 + 0) ,   /* [sensor ] */
+      3024      , 3024      ,   /* [bns    ] */
       3024      , 3024      ,   /* [bcrop  ] */
       2016      , 2016      ,   /* [bds    ] */
       1080      , 1080      ,   /* [target ] */
@@ -760,7 +760,6 @@ static int IMX260_2L1_FPS_RANGE_LIST[][2] =
 
 static int IMX260_2L1_HIDDEN_FPS_RANGE_LIST[][2] =
 {
-    {   5000,   5000},
     {  10000,  24000},
     {  30000,  60000},
     {  60000,  60000},

@@ -142,7 +142,11 @@ ExynosCameraRequestSP_sprt_t ExynosCameraRequestManager::registerToServiceList(c
 
     shot_ext = request->getServiceShot();
 
-    if (shot_ext->shot.ctl.stats.faceDetectMode == FACEDETECT_MODE_OFF) {
+    if (shot_ext->shot.ctl.stats.faceDetectMode == FACEDETECT_MODE_OFF
+#ifdef USE_ALWAYS_FD_ON
+        && m_configurations->getMode(CONFIGURATION_ALWAYS_FD_ON_MODE) == false
+#endif
+        ) {
         request->setDsInputPortId(MCSC_PORT_NONE);
     } else {
         if (previewPortId >= 0) {
@@ -217,6 +221,19 @@ void ExynosCameraRequest::get3AAResultMetaVendor(CameraMetadata &minimal_resultM
     m_updateMetaDataI32(ANDROID_CONTROL_AF_REGIONS, minimal_resultMeta);
     m_updateMetaDataI32(ANDROID_CONTROL_AE_REGIONS, minimal_resultMeta);
     m_updateMetaDataI32(ANDROID_CONTROL_AWB_REGIONS, minimal_resultMeta);
+#ifdef SAMSUNG_CONTROL_METERING
+    m_updateMetaDataI32(SAMSUNG_ANDROID_CONTROL_TOUCH_AE_STATE, minimal_resultMeta);
+#endif
+#ifdef SAMSUNG_TN_FEATURE
+    m_updateMetaDataI32(SAMSUNG_ANDROID_LENS_INFO_CURRENTINFO, minimal_resultMeta);
+    m_updateMetaDataI32(SAMSUNG_ANDROID_CONTROL_DOF_SINGLE_DATA, minimal_resultMeta);
+    m_updateMetaDataI32(SAMSUNG_ANDROID_CONTROL_DOF_MULTI_INFO, minimal_resultMeta);
+    m_updateMetaDataI32(SAMSUNG_ANDROID_CONTROL_DOF_MULTI_DATA, minimal_resultMeta);
+#endif
+
+#ifdef SAMSUNG_OT
+     m_updateMetaDataI32(SAMSUNG_ANDROID_CONTROL_OBJECT_TRACKING_STATE, minimal_resultMeta);
+#endif
 
     return;
 }

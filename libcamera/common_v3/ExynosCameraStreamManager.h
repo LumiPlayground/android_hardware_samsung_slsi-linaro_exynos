@@ -29,7 +29,6 @@
 
 #include <hardware/camera.h>
 #include <hardware/camera3.h>
-#include <hardware/gralloc.h>
 
 #include "ExynosCameraDefine.h"
 #include "ExynosCameraParameters.h"

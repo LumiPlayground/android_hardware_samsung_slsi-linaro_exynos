@@ -32,12 +32,43 @@ ExynosCameraFrameSelector::ExynosCameraFrameSelector(ExynosCameraParameters *par
     m_bufMgr= bufMgr;
     m_activityControl = m_parameters->getActivityControl();
     m_frameHoldList.setWaitTime(2000000000);
+#ifdef OIS_CAPTURE
+    m_OISFrameHoldList.setWaitTime(130000000);
+#endif
+#ifdef RAWDUMP_CAPTURE
+    m_RawFrameHoldList.setWaitTime(2000000000);
+#endif
     m_reprocessingCount = 0;
     memset(&m_selectedBuffer, 0, sizeof(ExynosCameraBuffer));
     m_frameHoldCount = 1;
     isCanceled = false;
+#ifdef OIS_CAPTURE
+    removeFlags = false;
+#endif
+#ifdef FLASHED_LLS_CAPTURE
+    m_llsStep = 0;
+    m_isFlashedLLSCapture = false;
+#endif
+#ifdef LLS_REPROCESSING
+    LLSCaptureFrame = NULL;
+    m_isLastFrame = true;
+    m_isConvertingMeta = true;
+    m_LLSCaptureCount = 0;
+#endif
     m_frameMgr = manager;
     m_isFirstFrame = true;
+#ifdef SAMSUNG_LBP
+    m_lbpFrameCounter = 0;
+    m_LBPFrameNum = 0;
+#endif
+#ifdef SAMSUNG_DNG
+    m_DNGFrameCount = 0;
+    m_preDNGFrameCount = 0;
+    m_preDNGFrame = NULL;
+#endif
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+    m_LDCaptureCount = 0;
+#endif
 }
 #else
 ExynosCameraFrameSelector::ExynosCameraFrameSelector(ExynosCameraParameters *param,
@@ -47,11 +78,42 @@ ExynosCameraFrameSelector::ExynosCameraFrameSelector(ExynosCameraParameters *par
     m_bufMgr= bufMgr;
     m_activityControl = m_parameters->getActivityControl();
     m_frameHoldList.setWaitTime(2000000000);
+#ifdef OIS_CAPTURE
+    m_OISFrameHoldList.setWaitTime(130000000);
+#endif
+#ifdef RAWDUMP_CAPTURE
+    m_RawFrameHoldList.setWaitTime(2000000000);
+#endif
     m_reprocessingCount = 0;
     memset(&m_selectedBuffer, 0, sizeof(ExynosCameraBuffer));
     m_frameHoldCount = 1;
     isCanceled = false;
+#ifdef OIS_CAPTURE
+    removeFlags = false;
+#endif
+#ifdef FLASHED_LLS_CAPTURE
+    m_llsStep = 0;
+    m_isFlashedLLSCapture = false;
+#endif
+#ifdef SAMSUNG_LBP
+    m_lbpFrameCounter = 0;
+    m_LBPFrameNum = 0;
+#endif
+#ifdef LLS_REPROCESSING
+    LLSCaptureFrame = NULL;
+    m_isLastFrame = true;
+    m_LLSCaptureCount = 0;
+    m_isConvertingMeta = true;
+#endif
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+    m_LDCaptureCount = 0;
+#endif
     m_isFirstFrame = true;
+#ifdef SAMSUNG_DNG
+    m_DNGFrameCount = 0;
+    m_preDNGFrameCount = 0;
+    m_preDNGFrame = NULL;
+#endif
 }
 #endif
 ExynosCameraFrameSelector::~ExynosCameraFrameSelector()
@@ -69,6 +131,12 @@ status_t ExynosCameraFrameSelector::release(void)
     if (ret != NO_ERROR) {
         ALOGE("DEBUG(%s[%d]):m_hdrFrameHoldList release failed ", __FUNCTION__, __LINE__);
     }
+#ifdef OIS_CAPTURE
+    ret = m_release(&m_OISFrameHoldList);
+    if (ret != NO_ERROR) {
+        ALOGE("DEBUG(%s[%d]):m_OISFrameHoldList release failed ", __FUNCTION__, __LINE__);
+    }
+#endif
 
     isCanceled = false;
 
@@ -102,7 +170,54 @@ status_t ExynosCameraFrameSelector::manageFrameHoldList(ExynosCameraFrame *frame
             m_parameters->getShotMode() == SHOT_MODE_RICH_TONE) {
         ret = m_manageHdrFrameHoldList(frame, pipeID, isSrc, dstPos);
     }
+#ifdef OIS_CAPTURE
+    else if (m_parameters->getOISCaptureModeOn() == true) {
+        if (removeFlags == false) {
+            m_list_release(&m_frameHoldList, pipeID, isSrc, dstPos);
+            removeFlags = true;
+            ALOGI("INFO(%s[%d]):m_frameHoldList delete(%d)", __FUNCTION__, __LINE__, m_frameHoldList.getSizeOfProcessQ());
+        }
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+        if(m_parameters->getLDCaptureMode()) {
+            ret = m_manageLDFrameHoldList(frame, pipeID, isSrc, dstPos);
+        } else
+#endif
+        {
+            ret = m_manageOISFrameHoldList(frame, pipeID, isSrc, dstPos);
+        }
+    }
+#endif
+#ifdef RAWDUMP_CAPTURE
+    else if (m_parameters->getRawCaptureModeOn() == true) {
+        if (removeFlags == false) {
+            m_list_release(&m_frameHoldList, pipeID, isSrc, dstPos);
+            removeFlags = true;
+            ALOGI("INFO(%s[%d]):m_frameHoldList delete(%d)", __FUNCTION__, __LINE__, m_frameHoldList.getSizeOfProcessQ());
+        }
+        ret = m_manageRawFrameHoldList(frame, pipeID, isSrc, dstPos);
+    }
+#endif
     else {
+#ifdef OIS_CAPTURE
+        if(removeFlags == true) {
+            m_list_release(&m_OISFrameHoldList, pipeID, isSrc, dstPos);
+#ifdef LLS_REPROCESSING
+            LLSCaptureFrame = NULL;
+#endif
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+            m_LDCaptureCount = 0;
+#endif
+            removeFlags = false;
+            ALOGI("INFO(%s[%d]):m_OISFrameHoldList delete(%d)", __FUNCTION__, __LINE__, m_OISFrameHoldList.getSizeOfProcessQ());
+        }
+#endif
+#ifdef RAWDUMP_CAPTURE
+        if(removeFlags == true) {
+            m_list_release(&m_RawFrameHoldList, pipeID, isSrc, dstPos);
+            removeFlags = false;
+            ALOGI("INFO(%s[%d]):m_RawFrameHoldList delete(%d)", __FUNCTION__, __LINE__, m_RawFrameHoldList.getSizeOfProcessQ());
+        }
+#endif
         ret = m_manageNormalFrameHoldList(frame, pipeID, isSrc, dstPos);
     }
 
@@ -129,6 +244,9 @@ status_t ExynosCameraFrameSelector::manageFrameHoldListForDynamicBayer(ExynosCam
 status_t ExynosCameraFrameSelector::m_manageNormalFrameHoldList(ExynosCameraFrame *newFrame, int pipeID, bool isSrc, int32_t dstPos)
 {
     int ret = 0;
+#ifdef SAMSUNG_LBP
+    unsigned int bayer_fcount = 0;
+#endif
     ExynosCameraFrame *oldFrame = NULL;
     ExynosCameraBuffer *buffer = NULL;
 
@@ -139,6 +257,37 @@ status_t ExynosCameraFrameSelector::m_manageNormalFrameHoldList(ExynosCameraFram
      *     newFrame->getFrameCount() > INITIAL_SKIP_FRAME) {
      */
         m_pushQ(&m_frameHoldList, newFrame, true);
+#ifdef SAMSUNG_LBP
+        /* Set the Frame Count of BayerFrame. */
+        ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
+        if( ret != NO_ERROR ) {
+            ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)", __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+        }
+
+        if (m_parameters->getUsePureBayerReprocessing() == true) {
+            camera2_shot_ext *shot_ext = NULL;
+            shot_ext = (camera2_shot_ext *)(buffer->addr[1]);
+            if (shot_ext != NULL)
+                bayer_fcount = shot_ext->shot.dm.request.frameCount;
+            else
+                ALOGE("ERR(%s[%d]):Buffer is null", __FUNCTION__, __LINE__);
+        } else {
+            camera2_stream *shot_stream = NULL;
+            shot_stream = (camera2_stream *)(buffer->addr[1]);
+            if (shot_stream != NULL)
+                bayer_fcount = shot_stream->fcount;
+            else
+                ALOGE("ERR(%s[%d]):Buffer is null", __FUNCTION__, __LINE__);
+        }
+
+        m_parameters->setBayerFrameCount(bayer_fcount);
+#endif
+
+#ifdef FLASHED_LLS_CAPTURE
+        if (m_llsStep != 0)
+            ALOGI("INFO(%s[%d]):m_frameHoldList.getSizeOfProcessQ(%d), m_frameHoldCount(%d)", __FUNCTION__, __LINE__,
+                m_frameHoldList.getSizeOfProcessQ(), m_frameHoldCount);
+#endif
 
     /*
     } else {
@@ -195,6 +344,360 @@ status_t ExynosCameraFrameSelector::m_manageNormalFrameHoldList(ExynosCameraFram
 
     return ret;
 }
+
+#if defined(OIS_CAPTURE) || defined(RAWDUMP_CAPTURE)
+status_t ExynosCameraFrameSelector::m_list_release(ExynosCameraList<ExynosCameraFrame *> *list, int pipeID, bool isSrc, int32_t dstPos)
+{
+    int ret = 0;
+    ExynosCameraFrame *frame  = NULL;
+    ExynosCameraBuffer *buffer = NULL;
+
+    while (list->getSizeOfProcessQ() > 0) {
+        if( m_popQ(list, &frame, true, 1) != NO_ERROR ) {
+            ALOGE("ERR(%s[%d]):getBufferToManageQ fail", __FUNCTION__, __LINE__);
+            m_bufMgr->printBufferState();
+            m_bufMgr->printBufferQState();
+        } else {
+            ret = m_getBufferFromFrame(frame, pipeID, isSrc, &buffer, dstPos);
+            if( ret != NO_ERROR ) {
+                ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                    __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+            }
+            if (m_bufMgr == NULL) {
+                ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+                return INVALID_OPERATION;
+            } else {
+                ret = m_bufMgr->putBuffer(buffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+                if (ret < 0) {
+                    ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, buffer->index);
+                    m_bufMgr->printBufferState();
+                    m_bufMgr->printBufferQState();
+                }
+                m_LockedFrameComplete(frame);
+                frame = NULL;
+            }
+        }
+    }
+
+    return NO_ERROR;
+}
+#endif
+
+#ifdef OIS_CAPTURE
+status_t ExynosCameraFrameSelector::m_manageOISFrameHoldList(ExynosCameraFrame *frame, int pipeID, bool isSrc, int32_t dstPos)
+{
+    int ret = 0;
+    ExynosCameraBuffer *buffer = NULL;
+    ExynosCameraFrame *oldFrame = NULL;
+    ExynosCameraFrame *newFrame  = NULL;
+    ExynosCameraActivitySpecialCapture *m_sCaptureMgr = NULL;
+    unsigned int OISFcount = 0;
+    unsigned int fliteFcount = 0;
+    newFrame = frame;
+    bool OISCapture_activated = false;
+
+    m_sCaptureMgr = m_activityControl->getSpecialCaptureMgr();
+    OISFcount = m_sCaptureMgr->getOISCaptureFcount();
+    if(OISFcount > 0) {
+        OISCapture_activated = true;
+    }
+    OISFcount += OISCAPTURE_DELAY;
+#ifdef SAMSUNG_LBP
+    m_lbpFrameCounter = OISFcount;
+#endif
+
+    ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
+    if( ret != NO_ERROR ) {
+        ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+            __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+    }
+
+    if (m_parameters->getUsePureBayerReprocessing() == true) {
+        camera2_shot_ext *shot_ext = NULL;
+        shot_ext = (camera2_shot_ext *)(buffer->addr[1]);
+        if (shot_ext != NULL)
+            fliteFcount = shot_ext->shot.dm.request.frameCount;
+        else
+            ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+    } else {
+        camera2_stream *shot_stream = NULL;
+        shot_stream = (camera2_stream *)(buffer->addr[1]);
+        if (shot_stream != NULL)
+            fliteFcount = shot_stream->fcount;
+        else
+            ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+    }
+
+    if ((OISCapture_activated) &&
+        ((m_parameters->getSeriesShotCount() == 0 && OISFcount == fliteFcount) || (m_parameters->getSeriesShotCount() > 0 && OISFcount <= fliteFcount)
+#ifdef SAMSUNG_LBP
+        || (m_parameters->getUseBestPic() && OISFcount <= fliteFcount)
+#endif
+    )) {
+        ALOGI("INFO(%s[%d]):zsl-like Fcount %d, fliteFcount %d, halcount(%d)", __FUNCTION__, __LINE__, OISFcount, fliteFcount, newFrame->getFrameCount());
+
+#ifdef LLS_REPROCESSING
+        if (m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS && LLSCaptureFrame != NULL) {
+            ALOGI("INFO(%s[%d]):list size(%d), halcount(%d) LLS halcount(%d)"
+                , __FUNCTION__, __LINE__, m_OISFrameHoldList.getSizeOfProcessQ(), newFrame->getFrameCount(), LLSCaptureFrame->getFrameCount());
+
+            ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
+            if( ret != NO_ERROR ) {
+                ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                    __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+            }
+            if (m_bufMgr == NULL) {
+                ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+                return INVALID_OPERATION;
+            } else {
+                ret = m_bufMgr->putBuffer(buffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+                if (ret < 0) {
+                    ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, buffer->index);
+                    m_bufMgr->printBufferState();
+                    m_bufMgr->printBufferQState();
+                }
+                m_frameComplete(newFrame, false);
+                newFrame = NULL;
+            }
+            return ret;
+        } else
+#endif
+        {
+#ifdef LLS_REPROCESSING
+            if (m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS && LLSCaptureFrame == NULL) {
+                LLSCaptureFrame = newFrame;
+                setIsLastFrame(false);
+                ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
+                if( ret != NO_ERROR ) {
+                    ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                        __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+                }
+
+                for(int j = 0; j < m_parameters->getSeriesShotCount(); j++) {
+                    m_pushQ(&m_OISFrameHoldList, LLSCaptureFrame, true);
+                    ALOGI("INFO(%s[%d]):list size(%d) index(%d) lls frame(%d)",
+                        __FUNCTION__, __LINE__, m_OISFrameHoldList.getSizeOfProcessQ(), LLSCaptureFrame->getFrameCount(), j);
+                }
+            } else
+#endif
+            {
+                m_pushQ(&m_OISFrameHoldList, newFrame, true);
+            }
+        }
+
+        if (m_OISFrameHoldList.getSizeOfProcessQ() > m_frameHoldCount
+#ifdef LLS_REPROCESSING
+            && m_parameters->getSeriesShotMode() != SERIES_SHOT_MODE_LLS
+#endif
+            ) {
+            if( m_popQ(&m_OISFrameHoldList, &oldFrame, true, 1) != NO_ERROR ) {
+                ALOGE("ERR(%s[%d]):getBufferToManageQ fail", __FUNCTION__, __LINE__);
+
+                m_bufMgr->printBufferState();
+                m_bufMgr->printBufferQState();
+            } else {
+                ret = m_getBufferFromFrame(oldFrame, pipeID, isSrc, &buffer, dstPos);
+                if( ret != NO_ERROR ) {
+                    ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                        __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+                }
+                if (m_bufMgr == NULL) {
+                    ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+                    return INVALID_OPERATION;
+                } else {
+                    ret = m_bufMgr->putBuffer(buffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+                    if (ret < 0) {
+                        ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, buffer->index);
+                        m_bufMgr->printBufferState();
+                        m_bufMgr->printBufferQState();
+                    }
+                    m_LockedFrameComplete(oldFrame);
+                    oldFrame = NULL;
+                }
+            }
+        }
+    } else if (OISCapture_activated && OISFcount + 2 < fliteFcount) {
+        ret = m_manageNormalFrameHoldList(frame, pipeID, isSrc, dstPos);
+        if (m_parameters->getSeriesShotCount() == 0) {
+            ALOGI("INFO(%s[%d]):Fcount %d, fliteFcount (%d)halcount(%d)", __FUNCTION__, __LINE__, OISFcount, fliteFcount, newFrame->getFrameCount());
+            m_parameters->setOISCaptureModeOn(false);
+        }
+    } else {
+        ALOGI("INFO(%s[%d]):Fcount %d, fliteFcount (%d) halcount(%d) delete", __FUNCTION__, __LINE__, OISFcount, fliteFcount, newFrame->getFrameCount());
+        ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
+        if( ret != NO_ERROR ) {
+            ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+        }
+        if (m_bufMgr == NULL) {
+            ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+            return INVALID_OPERATION;
+        } else {
+            ret = m_bufMgr->putBuffer(buffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+            if (ret < 0) {
+                ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, buffer->index);
+                m_bufMgr->printBufferState();
+                m_bufMgr->printBufferQState();
+            }
+            m_LockedFrameComplete(newFrame);
+            newFrame = NULL;
+        }
+    }
+
+    return ret;
+}
+#endif
+
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+status_t ExynosCameraFrameSelector::m_manageLDFrameHoldList(ExynosCameraFrame *frame, int pipeID, bool isSrc, int32_t dstPos)
+{
+    int ret = 0;
+    ExynosCameraBuffer *buffer = NULL;
+    ExynosCameraFrame *oldFrame = NULL;
+    ExynosCameraFrame *newFrame  = NULL;
+    ExynosCameraActivitySpecialCapture *m_sCaptureMgr = NULL;
+    unsigned int OISFcount = 0;
+    unsigned int fliteFcount = 0;
+    newFrame = frame;
+    bool OISCapture_activated = false;
+    int frameDelay = 2;
+
+    m_sCaptureMgr = m_activityControl->getSpecialCaptureMgr();
+    OISFcount = m_sCaptureMgr->getOISCaptureFcount();
+    if(OISFcount > 0) {
+        OISCapture_activated = true;
+    }
+
+    if(m_parameters->getLDCaptureMode() == MULTI_SHOT_MODE_DEBLUR) {
+        frameDelay = 1;
+    } else {
+        frameDelay = 2;
+    }
+
+    ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
+    if( ret != NO_ERROR ) {
+        ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+            __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+    }
+
+    if (m_parameters->getUsePureBayerReprocessing() == true) {
+        camera2_shot_ext *shot_ext = NULL;
+        shot_ext = (camera2_shot_ext *)(buffer->addr[1]);
+        if (shot_ext != NULL)
+            fliteFcount = shot_ext->shot.dm.request.frameCount;
+        else
+            ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+    } else {
+        camera2_stream *shot_stream = NULL;
+        shot_stream = (camera2_stream *)(buffer->addr[1]);
+        if (shot_stream != NULL)
+            fliteFcount = shot_stream->fcount;
+        else
+            ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+    }
+
+    if ((OISCapture_activated) && (OISFcount + frameDelay <= fliteFcount) &&
+        (m_LDCaptureCount < m_parameters->getLDCaptureCount())) {
+        ALOGI("INFO(%s[%d]): Capture Fcount %d, fliteFcount %d, halcount(%d) getSizeOfProcessQ(%d)",
+            __FUNCTION__, __LINE__, OISFcount , fliteFcount, newFrame->getFrameCount(),
+            m_OISFrameHoldList.getSizeOfProcessQ());
+        m_pushQ(&m_OISFrameHoldList, newFrame, true);
+        m_LDCaptureCount++;
+    } else {
+        ALOGI("INFO(%s[%d]):Fcount %d, fliteFcount (%d) halcount(%d) delete",
+            __FUNCTION__, __LINE__, OISFcount, fliteFcount, newFrame->getFrameCount());
+        ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
+        if( ret != NO_ERROR ) {
+            ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+        }
+        if (m_bufMgr == NULL) {
+            ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+            return INVALID_OPERATION;
+        } else {
+            ret = m_bufMgr->putBuffer(buffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+            if (ret < 0) {
+                ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, buffer->index);
+                m_bufMgr->printBufferState();
+                m_bufMgr->printBufferQState();
+            }
+            m_LockedFrameComplete(newFrame);
+            newFrame = NULL;
+        }
+    }
+
+    return ret;
+}
+#endif
+
+#ifdef RAWDUMP_CAPTURE
+status_t ExynosCameraFrameSelector::m_manageRawFrameHoldList(ExynosCameraFrame *frame, int pipeID, bool isSrc, int32_t dstPos)
+{
+    int ret = 0;
+    ExynosCameraBuffer *buffer = NULL;
+    ExynosCameraFrame *newFrame  = NULL;
+    ExynosCameraActivitySpecialCapture *m_sCaptureMgr = NULL;
+    unsigned int RawFcount = 0;
+    unsigned int fliteFcount = 0;
+    newFrame = frame;
+
+    m_sCaptureMgr = m_activityControl->getSpecialCaptureMgr();
+    RawFcount = m_sCaptureMgr->getRawCaptureFcount();
+
+    ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
+    if( ret != NO_ERROR ) {
+        ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+            __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+    }
+
+    if (m_parameters->getUsePureBayerReprocessing() == true) {
+        camera2_shot_ext *shot_ext = NULL;
+        shot_ext = (camera2_shot_ext *)(buffer->addr[1]);
+        if (shot_ext != NULL)
+            fliteFcount = shot_ext->shot.dm.request.frameCount;
+        else
+            ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+    } else {
+        camera2_stream *shot_stream = NULL;
+        shot_stream = (camera2_stream *)(buffer->addr[1]);
+        if (shot_stream != NULL)
+            fliteFcount = shot_stream->fcount;
+        else
+            ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+    }
+
+    if (RawFcount != 0 && ((RawFcount + 1 == fliteFcount) || (RawFcount + 2 == fliteFcount))) {
+        ALOGI("INFO(%s[%d]):Raw %s Capture Fcount %d, fliteFcount %d, halcount(%d)",
+            __FUNCTION__, __LINE__,(RawFcount + 1 == fliteFcount) ? "first" : "sencond",
+            RawFcount , fliteFcount, newFrame->getFrameCount());
+        m_pushQ(&m_RawFrameHoldList, newFrame, true);
+    } else {
+        ALOGI("INFO(%s[%d]):Fcount %d, fliteFcount (%d) halcount(%d) delete",
+            __FUNCTION__, __LINE__, RawFcount, fliteFcount, newFrame->getFrameCount());
+        ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
+        if( ret != NO_ERROR ) {
+            ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+        }
+        if (m_bufMgr == NULL) {
+            ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+            return INVALID_OPERATION;
+        } else {
+            ret = m_bufMgr->putBuffer(buffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+            if (ret < 0) {
+                ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, buffer->index);
+                m_bufMgr->printBufferState();
+                m_bufMgr->printBufferQState();
+            }
+            m_LockedFrameComplete(newFrame);
+            newFrame = NULL;
+        }
+    }
+
+    return ret;
+}
+
+#endif
 
 status_t ExynosCameraFrameSelector::m_manageHdrFrameHoldList(ExynosCameraFrame *frame, int pipeID, bool isSrc, int32_t dstPos)
 {
@@ -255,12 +758,32 @@ ExynosCameraFrame* ExynosCameraFrameSelector::selectFrames(int count, int pipeID
     ExynosCameraActivityAutofocus *afMgr = m_activityControl->getAutoFocusMgr();     // shoud not be a NULL
     ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_activityControl->getSpecialCaptureMgr();
 
+#if defined(RAWDUMP_CAPTURE) && defined(SAMSUNG_COMPANION)
+    selectedFrame = m_selectRawNormalFrame(pipeID, isSrc, tryCount);
+    if (selectedFrame == NULL) {
+        ALOGE("ERR(%s[%d]:select focused frame Faile!", __FUNCTION__, __LINE__);
+        selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
+    }
+    return selectedFrame;
+#endif
+
     m_reprocessingCount = count;
 
     m_flashMgr = m_activityControl->getFlashMgr();
 
     if ((m_flashMgr->getNeedCaptureFlash() == true && m_parameters->getSeriesShotCount() == 0)
+#ifdef FLASHED_LLS_CAPTURE
+        || (m_isFlashedLLSCapture && m_llsStep == 3)
+#endif
     ) {
+#if defined(OIS_CAPTURE) && defined(FLASHED_LLS_CAPTURE)
+        if(m_isFlashedLLSCapture && m_llsStep == 3) {
+#ifdef LLS_REPROCESSING
+            setIsConvertingMeta(true);
+#endif
+            m_parameters->setOISCaptureModeOn(false);
+        }
+#endif
         selectedFrame = m_selectFlashFrame(pipeID, isSrc, tryCount, dstPos);
 
         if (selectedFrame == NULL) {
@@ -290,11 +813,82 @@ ExynosCameraFrame* ExynosCameraFrameSelector::selectFrames(int count, int pipeID
             ALOGD("DEBUG(%s[%d]):HACK: Applying AFManager recordingHint(true)", __FUNCTION__, __LINE__);
         }
 
+#ifdef OIS_CAPTURE
+        if(m_parameters->getOISCaptureModeOn() == true) {
+            selectedFrame = m_selectOISNormalFrame(pipeID, isSrc, tryCount, dstPos);
+            if (selectedFrame == NULL) {
+                ALOGE("ERR(%s[%d]:select OISCapture frame Fail!", __FUNCTION__, __LINE__);
+#ifdef SAMSUNG_LBP
+                ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_activityControl->getSpecialCaptureMgr();
+                m_sCaptureMgr->setBestMultiCaptureMode(false);
+                m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_WAIT_CAPTURE);
+                setFrameHoldCount(REPROCESSING_BAYER_HOLD_COUNT);
+#endif
+                selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
+            }
+        } else {
+            selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
+        }
+#else
         selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
+#endif
         if (selectedFrame == NULL)
             ALOGE("ERR(%s[%d]):select Frame Fail!", __FUNCTION__, __LINE__);
     } else if (m_parameters->getSeriesShotCount() > 0) {
+#ifdef OIS_CAPTURE
+        if (m_parameters->getOISCaptureModeOn() == true) {
+#ifdef FLASHED_LLS_CAPTURE
+            if (m_isFlashedLLSCapture) {
+                if (m_llsStep == 0) {
+                    m_activityControl->waitFlashMainReady();
+                    ALOGD("DEBUG(%s[%d]):start set zsl-like mode m_llsStep(%d)", __FUNCTION__, __LINE__, m_llsStep);
+                    m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_START);
+                    m_activityControl->setOISCaptureMode(true);
+                    m_llsStep++;
+                } else {
+                    m_llsStep++;
+                }
+
+                if (m_llsStep == 3) {
+                    m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_WAIT_CAPTURE);
+#ifdef LLS_REPROCESSING
+                    setIsLastFrame(true);
+                    m_LLSCaptureCount = 0;
+#endif
+                }
+#ifdef LLS_REPROCESSING
+                else if(m_llsStep == 2) {
+                    setIsConvertingMeta(false);
+                }
+#endif
+            }
+#endif
+            selectedFrame = m_selectOISBurstFrame(pipeID, isSrc, tryCount, dstPos);
+#ifdef LLS_REPROCESSING
+            if (m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS
+#ifdef FLASHED_LLS_CAPTURE
+                && !m_isFlashedLLSCapture
+#endif
+            ) {
+                m_LLSCaptureCount++;
+                m_parameters->setLLSCaptureCount(m_LLSCaptureCount);
+                if (m_parameters->getSeriesShotCount() == m_LLSCaptureCount) {
+                    ALOGD("DEBUG(%s[%d]): last LLS capture m_LLSCaptureCount(%d)", __FUNCTION__, __LINE__, m_LLSCaptureCount);
+                    setIsLastFrame(true);
+                    if (m_LLSCaptureCount == 2) {
+                        setIsConvertingMeta(false);
+                    }
+                } else if (m_LLSCaptureCount == 2) {
+                    setIsConvertingMeta(false);
+                }
+            }
+#endif
+        } else {
+            selectedFrame = m_selectBurstFrame(pipeID, isSrc, tryCount, dstPos);
+        }
+#else
         selectedFrame = m_selectBurstFrame(pipeID, isSrc, tryCount, dstPos);
+#endif
         if (selectedFrame == NULL) {
             ALOGE("ERR(%s[%d]:select focused frame Faile!", __FUNCTION__, __LINE__);
             selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
@@ -304,9 +898,30 @@ ExynosCameraFrame* ExynosCameraFrameSelector::selectFrames(int count, int pipeID
         selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
 #endif
     } else {
+#ifdef OIS_CAPTURE
+        if(m_parameters->getOISCaptureModeOn() == true) {
+            selectedFrame = m_selectOISNormalFrame(pipeID, isSrc, tryCount, dstPos);
+        }
+#ifdef SAMSUNG_DNG
+        else if (m_parameters->getUseDNGCapture() && !m_parameters->getCheckMultiFrame()) {
+            selectedFrame = m_selectDNGFrame(pipeID, isSrc, tryCount, dstPos);
+        }
+#endif
+        else {
+            selectedFrame = m_selectFocusedFrame(pipeID, isSrc, tryCount, dstPos);
+        }
+#else
         selectedFrame = m_selectFocusedFrame(pipeID, isSrc, tryCount, dstPos);
+#endif
+
         if (selectedFrame == NULL) {
             ALOGE("ERR(%s[%d]:select focused frame Faile!", __FUNCTION__, __LINE__);
+#ifdef SAMSUNG_LBP
+            ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_activityControl->getSpecialCaptureMgr();
+            m_sCaptureMgr->setBestMultiCaptureMode(false);
+            m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_WAIT_CAPTURE);
+            setFrameHoldCount(REPROCESSING_BAYER_HOLD_COUNT);
+#endif
             selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
         }
     }
@@ -327,6 +942,7 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectNormalFrame(__unused int p
     int ret = 0;
     ExynosCameraFrame *selectedFrame = NULL;
 
+#ifndef SAMSUNG_LBP
     ret = m_waitAndpopQ(&m_frameHoldList, &selectedFrame, false, tryCount);
     if (isCanceled == true) {
         ALOGD("DEBUG(%s[%d]):isCanceled", __FUNCTION__, __LINE__);
@@ -336,9 +952,363 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectNormalFrame(__unused int p
         return NULL;
     }
     ALOGD("DEBUG(%s[%d]):Frame Count(%d)", __FUNCTION__, __LINE__, selectedFrame->getFrameCount());
+#else
+    int i = 0;
+    uint32_t maxFrameCount = 0;
+    ExynosCameraFrame *candidateFrames[4] = {0,};
+    ExynosCameraBuffer* buffer = NULL;
+    ExynosCameraBuffer* selectedBuffer = NULL;
+    int candidateFrameCount = m_frameHoldCount;
+    unsigned int LBPframeCount[candidateFrameCount];
+
+    m_LBPFrameNum = 0;
+    for(int j = 0; j < candidateFrameCount; j++) {
+        LBPframeCount[j] = 0;
+    }
+
+    /* Recevied the Frame */
+    do {
+        ret = m_waitAndpopQ(&m_frameHoldList, &candidateFrames[i], false, tryCount);
+        if (isCanceled == true) {
+            ALOGD("DEBUG(%s[%d]):isCanceled", __FUNCTION__, __LINE__);
+            return NULL;
+        } else if( ret < 0 || candidateFrames[i] == NULL ) {
+            ALOGD("DEBUG(%s[%d]):getFrame Fail ret(%d)", __FUNCTION__, __LINE__, ret);
+            return NULL;
+        }
+
+        /* Get the Frame Count from metadata. */
+        ret = m_getBufferFromFrame(candidateFrames[i], pipeID, isSrc, &buffer, dstPos);
+        if( ret != NO_ERROR ) {
+            ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)", __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+        }
+
+        if (m_parameters->getUsePureBayerReprocessing() == true) {
+            camera2_shot_ext *shot_ext = NULL;
+            shot_ext = (camera2_shot_ext *)(buffer->addr[1]);
+            if (shot_ext != NULL)
+                LBPframeCount[i] = shot_ext->shot.dm.request.frameCount;
+            else
+                ALOGE("ERR(%s[%d]):Buffer is null", __FUNCTION__, __LINE__);
+        } else {
+            camera2_stream *shot_stream = NULL;
+            shot_stream = (camera2_stream *)(buffer->addr[1]);
+            if (shot_stream != NULL)
+                LBPframeCount[i] = shot_stream->fcount;
+            else
+                ALOGE("ERR(%s[%d]):Buffer is null", __FUNCTION__, __LINE__);
+        }
+        /***********************************/
+
+        if(candidateFrameCount != REPROCESSING_BAYER_HOLD_COUNT) {
+            if (LBPframeCount[0] > m_parameters->getNormalBestFrameCount()) {
+                ALOGD("DEBUG [LBP]:(%s[%d]):missed target frame(%d/%d).",
+                    __FUNCTION__, __LINE__,
+                    LBPframeCount[i],
+                    m_parameters->getNormalBestFrameCount());
+                m_lbpFrameCounter = m_parameters->getNormalBestFrameCount();
+                i++;
+            } else if (LBPframeCount[0] == m_parameters->getNormalBestFrameCount()) {
+                ALOGD("DEBUG [LBP]:(%s[%d]):Frame Count(%d)", __FUNCTION__, __LINE__, LBPframeCount[i]);
+                m_lbpFrameCounter = LBPframeCount[0];
+                i++;
+            } else {
+                ALOGD("DEBUG [LBP]:(%s[%d]):skip frame(count %d/%d)", __FUNCTION__, __LINE__, LBPframeCount[i], m_parameters->getNormalBestFrameCount());
+
+                ret = m_getBufferFromFrame(candidateFrames[i], pipeID, isSrc, &selectedBuffer, dstPos);
+                if( ret != NO_ERROR ) {
+                    ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                            __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", selectedBuffer);
+                }
+
+                if (m_bufMgr == NULL) {
+                    ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+                    return NULL;
+                } else {
+                    ret = m_bufMgr->putBuffer(selectedBuffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+                    if (ret < 0) {
+                        ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, selectedBuffer->index);
+                        m_bufMgr->printBufferState();
+                        m_bufMgr->printBufferQState();
+                    }
+                    m_frameComplete(candidateFrames[i]);
+                    candidateFrames[i] = NULL;
+                }
+            }
+        }
+        else{
+            i++;
+            m_lbpFrameCounter = 0;
+        }
+    } while( (i < candidateFrameCount));
+
+    if(candidateFrameCount != REPROCESSING_BAYER_HOLD_COUNT) {
+        setFrameHoldCount(REPROCESSING_BAYER_HOLD_COUNT);
+        if (m_LBPFrameNum == 0) {
+            ALOGV("[LBP] wait signal");
+            m_LBPlock.lock();
+            m_LBPcondition.waitRelative(m_LBPlock, 2000000000); //2sec
+            m_LBPlock.unlock();
+        }
+
+        if (m_LBPFrameNum == 0) {
+            ALOGD("[LBP] LBPFrameNum is Null. %d/%d", m_LBPFrameNum, LBPframeCount[0]);
+            m_LBPFrameNum = LBPframeCount[0];
+        } else if (m_LBPFrameNum > LBPframeCount[candidateFrameCount - 1] || m_LBPFrameNum < LBPframeCount[0]) {
+            ALOGD("[LBP] incorrect number of m_LBPFrameNum. %d/%d", m_LBPFrameNum, LBPframeCount[0]);
+            m_LBPFrameNum = LBPframeCount[0];
+        }
+    }
+
+    /* Selected Frame */
+    for (i = 0; i < candidateFrameCount; i++) {
+        if (candidateFrameCount == REPROCESSING_BAYER_HOLD_COUNT || m_LBPFrameNum == LBPframeCount[i]) {
+            ALOGD("[LBP](%s[%d]):selected frame(count %d)", __FUNCTION__, __LINE__, LBPframeCount[i]);
+            selectedFrame = candidateFrames[i];
+        } else {
+            ALOGD("[LBP](%s[%d]):skip frame(count %d/%d)", __FUNCTION__, __LINE__, m_LBPFrameNum, LBPframeCount[i]);
+
+            ret = m_getBufferFromFrame(candidateFrames[i], pipeID, isSrc, &selectedBuffer, dstPos);
+            if( ret != NO_ERROR ) {
+                ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                        __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", selectedBuffer);
+            }
+
+            if (m_bufMgr == NULL) {
+                ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+                return NULL;
+            } else {
+                ret = m_bufMgr->putBuffer(selectedBuffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+                if (ret < 0) {
+                    ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, selectedBuffer->index);
+                    m_bufMgr->printBufferState();
+                    m_bufMgr->printBufferQState();
+                }
+                m_frameComplete(candidateFrames[i]);
+                candidateFrames[i] = NULL;
+            }
+        }
+    }
+#endif
 
     return selectedFrame;
 }
+
+#ifdef RAWDUMP_CAPTURE
+ExynosCameraFrame* ExynosCameraFrameSelector::m_selectRawNormalFrame(int pipeID, bool isSrc, int tryCount)
+{
+    int ret = 0;
+    ExynosCameraFrame* selectedFrame = NULL;
+
+    ret = m_waitAndpopQ(&m_RawFrameHoldList, &selectedFrame, false, tryCount);
+    if( ret < 0 ||  selectedFrame == NULL ) {
+        ALOGD("DEBUG(%s[%d]):getFrame Fail ret(%d)", __FUNCTION__, __LINE__, ret);
+        return NULL;
+    }
+
+    ALOGD("DEBUG(%s[%d]):Frame Count(%d)", __FUNCTION__, __LINE__, selectedFrame->getFrameCount());
+
+    return selectedFrame;
+}
+#endif
+
+#ifdef OIS_CAPTURE
+ExynosCameraFrame* ExynosCameraFrameSelector::m_selectOISNormalFrame(int pipeID, bool isSrc, int tryCount, int32_t dstPos)
+{
+    int ret = 0;
+    ExynosCameraFrame* selectedFrame = NULL;
+
+#ifndef SAMSUNG_LBP
+    ret = m_waitAndpopQ(&m_OISFrameHoldList, &selectedFrame, false, tryCount);
+    if (isCanceled == true) {
+        ALOGD("DEBUG(%s[%d]):isCanceled", __FUNCTION__, __LINE__);
+        m_parameters->setOISCaptureModeOn(false);
+        return NULL;
+    } else if( ret < 0 || selectedFrame == NULL ) {
+        ALOGD("DEBUG(%s[%d]):getFrame Fail ret(%d)", __FUNCTION__, __LINE__, ret);
+        m_parameters->setOISCaptureModeOn(false);
+        return NULL;
+    }
+#else
+    int i = 0;
+    int candidateFrameCount = m_frameHoldCount;
+    ExynosCameraFrame *candidateFrames[4] = {0,};
+    ExynosCameraBuffer* buffer = NULL;
+    ExynosCameraBuffer* selectedBuffer = NULL;
+    unsigned int LBPframeCount[candidateFrameCount];
+
+    m_LBPFrameNum = 0;
+    for(int j = 0; j < candidateFrameCount; j++) {
+        LBPframeCount[j] = 0;
+    }
+
+    ALOGD("DEBUG(%s:[%d]):candidateFrameCount(%d).", __FUNCTION__, __LINE__, candidateFrameCount);
+    for(i = 0; i < candidateFrameCount; i++) {
+        ret = m_waitAndpopQ(&m_OISFrameHoldList, &candidateFrames[i], false, tryCount);
+        if (isCanceled == true) {
+            ALOGD("DEBUG(%s[%d]):isCanceled", __FUNCTION__, __LINE__);
+            m_parameters->setOISCaptureModeOn(false);
+            return NULL;
+        } else if( ret < 0 || candidateFrames[i] == NULL ) {
+            ALOGD("DEBUG(%s[%d]):getFrame Fail ret(%d)", __FUNCTION__, __LINE__, ret);
+            m_parameters->setOISCaptureModeOn(false);
+            return NULL;
+        }
+
+        /* Get the Frame Count from metadata. */
+        ret = m_getBufferFromFrame(candidateFrames[i], pipeID, isSrc, &buffer, dstPos);
+        if( ret != NO_ERROR ) {
+            ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)", __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", buffer);
+        }
+        if (m_parameters->getUsePureBayerReprocessing() == true) {
+            camera2_shot_ext *shot_ext = NULL;
+            shot_ext = (camera2_shot_ext *)(buffer->addr[1]);
+            if (shot_ext != NULL)
+                LBPframeCount[i] = shot_ext->shot.dm.request.frameCount;
+            else
+                ALOGE("ERR(%s[%d]):Buffer is null", __FUNCTION__, __LINE__);
+        } else {
+            camera2_stream *shot_stream = NULL;
+            shot_stream = (camera2_stream *)(buffer->addr[1]);
+            if (shot_stream != NULL)
+                LBPframeCount[i] = shot_stream->fcount;
+            else
+                ALOGE("ERR(%s[%d]):Buffer is null", __FUNCTION__, __LINE__);
+        }
+
+        ALOGD("[LBP](%s[%d]):Frame Count(%d)", __FUNCTION__, __LINE__, LBPframeCount[i]);
+        if(candidateFrameCount != REPROCESSING_BAYER_HOLD_COUNT)
+            m_lbpFrameCounter = LBPframeCount[0];
+        else
+            m_lbpFrameCounter = 0;
+    }
+
+    ALOGD("DEBUG(%s[%d]): last capture frame", __FUNCTION__, __LINE__);
+    if(candidateFrameCount != REPROCESSING_BAYER_HOLD_COUNT) {
+        ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_activityControl->getSpecialCaptureMgr();
+        m_sCaptureMgr->setBestMultiCaptureMode(false);
+        m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_WAIT_CAPTURE);
+
+        setFrameHoldCount(REPROCESSING_BAYER_HOLD_COUNT);
+        if (m_LBPFrameNum == 0) {
+            ALOGV("[LBP] wait signal");
+            m_LBPlock.lock();
+            m_LBPcondition.waitRelative(m_LBPlock, 2000000000); //2sec
+            m_LBPlock.unlock();
+        }
+
+        if (m_LBPFrameNum == 0) {
+            ALOGD("[LBP] LBPFrameNum is Null. %d/%d", m_LBPFrameNum, LBPframeCount[0]);
+            m_LBPFrameNum = LBPframeCount[0];
+        } else if (m_LBPFrameNum > LBPframeCount[candidateFrameCount - 1] || m_LBPFrameNum < LBPframeCount[0]) {
+            ALOGD("[LBP] incorrect number of m_LBPFrameNum. %d/%d", m_LBPFrameNum, LBPframeCount[0]);
+            m_LBPFrameNum = LBPframeCount[0];
+        }
+    }
+
+    for (i = 0; i < candidateFrameCount; i++) {
+        if (m_LBPFrameNum == LBPframeCount[i] || candidateFrameCount == REPROCESSING_BAYER_HOLD_COUNT) {
+            ALOGD("[LBP](%s[%d]):selected frame(count %d)", __FUNCTION__, __LINE__, LBPframeCount[i]);
+
+            selectedFrame = candidateFrames[i];
+        } else {
+            ALOGD("[LBP](%s[%d]):skip candidateFrames(count %d)", __FUNCTION__, __LINE__, LBPframeCount[i]);
+
+            ret = m_getBufferFromFrame(candidateFrames[i], pipeID, isSrc, &selectedBuffer, dstPos);
+            if( ret != NO_ERROR ) {
+                ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                        __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", selectedBuffer);
+            }
+
+            if (m_bufMgr == NULL) {
+                ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+                return NULL;
+            } else {
+                ret = m_bufMgr->putBuffer(selectedBuffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+                if (ret < 0) {
+                    ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, selectedBuffer->index);
+                    m_bufMgr->printBufferState();
+                    m_bufMgr->printBufferQState();
+                }
+                m_frameComplete(candidateFrames[i]);
+                candidateFrames[i] = NULL;
+            }
+        }
+    }
+#endif
+
+#if !defined(SAMSUNG_DEBLUR) && !defined(SAMSUNG_LLS_DEBLUR)
+    if (m_parameters->getSeriesShotCount() == 0) {
+        m_parameters->setOISCaptureModeOn(false);
+    }
+#endif
+    ALOGD("DEBUG(%s[%d]):Frame Count(%d)", __FUNCTION__, __LINE__, selectedFrame->getFrameCount());
+
+    return selectedFrame;
+}
+
+ExynosCameraFrame* ExynosCameraFrameSelector::m_selectOISBurstFrame(int pipeID, bool isSrc, int tryCount, int32_t dstPos)
+{
+    int ret = 0;
+    ExynosCameraFrame* selectedFrame = NULL;
+    ExynosCameraBuffer* selectedBuffer = NULL;
+
+    ExynosCameraActivityFlash *m_flashMgr = m_activityControl->getFlashMgr();
+
+    for (int i = 0; i < TOTAL_WAITING_TIME; i += DM_WAITING_TIME) {
+        selectedFrame = m_selectOISNormalFrame(pipeID, isSrc, tryCount, dstPos);
+        if (selectedFrame == NULL) {
+            ALOGE("ERR(%s[%d]):selectedFrame is NULL", __FUNCTION__, __LINE__);
+            selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
+        }
+
+        /* Skip flash frame */
+        if (m_flashMgr->checkPreFlash() == true
+#ifdef FLASHED_LLS_CAPTURE
+            && (!m_isFlashedLLSCapture)
+#endif
+        ) {
+            if (m_flashMgr->checkFlashOff() == false) {
+                ALOGD("DEBUG(%s[%d]):skip flash frame(count %d)", __FUNCTION__, __LINE__, selectedFrame->getFrameCount());
+
+                ret = m_getBufferFromFrame(selectedFrame, pipeID, isSrc, &selectedBuffer, dstPos);
+                if( ret != NO_ERROR ) {
+                    ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                            __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", selectedBuffer);
+                }
+
+                if (m_bufMgr == NULL) {
+                    ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+                    return NULL;
+                } else {
+                    ret = m_bufMgr->putBuffer(selectedBuffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+                    if (ret < 0) {
+                        ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, selectedBuffer->index);
+                        m_bufMgr->printBufferState();
+                        m_bufMgr->printBufferQState();
+                    }
+                    m_frameComplete(selectedFrame);
+                    selectedFrame = NULL;
+                }
+            } else {
+                ALOGD("DEBUG(%s[%d]):flash off done (count %d)", __FUNCTION__, __LINE__, selectedFrame->getFrameCount());
+                break;
+            }
+        } else {
+            ALOGD("DEBUG(%s[%d]):pre-flash off", __FUNCTION__, __LINE__);
+            break;
+        }
+        usleep(DM_WAITING_TIME);
+    }
+
+    return selectedFrame;
+}
+
+void ExynosCameraFrameSelector::setWaitTimeOISCapture(uint64_t waitTime)
+{
+    m_OISFrameHoldList.setWaitTime(waitTime);
+}
+#endif
 
 ExynosCameraFrame* ExynosCameraFrameSelector::m_selectFocusedFrame(int pipeID, bool isSrc, int tryCount, int32_t dstPos)
 {
@@ -487,6 +1457,10 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectFlashFrame(int pipeID, boo
 
     /* Stop main flash */
     m_activityControl->stopMainFlash();
+
+#ifdef FLASHED_LLS_CAPTURE
+    m_llsStep = 0;
+#endif
 
     return selectedFrame;
 
@@ -641,6 +1615,12 @@ status_t ExynosCameraFrameSelector::m_waitAndpopQ(ExynosCameraList<ExynosCameraF
                 iter++;
                 continue;
             }
+#ifdef OIS_CAPTURE
+            else if (ret == INVALID_OPERATION && list == &m_OISFrameHoldList) {
+                ALOGE("ERR(%s[%d]):m_OISFrameHoldList is empty", __FUNCTION__, __LINE__);
+                return ret;
+            }
+#endif
         }
         if(*outframe != NULL) {
             ALOGD("DEBUG(%s[%d]):Frame Count(%d)", __FUNCTION__, __LINE__, (*outframe)->getFrameCount());
@@ -845,6 +1825,17 @@ status_t ExynosCameraFrameSelector::clearList(int pipeID, bool isSrc, int32_t ds
         ALOGE("ERR(%s[%d]):Cannot clear hdrFrameHoldList cause waiting for pop frame", __FUNCTION__, __LINE__);
     }
 
+#ifdef OIS_CAPTURE
+    if (m_OISFrameHoldList.isWaiting() == false) {
+        ret = m_clearList(&m_OISFrameHoldList, pipeID, isSrc, dstPos);
+        if( ret < 0 ) {
+            ALOGE("DEBUG(%s[%d]):m_OISFrameHoldList clear failed, pipeID(%d)", __FUNCTION__, __LINE__, pipeID);
+        }
+    } else {
+        ALOGE("ERR(%s[%d]):Cannot clear m_OISFrameHoldList cause waiting for pop frame", __FUNCTION__, __LINE__);
+    }
+#endif
+
     isCanceled = false;
 
     return NO_ERROR;
@@ -944,6 +1935,27 @@ status_t ExynosCameraFrameSelector::setFrameHoldCount(int32_t count)
     return NO_ERROR;
 }
 
+#ifdef SAMSUNG_LBP
+unsigned int ExynosCameraFrameSelector::getFrameIndex(void)
+{
+    return m_lbpFrameCounter;
+}
+
+void ExynosCameraFrameSelector::setFrameIndex(unsigned int frameCount)
+{
+    m_lbpFrameCounter = frameCount;
+}
+
+void ExynosCameraFrameSelector::setBestFrameNum(unsigned int frameNum)
+{
+    m_LBPFrameNum = frameNum;
+
+    m_LBPlock.lock();
+    m_LBPcondition.signal();
+    m_LBPlock.unlock();
+}
+#endif
+
 bool ExynosCameraFrameSelector::m_isFrameMetaTypeShotExt(void)
 {
     bool isShotExt = true;
@@ -966,6 +1978,18 @@ void ExynosCameraFrameSelector::setWaitTime(uint64_t waitTime)
     m_frameHoldList.setWaitTime(waitTime);
 }
 
+#ifdef FLASHED_LLS_CAPTURE
+void ExynosCameraFrameSelector::setFlashedLLSCaptureStatus(bool isLLSCapture)
+{
+    m_isFlashedLLSCapture = isLLSCapture;
+}
+
+bool ExynosCameraFrameSelector::getFlashedLLSCaptureStatus()
+{
+    return m_isFlashedLLSCapture;
+}
+#endif
+
 void ExynosCameraFrameSelector::setIsFirstFrame(bool isFirstFrame)
 {
     m_isFirstFrame = isFirstFrame;
@@ -976,4 +2000,180 @@ bool ExynosCameraFrameSelector::getIsFirstFrame()
     return m_isFirstFrame;
 }
 
+#ifdef LLS_REPROCESSING
+bool ExynosCameraFrameSelector::getIsConvertingMeta()
+{
+    return m_isConvertingMeta;
+}
+
+void ExynosCameraFrameSelector::setIsConvertingMeta(bool isConvertingMeta)
+{
+    m_isConvertingMeta = isConvertingMeta;
+}
+
+bool ExynosCameraFrameSelector::getIsLastFrame()
+{
+    return m_isLastFrame;
+}
+
+void ExynosCameraFrameSelector::setIsLastFrame(bool isLastFrame)
+{
+    m_isLastFrame = isLastFrame;
+}
+
+void ExynosCameraFrameSelector::resetFrameCount()
+{
+    m_LLSCaptureCount = 0;
+}
+#endif
+
+#ifdef SAMSUNG_DNG
+unsigned int ExynosCameraFrameSelector::getDNGFrame()
+{
+    return m_DNGFrameCount;
+}
+
+void ExynosCameraFrameSelector::setDNGFrame(unsigned int DNGFrame)
+{
+    ALOGD("[DNG](%s[%d]):setDNGFrame(%d)", __FUNCTION__, __LINE__, DNGFrame);
+    m_DNGFrameCount = DNGFrame;
+}
+
+void ExynosCameraFrameSelector::resetDNGFrameCount()
+{
+    m_DNGFrameCount = 0;
+}
+
+ExynosCameraFrame* ExynosCameraFrameSelector::m_selectDNGFrame(int pipeID, bool isSrc, int tryCount, int32_t dstPos)
+{
+    int ret = 0;
+    ExynosCameraFrame* selectedFrame = NULL;
+    ExynosCameraBuffer* selectedBuffer = NULL;
+    ExynosCameraBuffer* preselectedBuffer = NULL;
+    unsigned int bufferFcount = 0;
+    unsigned int waitFcount = 0;
+    int totalWaitingCount = 0;
+
+    /* Choose bayerBuffer to process reprocessing */
+    while (totalWaitingCount <= 5) {
+        ret = m_waitAndpopQ(&m_frameHoldList, &selectedFrame, false, tryCount);
+        if( ret < 0 ||  selectedFrame == NULL ) {
+            ALOGD("DEBUG(%s[%d]):getFrame Fail ret(%d)", __FUNCTION__, __LINE__, ret);
+            return NULL;
+        } else if (isCanceled == true) {
+            ALOGD("DEBUG(%s[%d]):isCanceled", __FUNCTION__, __LINE__);
+            return NULL;
+        }
+
+        ALOGD("DNG(%s[%d]):Frame Count(%d)", __FUNCTION__, __LINE__, selectedFrame->getFrameCount());
+
+        if (waitFcount == 0) {
+            /* Start main flash & Get best frame count for flash */
+            waitFcount = getDNGFrame();
+        }
+
+        if (isCanceled == true) {
+            ALOGD("DEBUG(%s[%d]):isCanceled", __FUNCTION__, __LINE__);
+            return NULL;
+        }
+
+        ret = m_getBufferFromFrame(selectedFrame, pipeID, isSrc, &selectedBuffer, dstPos);
+        if( ret != NO_ERROR ) {
+            ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", selectedBuffer);
+        }
+
+        if (m_isFrameMetaTypeShotExt() == true) {
+            camera2_shot_ext *shot_ext = NULL;
+            shot_ext = (camera2_shot_ext *)(selectedBuffer->addr[1]);
+            if (shot_ext != NULL)
+                bufferFcount = shot_ext->shot.dm.request.frameCount;
+            else
+                ALOGE("ERR(%s[%d]):selectedBuffer is null", __FUNCTION__, __LINE__);
+        } else {
+            camera2_stream *shot_stream = NULL;
+            shot_stream = (camera2_stream *)(selectedBuffer->addr[1]);
+            if (shot_stream != NULL)
+                bufferFcount = shot_stream->fcount;
+            else
+                ALOGE("ERR(%s[%d]):selectedBuffer is null", __FUNCTION__, __LINE__);
+        }
+
+        /* Put mismatched buffer */
+        if (waitFcount == 0 && m_preDNGFrame != NULL) {
+            if (m_bufMgr == NULL) {
+                ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+                return NULL;
+            } else {
+                ret = m_getBufferFromFrame(m_preDNGFrame, pipeID, isSrc, &preselectedBuffer, dstPos);
+                if( ret != NO_ERROR ) {
+                    ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                        __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", preselectedBuffer);
+                }
+
+                ALOGD("DNG(%s[%d]):put waitFcount : %d, bufferFcount : %d", __FUNCTION__, __LINE__, waitFcount, m_preDNGFrameCount);
+                ret = m_bufMgr->putBuffer(preselectedBuffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+                if (ret < 0) {
+                    ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, preselectedBuffer->index);
+                        m_bufMgr->printBufferState();
+                        m_bufMgr->printBufferQState();
+                }
+                m_frameComplete(m_preDNGFrame, false);
+                m_preDNGFrame = NULL;
+                m_preDNGFrameCount = 0;
+            }
+        }
+
+        if (waitFcount != 0 && waitFcount <= bufferFcount) {
+            ALOGD("DNG(%s[%d]):waitFcount(%d), bufferFcount(%d) m_preDNGFrameCount(%d)",
+                __FUNCTION__, __LINE__, waitFcount, bufferFcount, m_preDNGFrameCount);
+
+            if (waitFcount == m_preDNGFrameCount) {
+                ALOGD("DNG(%s[%d]):put waitFcount : %d, bufferFcount : %d", __FUNCTION__, __LINE__, waitFcount, bufferFcount);
+                ret = m_bufMgr->putBuffer(selectedBuffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+                if (ret < 0) {
+                    ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, selectedBuffer->index);
+                        m_bufMgr->printBufferState();
+                        m_bufMgr->printBufferQState();
+                }
+                m_frameComplete(selectedFrame, false);
+                selectedFrame = m_preDNGFrame;
+                bufferFcount = m_preDNGFrameCount;
+            } else {
+                ret = m_getBufferFromFrame(m_preDNGFrame, pipeID, isSrc, &preselectedBuffer, dstPos);
+                if( ret != NO_ERROR ) {
+                    ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                        __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", preselectedBuffer);
+                }
+
+                ALOGD("DNG(%s[%d]):put waitFcount : %d, bufferFcount : %d", __FUNCTION__, __LINE__, waitFcount, m_preDNGFrameCount);
+                ret = m_bufMgr->putBuffer(preselectedBuffer->index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+                if (ret < 0) {
+                    ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, preselectedBuffer->index);
+                        m_bufMgr->printBufferState();
+                        m_bufMgr->printBufferQState();
+                }
+                m_frameComplete(m_preDNGFrame, false);
+            }
+
+            m_preDNGFrameCount = 0;
+            m_preDNGFrame = NULL;
+
+            break;
+        }
+
+        m_preDNGFrame = selectedFrame;
+        m_preDNGFrameCount = bufferFcount;
+
+        totalWaitingCount++;
+        ALOGD("DEBUG(%s[%d]) (totalWaitingCount %d)", __FUNCTION__, __LINE__, totalWaitingCount);
+    }
+
+    ALOGD("DNG(%s[%d]):waitFcount(%d), bufferFcount(%d) totalWaitingCount(%d)",
+        __FUNCTION__, __LINE__, waitFcount, bufferFcount, totalWaitingCount);
+
+    return selectedFrame;
+
+}
+#endif
 }

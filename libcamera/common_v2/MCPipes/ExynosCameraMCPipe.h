@@ -108,6 +108,7 @@ public:
     virtual status_t        forceDone(unsigned int cid, int value);
     virtual status_t        setControl(int cid, int value);
     virtual status_t        getControl(int cid, int *value);
+    virtual status_t        setExtControl(struct v4l2_ext_controls *ctrl);
     virtual status_t        setParam(struct v4l2_streamparm streamParam);
 
     virtual status_t        pushFrame(ExynosCameraFrame **newFrame);
@@ -166,6 +167,7 @@ public:
  */
     virtual status_t        setControl(int cid, int value, enum NODE_TYPE nodeType);
     virtual status_t        getControl(int cid, int *value, enum NODE_TYPE nodeType);
+    virtual status_t        setExtControl(struct v4l2_ext_controls *ctrl, enum NODE_TYPE nodeType);
 
 /* Set map buffer is makes node operation faster at first start.
  * Thereby map buffer before start, reduce map buffer time at start.
@@ -321,6 +323,10 @@ protected:
     bool                        m_serializeOperation;
     static Mutex                g_serializationLock;
 #endif
+#ifdef SAMSUNG_JQ
+    unsigned char               m_qtable[128];
+#endif
+
 };
 
 }; /* namespace android */

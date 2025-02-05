@@ -128,6 +128,7 @@ status_t ExynosCameraBufferSupplier::resetBuffers(void)
     buffer_manager_tag_t bufTag;
     ExynosCameraBufferManager *bufferMgr = NULL;
 
+    Mutex::Autolock lock(m_bufferMgrMapLock);
     for (buffer_manager_map_iter_t iter = m_bufferMgrMap.begin(); iter != m_bufferMgrMap.end(); iter++) {
         bufferMgr = iter->second;
         ret = bufferMgr->resetBuffers();
@@ -252,6 +253,7 @@ void ExynosCameraBufferSupplier::dump(void)
 {
     ExynosCameraBufferManager *bufferMgr = NULL;
 
+    Mutex::Autolock lock(m_bufferMgrMapLock);
     for (buffer_manager_map_iter_t iter = m_bufferMgrMap.begin(); iter != m_bufferMgrMap.end(); iter++) {
         bufferMgr = (ExynosCameraBufferManager *)iter->second;
         bufferMgr->dump();
@@ -278,6 +280,7 @@ void ExynosCameraBufferSupplier::m_deinit(void)
 
 ExynosCameraBufferManager* ExynosCameraBufferSupplier::m_getBufferManager(const buffer_manager_tag_t tag)
 {
+    Mutex::Autolock lock(m_bufferMgrMapLock);
     for (buffer_manager_map_iter_t iter = m_bufferMgrMap.begin(); iter != m_bufferMgrMap.end(); iter++) {
         if (tag == iter->first) {
             return iter->second;

@@ -20,6 +20,10 @@
 #include "ExynosCameraMetadataConverter.h"
 #include "ExynosCameraRequestManager.h"
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraVendorTags.h"
+#endif
+
 namespace android {
 #define SET_BIT(x)      (1 << x)
 
@@ -284,7 +288,7 @@ status_t ExynosCamera3MetadataConverter::constructDefaultRequestSettings(int typ
     settings.update(ANDROID_SCALER_CROP_REGION, cropRegion, 4);
 
     /** android.jpeg */
-    const uint8_t jpegQuality = 80;
+    const uint8_t jpegQuality = 96;
     settings.update(ANDROID_JPEG_QUALITY, &jpegQuality, 1);
     const int32_t thumbnailSize[2] = {
         512, 384
@@ -338,13 +342,20 @@ status_t ExynosCamera3MetadataConverter::constructDefaultRequestSettings(int typ
         edgeMode = ANDROID_EDGE_MODE_HIGH_QUALITY;
         break;
     case CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:
-    case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
         hotPixelMode = ANDROID_HOT_PIXEL_MODE_HIGH_QUALITY;
         noiseReductionMode = ANDROID_NOISE_REDUCTION_MODE_FAST;
         shadingMode = ANDROID_SHADING_MODE_FAST;
         colorCorrectionMode = ANDROID_COLOR_CORRECTION_MODE_HIGH_QUALITY;
         tonemapMode = ANDROID_TONEMAP_MODE_FAST;
         edgeMode = ANDROID_EDGE_MODE_FAST;
+        break;
+    case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
+        hotPixelMode = ANDROID_HOT_PIXEL_MODE_HIGH_QUALITY;
+        noiseReductionMode = ANDROID_NOISE_REDUCTION_MODE_ZERO_SHUTTER_LAG;
+        shadingMode = ANDROID_SHADING_MODE_FAST;
+        colorCorrectionMode = ANDROID_COLOR_CORRECTION_MODE_HIGH_QUALITY;
+        tonemapMode = ANDROID_TONEMAP_MODE_FAST;
+        edgeMode = ANDROID_EDGE_MODE_ZERO_SHUTTER_LAG;
         break;
     case CAMERA3_TEMPLATE_PREVIEW:
     case CAMERA3_TEMPLATE_VIDEO_RECORD:
@@ -747,6 +758,14 @@ status_t ExynosCamera3MetadataConverter::constructStaticInfo(int cameraId, camer
 #endif
 
     i32Vector.clear();
+    if(m_createScalerAvailableInputOutputFormatsMap(sensorStaticInfo, &i32Vector, cameraId) == NO_ERROR) {
+        /* Update AvailableInputOutputFormatsMap only if private reprocessing is supported */
+        ret = info.update(ANDROID_SCALER_AVAILABLE_INPUT_OUTPUT_FORMATS_MAP, i32Vector.array(), i32Vector.size());
+        if (ret < 0)
+            ALOGD("DEBUG(%s):ANDROID_SCALER_AVAILABLE_INPUT_OUTPUT_FORMATS_MAP update failed(%d)",  __FUNCTION__, ret);
+    }
+
+    i32Vector.clear();
     m_createScalerAvailableStreamConfigurationsOutput(sensorStaticInfo, &i32Vector, cameraId);
     ret = info.update(ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS, i32Vector.array(), i32Vector.size());
     if (ret < 0)
@@ -757,6 +776,19 @@ status_t ExynosCamera3MetadataConverter::constructStaticInfo(int cameraId, camer
     ret = info.update(ANDROID_SCALER_AVAILABLE_MIN_FRAME_DURATIONS, i64Vector.array(), i64Vector.size());
     if (ret < 0)
         ALOGD("DEBUG(%s):ANDROID_SCALER_AVAILABLE_MIN_FRAME_DURATIONS update failed(%d)",  __FUNCTION__, ret);
+
+    if (m_hasTagInList(sensorStaticInfo->capabilities, sensorStaticInfo->capabilitiesLength,
+                       ANDROID_REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING) == true) {
+        /* Set Stall duration for reprocessing */
+#ifdef HAL3_REPROCESSING_MAX_CAPTURE_STALL
+        int32_t maxCaptureStall = HAL3_REPROCESSING_MAX_CAPTURE_STALL;
+        ret = info.update(ANDROID_REPROCESS_MAX_CAPTURE_STALL, &maxCaptureStall, 1);
+        if (ret < 0)
+            ALOGD("DEBUG(%s):ANDROID_REPROCESS_MAX_CAPTURE_STALL update failed(%d)",  __FUNCTION__, ret);
+#else
+        ALOGE("ERR(%s):Private reprocessing is supported but ANDROID_REPROCESS_MAX_CAPTURE_STALL has not specified.",  __FUNCTION__);
+#endif
+    }
 
     if (sensorStaticInfo->stallDurations != NULL) {
         ret = info.update(ANDROID_SCALER_AVAILABLE_STALL_DURATIONS,
@@ -993,6 +1025,50 @@ status_t ExynosCamera3MetadataConverter::constructStaticInfo(int cameraId, camer
         ALOGD("DEBUG(%s[%d]):leds at sensorStaticInfo is NULL", __FUNCTION__, __LINE__);
     }
 
+#ifndef CAMERA_GED_FEATURE
+#ifdef SAMSUNG_COMPANION
+    /* samsung.android.control.liveHdrLevelRange */
+    ret = info.update(SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL_RANGE,
+            sensorStaticInfo->vendorHdrRange,
+            ARRAY_LENGTH(sensorStaticInfo->vendorHdrRange));
+    if (ret < 0)
+        ALOGD("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL_RANGE update failed(%d)",  __FUNCTION__, ret);
+
+    /* samsung.android.control.pafAvailableMode */
+    ret = info.update(SAMSUNG_ANDROID_CONTROL_PAF_AVAILABLE_MODE,
+            &(sensorStaticInfo->vendorPafAvailable), 1);
+    if (ret < 0)
+        ALOGD("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_PAF_AVAILABLE_MODE update failed(%d)",  __FUNCTION__, ret);
+#endif
+
+#ifdef SAMSUNG_CONTROL_METERING
+    /* samsung.android.control.meteringAvailableMode */
+    if (sensorStaticInfo->vendorMeteringModes != NULL) {
+        ret = info.update(SAMSUNG_ANDROID_CONTROL_METERING_AVAILABLE_MODE,
+                sensorStaticInfo->vendorMeteringModes,
+                sensorStaticInfo->vendorMeteringModesLength);
+        if (ret < 0)
+            ALOGD("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_METERING_AVAILABLE_MODE update failed(%d)",  __FUNCTION__, ret);
+    } else {
+        ALOGD("DEBUG(%s[%d]):vendorMeteringModes at sensorStaticInfo is NULL", __FUNCTION__, __LINE__);
+    }
+#endif
+
+#ifdef SAMSUNG_OIS
+    /* samsung.android.lens.info.availableOpticalStabilizationOperationMode */
+    if (sensorStaticInfo->vendorOISModes != NULL) {
+        ret = info.update(SAMSUNG_ANDROID_LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION_OPERATION_MODE ,
+                sensorStaticInfo->vendorOISModes,
+                sensorStaticInfo->vendorOISModesLength);
+        if (ret < 0)
+            ALOGD("DEBUG(%s):SAMSUNG_ANDROID_LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION_OPERATION_MODE",
+                    "update failed(%d)",  __FUNCTION__, ret);
+    } else {
+        ALOGD("DEBUG(%s[%d]):vendorOISModes at sensorStaticInfo is NULL", __FUNCTION__, __LINE__);
+    }
+#endif
+#endif
+
     /* andorid.info static attributes */
     ret = info.update(ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL,
             &(sensorStaticInfo->supportedHwLevel), 1);
@@ -1072,6 +1148,9 @@ status_t ExynosCamera3MetadataConverter::initShotData(struct camera2_shot_ext *s
     shot->ctl.flash.flashMode = CAM2_FLASH_MODE_OFF;
     shot->ctl.flash.firingPower = 0;
     shot->ctl.flash.firingTime = 0;
+#ifdef USE_FW_FLASHMODE
+    shot->uctl.flashMode = CAMERA_FLASH_MODE_OFF;
+#endif
     m_overrideFlashControl = false;
 
     /* hotpixel */
@@ -1106,7 +1185,7 @@ status_t ExynosCamera3MetadataConverter::initShotData(struct camera2_shot_ext *s
     int tonemapCurveSize = sizeof(tonemapCurve);
     int sizeOfCurve = sizeof(shot->ctl.tonemap.curveRed) / sizeof(shot->ctl.tonemap.curveRed[0]);
 
-    for (int i = 0; i < sizeOfCurve; i ++) {
+    for (int i = 0; i < sizeOfCurve; i += 4) {
         memcpy(&(shot->ctl.tonemap.curveRed[i]),   tonemapCurve, tonemapCurveSize);
         memcpy(&(shot->ctl.tonemap.curveGreen[i]), tonemapCurve, tonemapCurveSize);
         memcpy(&(shot->ctl.tonemap.curveBlue[i]),  tonemapCurve, tonemapCurveSize);
@@ -1160,7 +1239,7 @@ status_t ExynosCamera3MetadataConverter::initShotData(struct camera2_shot_ext *s
     shot->ctl.aa.aeRegions[3] = 0;
     shot->ctl.aa.aeRegions[4] = 1000;
     shot->ctl.aa.aeExpCompensation = 0; /* 0 is middle */
-    shot->ctl.aa.vendor_aeExpCompensationStep = 0.5;
+    shot->ctl.aa.vendor_aeExpCompensationStep = m_sensorStaticInfo->exposureCompensationStep;
     shot->ctl.aa.aeLock = ::AA_AE_LOCK_OFF;
 
     shot->ctl.aa.aeTargetFpsRange[0] = minFps;
@@ -1186,6 +1265,17 @@ status_t ExynosCamera3MetadataConverter::initShotData(struct camera2_shot_ext *s
     /* 2. dm */
 
     /* 3. utrl */
+#ifndef CAMERA_GED_FEATURE
+#ifdef SAMSUNG_COMPANION
+    shot->uctl.companionUd.drc_mode = COMPANION_DRC_OFF;
+    shot->uctl.companionUd.paf_mode = COMPANION_PAF_OFF;
+    shot->uctl.companionUd.wdr_mode = COMPANION_WDR_OFF;
+#endif
+#endif
+
+#ifdef USE_FW_OPMODE
+    shot->uctl.opMode = CAMERA_OP_MODE_HAL3_GED;
+#endif
 
     /* 4. udm */
 
@@ -1305,9 +1395,11 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
         enum aa_aemode aeMode = AA_AEMODE_OFF;
         entry = settings.find(ANDROID_CONTROL_AE_MODE);
         aeMode = (enum aa_aemode) FIMC_IS_METADATA(entry.data.u8[0]);
-        m_aeMode = aeMode; // temporary code due to sensitivity control problem
         m_flashMgr->setFlashExposure(aeMode);
         dst->ctl.aa.aeMode = aeMode;
+#ifdef USE_FW_FLASHMODE
+        dst->uctl.flashMode = CAMERA_FLASH_MODE_OFF;
+#endif
 
         enum ExynosCameraActivityFlash::FLASH_REQ flashReq = ExynosCameraActivityFlash::FLASH_REQ_OFF;
         switch (aeMode) {
@@ -1315,11 +1407,17 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
         case AA_AEMODE_ON_AUTO_FLASH_REDEYE:
             flashReq = ExynosCameraActivityFlash::FLASH_REQ_AUTO;
             dst->ctl.aa.aeMode = AA_AEMODE_CENTER;
+#ifdef USE_FW_FLASHMODE
+            dst->uctl.flashMode = CAMERA_FLASH_MODE_AUTO;
+#endif
             m_overrideFlashControl = true;
             break;
         case AA_AEMODE_ON_ALWAYS_FLASH:
             flashReq = ExynosCameraActivityFlash::FLASH_REQ_ON;
             dst->ctl.aa.aeMode = AA_AEMODE_CENTER;
+#ifdef USE_FW_FLASHMODE
+            dst->uctl.flashMode = CAMERA_FLASH_MODE_ON;
+#endif
             m_overrideFlashControl = true;
             break;
         case AA_AEMODE_ON:
@@ -1336,6 +1434,31 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
         ALOGV("DEBUG(%s):ANDROID_CONTROL_AE_MODE(%d)", __FUNCTION__, entry.data.u8[0]);
     }
 
+#ifdef SAMSUNG_CONTROL_METERING
+    if (dst->ctl.aa.aeMode != AA_AEMODE_OFF) {
+        if (settings.exists(SAMSUNG_ANDROID_CONTROL_METERING_MODE)) {
+            entry = settings.find(SAMSUNG_ANDROID_CONTROL_METERING_MODE);
+            switch (entry.data.u8[0]) {
+            case SAMSUNG_ANDROID_CONTROL_METERING_MODE_CENTER:
+                dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_CENTER;
+                break;
+            case SAMSUNG_ANDROID_CONTROL_METERING_MODE_SPOT:
+                dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_SPOT;
+                break;
+            case SAMSUNG_ANDROID_CONTROL_METERING_MODE_MATRIX:
+                dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_MATRIX;
+                break;
+            case SAMSUNG_ANDROID_CONTROL_METERING_MODE_MANUAL:
+                dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_SPOT_TOUCH;
+                break;
+            default:
+                break;
+            }
+            ALOGV("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_METERING_MODE(%d, aeMode = %d)", __FUNCTION__, entry.data.u8[0], dst->ctl.aa.aeMode );
+        }
+    }
+#endif
+
     if (settings.exists(ANDROID_CONTROL_AE_LOCK)) {
         entry = settings.find(ANDROID_CONTROL_AE_LOCK);
         dst->ctl.aa.aeLock = (enum aa_ae_lock) FIMC_IS_METADATA(entry.data.u8[0]);
@@ -1351,6 +1474,22 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
         aeRegion.x2 = entry.data.i32[2];
         aeRegion.y2 = entry.data.i32[3];
         dst->ctl.aa.aeRegions[4] = entry.data.i32[4];
+#ifdef SAMSUNG_CONTROL_METERING
+        if (dst->ctl.aa.aeMode == AA_AEMODE_SPOT) {
+            int hwSensorW,hwSensorH;
+            m_parameters->getHwSensorSize(&hwSensorW, &hwSensorH);
+
+            aeRegion.x1 = hwSensorW/2;
+            aeRegion.y1 = hwSensorH/2;
+            aeRegion.x2 = hwSensorW/2;
+            aeRegion.y2 = hwSensorH/2;
+        } else if (dst->ctl.aa.aeMode == AA_AEMODE_CENTER || dst->ctl.aa.aeMode == AA_AEMODE_MATRIX) {
+            aeRegion.x1 = 0;
+            aeRegion.y1 = 0;
+            aeRegion.x2 = 0;
+            aeRegion.y2 = 0;
+        }
+#endif
         m_convert3AARegion(&aeRegion);
 
         dst->ctl.aa.aeRegions[0] = aeRegion.x1;
@@ -1364,12 +1503,18 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
                 entry.data.i32[3],
                 entry.data.i32[4]);
 
+#ifndef SAMSUNG_CONTROL_METERING
         // If AE region has meaningful value, AE region can be applied to the output image
         if (entry.data.i32[0] && entry.data.i32[1] && entry.data.i32[2] && entry.data.i32[3]) {
             dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_SPOT;
             ALOGV("DEBUG(%s):update AA_AEMODE(%d)", __FUNCTION__, dst->ctl.aa.aeMode);
         }
+#endif
     } else {
+#ifdef SAMSUNG_CONTROL_METERING
+        if (dst->ctl.aa.aeMode == AA_AEMODE_SPOT_TOUCH)
+            dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_CENTER; //default ae
+#endif
     }
 
     if (settings.exists(ANDROID_CONTROL_AWB_REGIONS)) {
@@ -1506,6 +1651,7 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
         entry = settings.find(ANDROID_CONTROL_EFFECT_MODE);
         dst->ctl.aa.effectMode = (enum aa_effect_mode) FIMC_IS_METADATA(entry.data.u8[0]);
         ALOGV("DEBUG(%s):ANDROID_CONTROL_EFFECT_MODE(%d)", __FUNCTION__, entry.data.u8[0]);
+        ALOGV("DEBUG(%s):dst->ctl.aa.effectMode(%d)", __FUNCTION__, dst->ctl.aa.effectMode);
     }
 
     if (settings.exists(ANDROID_CONTROL_MODE)) {
@@ -1609,6 +1755,23 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
     } else {
         m_isManualAeControl = false;
     }
+
+#ifndef CAMERA_GED_FEATURE
+#ifdef SAMSUNG_COMPANION
+    if (settings.exists(SAMSUNG_ANDROID_CONTROL_PAF_MODE)) {
+        entry = settings.find(SAMSUNG_ANDROID_CONTROL_PAF_MODE);
+        dst->uctl.companionUd.paf_mode = (enum companion_paf_mode) FIMC_IS_METADATA(entry.data.u8[0]);
+        ALOGV("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_PAF_MODE(%d)", __FUNCTION__, entry.data.u8[0]);
+    }
+
+    if (settings.exists(SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL)) {
+        entry = settings.find(SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL);
+        dst->uctl.companionUd.wdr_mode = (enum companion_wdr_mode) FIMC_IS_METADATA(entry.data.u8[0]);
+        dst->uctl.companionUd.drc_mode = (enum companion_drc_mode) FIMC_IS_METADATA(entry.data.u8[0]);
+        ALOGV("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL(%d)", __FUNCTION__, entry.data.u8[0]);
+    }
+#endif
+#endif
 
     return OK;
 }
@@ -1893,6 +2056,21 @@ status_t ExynosCamera3MetadataConverter::translateLensControlData(CameraMetadata
         }
         ALOGV("DEBUG(%s):ANDROID_LENS_OPTICAL_STABILIZATION_MODE(%d)", __FUNCTION__, entry.data.u8[0]);
     }
+
+#ifdef SAMSUNG_OIS
+    if (settings.exists(SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE)) {
+        entry = settings.find(SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE);
+
+        if (dst->ctl.lens.opticalStabilizationMode == OPTICAL_STABILIZATION_MODE_STILL) {
+            switch (entry.data.u8[0]) {
+            case SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE_VIDEO:
+                dst->ctl.lens.opticalStabilizationMode = OPTICAL_STABILIZATION_MODE_VIDEO;
+                break;
+            }
+        }
+        ALOGV("DEBUG(%s):SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE(%d)", __FUNCTION__, entry.data.u8[0]);
+    }
+#endif
 
     return OK;
 }
@@ -2214,6 +2392,19 @@ status_t ExynosCamera3MetadataConverter::translateTonemapControlData(CameraMetad
                     }
                     tonemapCurveBlue[62] = entry.data.f[2];
                     tonemapCurveBlue[63] = entry.data.f[3];
+                } else if (entry.count == 32) {
+                    size_t i;
+                    for (i = 0; i < 30; i += 2) {
+                        tonemapCurveBlue[2*i] = entry.data.f[i];
+                        tonemapCurveBlue[2*i+1] = entry.data.f[i+1];
+                        tonemapCurveBlue[2*i+2] = (entry.data.f[i] + entry.data.f[i+2])/2;
+                        tonemapCurveBlue[2*i+3] = (entry.data.f[i+1] + entry.data.f[i+3])/2;
+                    }
+                    i = 30;
+                    tonemapCurveBlue[2*i] = entry.data.f[i];
+                    tonemapCurveBlue[2*i+1] = entry.data.f[i+1];
+                    tonemapCurveBlue[2*i+2] = entry.data.f[i];
+                    tonemapCurveBlue[2*i+3] = entry.data.f[i+1];
                 } else {
                     ALOGE("ERROR(%s):ANDROID_TONEMAP_CURVE_BLUE( entry count : %d)", __FUNCTION__, entry.count);
                 }
@@ -2243,6 +2434,19 @@ status_t ExynosCamera3MetadataConverter::translateTonemapControlData(CameraMetad
                     }
                     tonemapCurveGreen[62] = entry.data.f[2];
                     tonemapCurveGreen[63] = entry.data.f[3];
+                } else if (entry.count == 32) {
+                    size_t i;
+                    for (i = 0; i < 30; i += 2) {
+                        tonemapCurveGreen[2*i] = entry.data.f[i];
+                        tonemapCurveGreen[2*i+1] = entry.data.f[i+1];
+                        tonemapCurveGreen[2*i+2] = (entry.data.f[i] + entry.data.f[i+2])/2;
+                        tonemapCurveGreen[2*i+3] = (entry.data.f[i+1] + entry.data.f[i+3])/2;
+                    }
+                    i = 30;
+                    tonemapCurveGreen[2*i] = entry.data.f[i];
+                    tonemapCurveGreen[2*i+1] = entry.data.f[i+1];
+                    tonemapCurveGreen[2*i+2] = entry.data.f[i];
+                    tonemapCurveGreen[2*i+3] = entry.data.f[i+1];
                 } else {
                     ALOGE("ERROR(%s):ANDROID_TONEMAP_CURVE_GREEN( entry count : %d)", __FUNCTION__, entry.count);
                 }
@@ -2272,6 +2476,19 @@ status_t ExynosCamera3MetadataConverter::translateTonemapControlData(CameraMetad
                     }
                     tonemapCurveRed[62] = entry.data.f[2];
                     tonemapCurveRed[63] = entry.data.f[3];
+                } else if (entry.count == 32) {
+                    size_t i;
+                    for (i = 0; i < 30; i += 2) {
+                        tonemapCurveRed[2*i] = entry.data.f[i];
+                        tonemapCurveRed[2*i+1] = entry.data.f[i+1];
+                        tonemapCurveRed[2*i+2] = (entry.data.f[i] + entry.data.f[i+2])/2;
+                        tonemapCurveRed[2*i+3] = (entry.data.f[i+1] + entry.data.f[i+3])/2;
+                    }
+                    i = 30;
+                    tonemapCurveRed[2*i] = entry.data.f[i];
+                    tonemapCurveRed[2*i+1] = entry.data.f[i+1];
+                    tonemapCurveRed[2*i+2] = entry.data.f[i];
+                    tonemapCurveRed[2*i+3] = entry.data.f[i+1];
                 } else {
                     ALOGE("ERROR(%s):ANDROID_TONEMAP_CURVE_RED( entry count : %d)", __FUNCTION__, entry.count);
                 }
@@ -2490,9 +2707,9 @@ status_t ExynosCamera3MetadataConverter::translateControlMetaData(ExynosCameraRe
     requestInfo->getResultShot(&shot_ext);
     src = &shot_ext.shot;
 
-    const uint8_t antibandingMode = (uint8_t)CAMERA_METADATA(src->dm.aa.aeAntibandingMode);
+    const uint8_t antibandingMode = (uint8_t) CAMERA_METADATA(src->dm.aa.aeAntibandingMode);
     settings.update(ANDROID_CONTROL_AE_ANTIBANDING_MODE, &antibandingMode, 1);
-    ALOGV("DEBUG(%s):dm.aa.aeAntibandingMode(%d)",  __FUNCTION__, antibandingMode);
+    ALOGV("DEBUG(%s):dm.aa.aeAntibandingMode(%d)",  __FUNCTION__, src->dm.aa.aeAntibandingMode);
 
     const int32_t aeExposureCompensation = src->dm.aa.aeExpCompensation;
     settings.update(ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION, &aeExposureCompensation, 1);
@@ -2523,6 +2740,28 @@ status_t ExynosCamera3MetadataConverter::translateControlMetaData(ExynosCameraRe
     }
     settings.update(ANDROID_CONTROL_AE_MODE, &aeMode, 1);
     ALOGV("DEBUG(%s):dm.aa.aeMode(%d), AE_MODE(%d)", __FUNCTION__, src->dm.aa.aeMode, aeMode);
+
+#ifdef SAMSUNG_CONTROL_METERING
+    int32_t vendorAeMode = SAMSUNG_ANDROID_CONTROL_METERING_MODE_MANUAL;
+    switch (src->dm.aa.aeMode) {
+    case AA_AEMODE_CENTER:
+        vendorAeMode = SAMSUNG_ANDROID_CONTROL_METERING_MODE_CENTER;
+        break;
+    case AA_AEMODE_SPOT:
+        vendorAeMode = SAMSUNG_ANDROID_CONTROL_METERING_MODE_SPOT;
+        break;
+    case AA_AEMODE_MATRIX:
+        vendorAeMode = SAMSUNG_ANDROID_CONTROL_METERING_MODE_MATRIX;
+        break;
+    case AA_AEMODE_SPOT_TOUCH:
+        vendorAeMode = SAMSUNG_ANDROID_CONTROL_METERING_MODE_MANUAL;
+        break;
+    default:
+        break;
+    }
+    settings.update(SAMSUNG_ANDROID_CONTROL_METERING_MODE, &vendorAeMode, 1);
+    ALOGV("DEBUG(%s):vendorAeMode(%d)", __FUNCTION__, vendorAeMode);
+#endif
 
     const uint8_t aeLock = (uint8_t) CAMERA_METADATA(src->dm.aa.aeLock);
     settings.update(ANDROID_CONTROL_AE_LOCK, &aeLock, 1);
@@ -2695,29 +2934,12 @@ status_t ExynosCamera3MetadataConverter::translateControlMetaData(ExynosCameraRe
     ALOGV("DEBUG(%s):dm.aa.videoStabilizationMode(%d)", __FUNCTION__, src->dm.aa.videoStabilizationMode);
 
     uint8_t tmpAeState = (uint8_t) CAMERA_METADATA(src->dm.aa.aeState);
-    /* Convert Sec specific AE_STATE_LOCKED_* to valid state value
-       (Based on the guide from ist.song@samsung.com) */
-    switch(src->dm.aa.aeState) {
-        case AE_STATE_LOCKED_CONVERGED:
-            ALOGV("DEBUG(%s):dm.aa.aeState(%d) -> Changed to (%d)-AE_STATE_CONVERGED"
-                ,  __FUNCTION__, src->dm.aa.aeState, AE_STATE_CONVERGED);
-            tmpAeState = (uint8_t) CAMERA_METADATA(AE_STATE_CONVERGED);
-            break;
-
-        case AE_STATE_LOCKED_FLASH_REQUIRED:
-            ALOGV("DEBUG(%s):dm.aa.aeState(%d) -> Changed to (%d)-AE_STATE_FLASH_REQUIRED"
-                ,  __FUNCTION__, src->dm.aa.aeState, AE_STATE_FLASH_REQUIRED);
-            tmpAeState = (uint8_t) CAMERA_METADATA(AE_STATE_FLASH_REQUIRED);
-            break;
-        default:
-            // Keep the original value
-            break;
-    }
-
+ 
     /* HACK: forcely set AE state during init skip count (FW not supported) */
     if (src->dm.request.frameCount < INITIAL_SKIP_FRAME) {
         tmpAeState = (uint8_t) CAMERA_METADATA(AE_STATE_SEARCHING);
     }
+
 #ifdef USE_AE_CONVERGED_UDM
     if (m_cameraId == CAMERA_ID_BACK &&
         tmpAeState == (uint8_t) CAMERA_METADATA(AE_STATE_CONVERGED)) {
@@ -2728,6 +2950,24 @@ status_t ExynosCamera3MetadataConverter::translateControlMetaData(ExynosCameraRe
         }
     }
 #endif
+
+    switch (src->dm.aa.aeState) {
+    case AE_STATE_CONVERGED:
+    case AE_STATE_LOCKED:
+        if (m_flashMgr != NULL)
+            m_flashMgr->notifyAeResult();
+        if (aeMode == ANDROID_CONTROL_AE_MODE_ON_ALWAYS_FLASH) {
+            tmpAeState = (uint8_t) CAMERA_METADATA(AE_STATE_FLASH_REQUIRED);
+        }
+        break;
+    case AE_STATE_INACTIVE:
+    case AE_STATE_SEARCHING:
+    case AE_STATE_FLASH_REQUIRED:
+    case AE_STATE_PRECAPTURE:
+    default:
+        break;
+    }
+
     const uint8_t aeState = tmpAeState;
     settings.update(ANDROID_CONTROL_AE_STATE, &aeState, 1);
     ALOGV("DEBUG(%s):dm.aa.aeState(%d), AE_STATE(%d)",  __FUNCTION__, src->dm.aa.aeState, aeState);
@@ -2740,6 +2980,18 @@ status_t ExynosCamera3MetadataConverter::translateControlMetaData(ExynosCameraRe
     settings.update(ANDROID_CONTROL_AF_STATE, &afState, 1);
     ALOGV("DEBUG(%s):dm.aa.afState(%d)",  __FUNCTION__, src->dm.aa.afState);
 
+#ifndef CAMERA_GED_FEATURE
+#ifdef SAMSUNG_COMPANION
+    int32_t vendorPafMode = (int32_t) CAMERA_METADATA(src->udm.companion.paf_mode);
+    settings.update(SAMSUNG_ANDROID_CONTROL_PAF_MODE, &vendorPafMode, 1);
+    ALOGV("DEBUG(%s): udm.companion.paf_mode(%d)", __FUNCTION__, src->udm.companion.paf_mode);
+
+    int32_t vendorHdrMode  = (int32_t) CAMERA_METADATA(src->udm.companion.wdr_mode);
+    //const uint8_t drcMode = (int32_t) CAMERA_METADATA(src->udm.companion.drc_mode);
+    settings.update(SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL, &vendorHdrMode, 1);
+    ALOGV("DEBUG(%s): udm.companion.wdr_mode(%d)", __FUNCTION__, src->udm.companion.wdr_mode);
+#endif
+#endif
     switch (src->dm.aa.aeState) {
     case AE_STATE_CONVERGED:
     case AE_STATE_LOCKED:
@@ -2982,6 +3234,9 @@ status_t ExynosCamera3MetadataConverter::translateLensMetaData(ExynosCameraReque
     ALOGV("DEBUG(%s):dm.lens.focusDistance(%f)", __FUNCTION__, src->dm.lens.focusDistance);
 
     uint8_t opticalStabilizationMode = (uint8_t) src->dm.lens.opticalStabilizationMode;
+#ifdef SAMSUNG_OIS
+    int32_t vendorOpticalStabilizationMode = SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE_PICTURE;
+#endif
 
     switch (opticalStabilizationMode) {
     case OPTICAL_STABILIZATION_MODE_STILL:
@@ -2989,6 +3244,9 @@ status_t ExynosCamera3MetadataConverter::translateLensMetaData(ExynosCameraReque
         break;
     case OPTICAL_STABILIZATION_MODE_VIDEO:
         opticalStabilizationMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
+#ifdef SAMSUNG_OIS
+        vendorOpticalStabilizationMode = SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE_VIDEO;
+#endif
         break;
     case OPTICAL_STABILIZATION_MODE_CENTERING:
     default:
@@ -2998,6 +3256,12 @@ status_t ExynosCamera3MetadataConverter::translateLensMetaData(ExynosCameraReque
     settings.update(ANDROID_LENS_OPTICAL_STABILIZATION_MODE, &opticalStabilizationMode, 1);
     ALOGV("DEBUG(%s):dm.lens.opticalStabilizationMode(%d)", __FUNCTION__,
             src->dm.lens.opticalStabilizationMode);
+
+#ifdef SAMSUNG_OIS
+    settings.update(SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE, &vendorOpticalStabilizationMode, 1);
+    ALOGV("DEBUG(%s):SAMSUNG_ANDROID_LENS is (%d)", __FUNCTION__,
+            src->dm.lens.opticalStabilizationMode);
+#endif
 
     const uint8_t lensState = src->dm.lens.state;
     settings.update(ANDROID_LENS_STATE, &lensState, 1);
@@ -3092,9 +3356,21 @@ status_t ExynosCamera3MetadataConverter::translateRequestMetaData(ExynosCameraRe
     ALOGV("DEBUG(%s):dm.request.metadataMode(%d)",  __FUNCTION__,
             src->dm.request.metadataMode);
 
-    const uint8_t pipelineDepth = src->dm.request.pipelineDepth;
-    settings.update(ANDROID_REQUEST_PIPELINE_DEPTH, &pipelineDepth, 1);
-    ALOGV("DEBUG(%s):ANDROID_REQUEST_PIPELINE_DEPTH(%d)", __FUNCTION__, pipelineDepth);
+/*
+ *
+ * pipelineDepth is filed of 'REQUEST'
+ *
+ * but updating pipelineDepth data can be conflict
+ * and we separeted this data not using data but request's private data
+ *
+ * remaining this code as comment is that to prevent missing update pieplineDepth data in the medta of 'REQUEST' field
+ *
+ */
+/*
+ *   const uint8_t pipelineDepth = src->dm.request.pipelineDepth;
+ *   settings.update(ANDROID_REQUEST_PIPELINE_DEPTH, &pipelineDepth, 1);
+ *   ALOGV("DEBUG(%s):ANDROID_REQUEST_PIPELINE_DEPTH(%d)", __FUNCTION__, pipelineDepth);
+ */
 
     requestInfo->setResultMeta(settings);
 
@@ -3199,9 +3475,9 @@ status_t ExynosCamera3MetadataConverter::translateSensorMetaData(ExynosCameraReq
             src->dm.sensor.testPatternData[0], src->dm.sensor.testPatternData[1],
             src->dm.sensor.testPatternData[2], src->dm.sensor.testPatternData[3]);
 
-    const int64_t timeStamp = (int64_t) src->dm.sensor.timeStamp;
+    const int64_t timeStamp = (int64_t) src->udm.sensor.timeStampBoot;
     settings.update(ANDROID_SENSOR_TIMESTAMP, &timeStamp, 1);
-    ALOGV("DEBUG(%s):dm.sensor.timeStamp(%lld)",  __FUNCTION__, src->dm.sensor.timeStamp);
+    ALOGV("DEBUG(%s):udm.sensor.timeStampBoot(%lld)",  __FUNCTION__, src->udm.sensor.timeStampBoot);
 
     const camera_metadata_rational_t neutralColorPoint[3] =
     {
@@ -3587,6 +3863,45 @@ status_t ExynosCamera3MetadataConverter::m_createControlAvailableHighSpeedVideoC
     return ret;
 }
 
+/*
+   - Returns NO_ERROR if private reprocessing is supported: streamConfigs will have valid entries.
+   - Returns NAME_NOT_FOUND if private reprocessing is not supported: streamConfigs will be returned as is,
+     and scaler.AvailableInputOutputFormatsMap should not be updated.
+*/
+status_t ExynosCamera3MetadataConverter::m_createScalerAvailableInputOutputFormatsMap(const struct ExynosSensorInfoBase *sensorStaticInfo,
+                                                                         Vector<int32_t> *streamConfigs,
+                                                                         __unused int cameraId)
+{
+    int streamConfigSize = 0;
+    bool isSupportPrivReprocessing = false;
+
+    if (sensorStaticInfo == NULL) {
+        ALOGE("ERR(%s[%d]):Sensor static info is NULL", __FUNCTION__, __LINE__);
+        return BAD_VALUE;
+    }
+    if (streamConfigs == NULL) {
+        ALOGE("ERR(%s[%d]):Stream configs is NULL", __FUNCTION__, __LINE__);
+        return BAD_VALUE;
+    }
+
+    isSupportPrivReprocessing = m_hasTagInList(
+            sensorStaticInfo->capabilities,
+            sensorStaticInfo->capabilitiesLength,
+            ANDROID_REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING);
+
+    if(isSupportPrivReprocessing == true) {
+        streamConfigs->add(HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED);
+        streamConfigs->add(2);
+        streamConfigs->add(HAL_PIXEL_FORMAT_YCbCr_420_888);
+        streamConfigs->add(HAL_PIXEL_FORMAT_BLOB);
+        streamConfigs->setCapacity(streamConfigSize);
+
+        return NO_ERROR;
+    } else {
+        return NAME_NOT_FOUND;
+    }
+}
+
 status_t ExynosCamera3MetadataConverter::m_createScalerAvailableStreamConfigurationsOutput(const struct ExynosSensorInfoBase *sensorStaticInfo,
                                                                                            Vector<int32_t> *streamConfigs,
                                                                                            int cameraId)
@@ -3594,6 +3909,8 @@ status_t ExynosCamera3MetadataConverter::m_createScalerAvailableStreamConfigurat
     status_t ret = NO_ERROR;
     int (*yuvSizeList)[SIZE_OF_RESOLUTION] = NULL;
     int yuvSizeListLength = 0;
+    int (*jpegSizeList)[SIZE_OF_RESOLUTION] = NULL;
+    int jpegSizeListLength = 0;
     int streamConfigSize = 0;
     bool isSupportHighResolution = false;
     bool isSupportPrivReprocessing = false;
@@ -3613,28 +3930,31 @@ status_t ExynosCamera3MetadataConverter::m_createScalerAvailableStreamConfigurat
             ANDROID_REQUEST_AVAILABLE_CAPABILITIES_BURST_CAPTURE);
 
     if (cameraId == CAMERA_ID_BACK) {
-        yuvSizeList = sensorStaticInfo->rearPictureList;
-        yuvSizeListLength = sensorStaticInfo->rearPictureListMax;
+        yuvSizeList = sensorStaticInfo->rearPreviewList;
+        yuvSizeListLength = sensorStaticInfo->rearPreviewListMax;
+        jpegSizeList = sensorStaticInfo->rearPictureList;
+        jpegSizeListLength = sensorStaticInfo->rearPictureListMax;
     } else { /* CAMERA_ID_FRONT */
-        yuvSizeList = sensorStaticInfo->frontPictureList;
-        yuvSizeListLength = sensorStaticInfo->frontPictureListMax;
+        yuvSizeList = sensorStaticInfo->frontPreviewList;
+        yuvSizeListLength = sensorStaticInfo->frontPreviewListMax;
+        jpegSizeList = sensorStaticInfo->frontPictureList;
+        jpegSizeListLength = sensorStaticInfo->frontPictureListMax;
     }
 
-    // Check wheather the private reprocessing is supported or not
-    for(size_t i = 0; i < sensorStaticInfo->capabilitiesLength; i++) {
-        if(sensorStaticInfo->capabilities[i] == ANDROID_REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING) {
-            isSupportPrivReprocessing = true;
-            break;
-        }
-    }
-    //TODO: Add YUV reprocessing if necessary
+    /* Check wheather the private reprocessing is supported or not */
+    isSupportPrivReprocessing = m_hasTagInList(
+            sensorStaticInfo->capabilities,
+            sensorStaticInfo->capabilitiesLength,
+            ANDROID_REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING);
+
+    /* TODO: Add YUV reprocessing if necessary */
 
     /* HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED stream configuration list size */
     streamConfigSize = yuvSizeListLength * 4;
     /* YUV output stream configuration list size */
     streamConfigSize += (yuvSizeListLength * 4) * (ARRAY_LENGTH(YUV_FORMATS));
     /* Stall output stream configuration list size */
-    streamConfigSize += (yuvSizeListLength * 4) * (ARRAY_LENGTH(STALL_FORMATS));
+    streamConfigSize += (jpegSizeListLength * 4) * (ARRAY_LENGTH(STALL_FORMATS));
     /* RAW output stream configuration list size */
     streamConfigSize += (1 * 4) * (ARRAY_LENGTH(RAW_FORMATS));
     /* ZSL input stream configuration list size */
@@ -3670,17 +3990,12 @@ status_t ExynosCamera3MetadataConverter::m_createScalerAvailableStreamConfigurat
 
     /* Stall output stream supported size list */
     for (size_t i = 0; i < ARRAY_LENGTH(STALL_FORMATS); i++) {
-        for (int j = 0; j < yuvSizeListLength; j++) {
-            int pixelSize = yuvSizeList[j][0] * yuvSizeList[j][1];
-            if (isSupportHighResolution == false
-                && pixelSize > HIGH_RESOLUTION_MIN_PIXEL_SIZE) {
-                streamConfigSize -= 4;
-                continue;
-            }
+        for (int j = 0; j < jpegSizeListLength; j++) {
+            int pixelSize = jpegSizeList[j][0] * jpegSizeList[j][1];
 
             streamConfigs->add(STALL_FORMATS[i]);
-            streamConfigs->add(yuvSizeList[j][0]);
-            streamConfigs->add(yuvSizeList[j][1]);
+            streamConfigs->add(jpegSizeList[j][0]);
+            streamConfigs->add(jpegSizeList[j][1]);
             streamConfigs->add(ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT);
         }
     }
@@ -3730,6 +4045,8 @@ status_t ExynosCamera3MetadataConverter::m_createScalerAvailableMinFrameDuration
     status_t ret = NO_ERROR;
     int (*yuvSizeList)[SIZE_OF_RESOLUTION] = NULL;
     int yuvSizeListLength = 0;
+    int (*jpegSizeList)[SIZE_OF_RESOLUTION] = NULL;
+    int jpegSizeListLength = 0;
     int minDurationSize = 0;
     int64_t currentMinDuration = 0L;
     bool isSupportHighResolution = false;
@@ -3749,11 +4066,15 @@ status_t ExynosCamera3MetadataConverter::m_createScalerAvailableMinFrameDuration
             ANDROID_REQUEST_AVAILABLE_CAPABILITIES_BURST_CAPTURE);
 
     if (cameraId == CAMERA_ID_BACK) {
-        yuvSizeList = sensorStaticInfo->rearPictureList;
-        yuvSizeListLength = sensorStaticInfo->rearPictureListMax;
+        yuvSizeList = sensorStaticInfo->rearPreviewList;
+        yuvSizeListLength = sensorStaticInfo->rearPreviewListMax;
+        jpegSizeList = sensorStaticInfo->rearPictureList;
+        jpegSizeListLength = sensorStaticInfo->rearPictureListMax;
     } else { /* CAMERA_ID_FRONT */
-        yuvSizeList = sensorStaticInfo->frontPictureList;
-        yuvSizeListLength = sensorStaticInfo->frontPictureListMax;
+        yuvSizeList = sensorStaticInfo->frontPreviewList;
+        yuvSizeListLength = sensorStaticInfo->frontPreviewListMax;
+        jpegSizeList = sensorStaticInfo->frontPictureList;
+        jpegSizeListLength = sensorStaticInfo->frontPictureListMax;
     }
 
     /* HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED stream min frame duration list size */
@@ -3761,7 +4082,7 @@ status_t ExynosCamera3MetadataConverter::m_createScalerAvailableMinFrameDuration
     /* YUV output stream min frame duration list size */
     minDurationSize += (yuvSizeListLength * 4) * (ARRAY_LENGTH(YUV_FORMATS));
     /* Stall output stream configuration list size */
-    minDurationSize += (yuvSizeListLength * 4) * (ARRAY_LENGTH(STALL_FORMATS));
+    minDurationSize += (jpegSizeListLength * 4) * (ARRAY_LENGTH(STALL_FORMATS));
     /* RAW output stream min frame duration list size */
     minDurationSize += (1 * 4) * (ARRAY_LENGTH(RAW_FORMATS));
     minDurations->setCapacity(minDurationSize);
@@ -3793,17 +4114,12 @@ status_t ExynosCamera3MetadataConverter::m_createScalerAvailableMinFrameDuration
 
     /* Stall output stream min frame duration list */
     for (size_t i = 0; i < ARRAY_LENGTH(STALL_FORMATS); i++) {
-        for (int j = 0; j < yuvSizeListLength; j++) {
-            int pixelSize = yuvSizeList[j][0] * yuvSizeList[j][1];
-            if (isSupportHighResolution == false
-                && pixelSize > HIGH_RESOLUTION_MIN_PIXEL_SIZE) {
-                minDurationSize -= 4;
-                continue;
-            }
+        for (int j = 0; j < jpegSizeListLength; j++) {
+            int pixelSize = jpegSizeList[j][0] * jpegSizeList[j][1];
 
             minDurations->add((int64_t)STALL_FORMATS[i]);
-            minDurations->add((int64_t)yuvSizeList[j][0]);
-            minDurations->add((int64_t)yuvSizeList[j][1]);
+            minDurations->add((int64_t)jpegSizeList[j][0]);
+            minDurations->add((int64_t)jpegSizeList[j][1]);
 
             if (pixelSize > HIGH_RESOLUTION_MIN_PIXEL_SIZE)
                 currentMinDuration = HIGH_RESOLUTION_MIN_DURATION;
@@ -3984,6 +4300,8 @@ void ExynosCamera3MetadataConverter::m_updateFaceDetectionMetaData(CameraMetadat
     uint8_t faceScores[NUM_OF_DETECTED_FACES];
     uint8_t detectedFaceCount = 0;
     int maxSensorW = 0, maxSensorH = 0;
+    ExynosRect bnsSize, bayerCropSize;
+    int xOffset = 0, yOffset = 0;
     int hwPreviewW = 0, hwPreviewH = 0;
     float scaleRatioW = 0.0f, scaleRatioH = 0.0f;
 
@@ -4002,9 +4320,17 @@ void ExynosCamera3MetadataConverter::m_updateFaceDetectionMetaData(CameraMetadat
      * The FD region from firmware must be scaled into the size based on sensor active array size
      */
     m_parameters->getMaxSensorSize(&maxSensorW, &maxSensorH);
-    m_parameters->getHwPreviewSize(&hwPreviewW, &hwPreviewH);
-    scaleRatioW = (float)maxSensorW / (float)hwPreviewW;
-    scaleRatioH = (float)maxSensorH / (float)hwPreviewH;
+    m_parameters->getPreviewBayerCropSize(&bnsSize, &bayerCropSize);
+    if ((maxSensorW - bayerCropSize.w) / 2 > 0)
+        xOffset = ALIGN_DOWN(((maxSensorW - bayerCropSize.w) / 2), 2);
+    if ((maxSensorH - bayerCropSize.h) / 2 > 0)
+        yOffset = ALIGN_DOWN(((maxSensorH - bayerCropSize.h) / 2), 2);
+    if (m_parameters->isMcscVraOtf() == true)
+        m_parameters->getYuvSize(&hwPreviewW, &hwPreviewH, 0);
+    else
+        m_parameters->getHwVraInputSize(&hwPreviewW, &hwPreviewH);
+    scaleRatioW = (float)bayerCropSize.w / (float)hwPreviewW;
+    scaleRatioH = (float)bayerCropSize.h / (float)hwPreviewH;
 
     for (int i = 0; i < NUM_OF_DETECTED_FACES; i++) {
         if (shot_ext->shot.dm.stats.faceIds[i]) {
@@ -4021,10 +4347,21 @@ void ExynosCamera3MetadataConverter::m_updateFaceDetectionMetaData(CameraMetadat
                     /* Normalize the score into the range of [0, 100] */
                     faceScores[i] = (uint8_t) ((float)shot_ext->shot.dm.stats.faceScores[i] / (255.0f / 100.0f));
 
-                    faceRectangles[(i * RECTANGLE_MAX_INDEX) + X1] = (int32_t) (shot_ext->shot.dm.stats.faceRectangles[i][X1] * scaleRatioW);
-                    faceRectangles[(i * RECTANGLE_MAX_INDEX) + Y1] = (int32_t) (shot_ext->shot.dm.stats.faceRectangles[i][Y1] * scaleRatioH);
-                    faceRectangles[(i * RECTANGLE_MAX_INDEX) + X2] = (int32_t) (shot_ext->shot.dm.stats.faceRectangles[i][X2] * scaleRatioW);
-                    faceRectangles[(i * RECTANGLE_MAX_INDEX) + Y2] = (int32_t) (shot_ext->shot.dm.stats.faceRectangles[i][Y2] * scaleRatioH);
+                    faceRectangles[(i * RECTANGLE_MAX_INDEX) + X1] = (int32_t) ((shot_ext->shot.dm.stats.faceRectangles[i][X1] * scaleRatioW) + xOffset);
+                    faceRectangles[(i * RECTANGLE_MAX_INDEX) + Y1] = (int32_t) ((shot_ext->shot.dm.stats.faceRectangles[i][Y1] * scaleRatioH) + yOffset);
+                    faceRectangles[(i * RECTANGLE_MAX_INDEX) + X2] = (int32_t) ((shot_ext->shot.dm.stats.faceRectangles[i][X2] * scaleRatioW) + xOffset);
+                    faceRectangles[(i * RECTANGLE_MAX_INDEX) + Y2] = (int32_t) ((shot_ext->shot.dm.stats.faceRectangles[i][Y2] * scaleRatioH) + yOffset);
+                    ALOGV("DEBUG(%s):faceIds[%d](%d), faceScores[%d](%d), original(%d,%d,%d,%d), converted(%d,%d,%d,%d)",
+                        __FUNCTION__,
+                        i, faceIds[i], i, faceScores[i],
+                        shot_ext->shot.dm.stats.faceRectangles[i][X1],
+                        shot_ext->shot.dm.stats.faceRectangles[i][Y1],
+                        shot_ext->shot.dm.stats.faceRectangles[i][X2],
+                        shot_ext->shot.dm.stats.faceRectangles[i][Y2],
+                        faceRectangles[(i * RECTANGLE_MAX_INDEX) + X1],
+                        faceRectangles[(i * RECTANGLE_MAX_INDEX) + Y1],
+                        faceRectangles[(i * RECTANGLE_MAX_INDEX) + X2],
+                        faceRectangles[(i * RECTANGLE_MAX_INDEX) + Y2]);
 
                     detectedFaceCount++;
                     break;
@@ -4050,30 +4387,29 @@ void ExynosCamera3MetadataConverter::m_updateFaceDetectionMetaData(CameraMetadat
         }
     }
 
-    if (detectedFaceCount < 1)
-        return;
+    if (detectedFaceCount > 0) {
+        switch (shot_ext->shot.dm.stats.faceDetectMode) {
+            case FACEDETECT_MODE_FULL:
+                settings->update(ANDROID_STATISTICS_FACE_LANDMARKS, faceLandmarks,
+                        detectedFaceCount * FACE_LANDMARKS_MAX_INDEX);
+                ALOGV("DEBUG(%s):dm.stats.faceLandmarks(%d)", __FUNCTION__, detectedFaceCount);
+            case FACEDETECT_MODE_SIMPLE:
+                settings->update(ANDROID_STATISTICS_FACE_IDS, faceIds, detectedFaceCount);
+                ALOGV("DEBUG(%s):dm.stats.faceIds(%d)", __FUNCTION__, detectedFaceCount);
 
-    switch (shot_ext->shot.dm.stats.faceDetectMode) {
-        case FACEDETECT_MODE_FULL:
-            settings->update(ANDROID_STATISTICS_FACE_LANDMARKS, faceLandmarks,
-                    detectedFaceCount * FACE_LANDMARKS_MAX_INDEX);
-            ALOGV("DEBUG(%s):dm.stats.faceLandmarks(%d)", __FUNCTION__, detectedFaceCount);
-        case FACEDETECT_MODE_SIMPLE:
-        case FACEDETECT_MODE_OFF:
-            settings->update(ANDROID_STATISTICS_FACE_IDS, faceIds, detectedFaceCount);
-            ALOGV("DEBUG(%s):dm.stats.faceIds(%d)", __FUNCTION__, detectedFaceCount);
+                settings->update(ANDROID_STATISTICS_FACE_RECTANGLES, faceRectangles,
+                        detectedFaceCount * RECTANGLE_MAX_INDEX);
+                ALOGV("DEBUG(%s):dm.stats.faceRectangles(%d)", __FUNCTION__, detectedFaceCount);
 
-            settings->update(ANDROID_STATISTICS_FACE_RECTANGLES, faceRectangles,
-                    detectedFaceCount * RECTANGLE_MAX_INDEX);
-            ALOGV("DEBUG(%s):dm.stats.faceRectangles(%d)", __FUNCTION__, detectedFaceCount);
-
-            settings->update(ANDROID_STATISTICS_FACE_SCORES, faceScores, detectedFaceCount);
-            ALOGV("DEBUG(%s):dm.stats.faceScores(%d)", __FUNCTION__, detectedFaceCount);
-            break;
-        default:
-            ALOGE("ERR(%s[%d]):Not supported FD mode(%d)", __FUNCTION__, __LINE__,
-                    shot_ext->shot.dm.stats.faceDetectMode);
-            break;
+                settings->update(ANDROID_STATISTICS_FACE_SCORES, faceScores, detectedFaceCount);
+                ALOGV("DEBUG(%s):dm.stats.faceScores(%d)", __FUNCTION__, detectedFaceCount);
+                break;
+            case FACEDETECT_MODE_OFF:
+            default:
+                ALOGE("ERR(%s[%d]):Not supported FD mode(%d)", __FUNCTION__, __LINE__,
+                        shot_ext->shot.dm.stats.faceDetectMode);
+                break;
+        }
     }
 
     return;

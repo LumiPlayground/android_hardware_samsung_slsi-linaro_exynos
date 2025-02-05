@@ -467,6 +467,24 @@ status_t ExynosCameraPipe::getControl(int cid, int *value)
     return ret;
 }
 
+status_t ExynosCameraPipe::getControl(int cid, int *value, __unused enum NODE_TYPE nodeType)
+{
+    CLOGV("");
+
+    if (m_mainNode == NULL) {
+        CLOGE(" m_mainNode == NULL. so, fail");
+        return INVALID_OPERATION;
+    }
+
+    int ret = 0;
+
+    ret = m_mainNode->getControl(cid, value);
+    if (ret != NO_ERROR)
+        CLOGE("m_mainNode->getControl failed");
+
+    return ret;
+}
+
 status_t ExynosCameraPipe::setExtControl(struct v4l2_ext_controls *ctrl)
 {
     CLOGV("");
@@ -624,6 +642,28 @@ status_t ExynosCameraPipe::setPipeId(__unused enum NODE_TYPE nodeType, __unused 
     android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Not supported API. use MCPipe, assert!!!!", __FUNCTION__, __LINE__);
 
     return INVALID_OPERATION;
+}
+
+status_t ExynosCameraPipe::setPipeStreamLeader(bool flag)
+{
+    this->m_flagStreamLeader = flag;
+    return NO_ERROR;
+}
+
+bool ExynosCameraPipe::getPipeStreamLeader(void)
+{
+    return this->m_flagStreamLeader;
+}
+
+status_t ExynosCameraPipe::setPrevPipeID(int id)
+{
+    this->m_prevPipeId = id;
+    return NO_ERROR;
+}
+
+status_t ExynosCameraPipe::getPrevPipeID(void)
+{
+    return this->m_prevPipeId;
 }
 
 status_t ExynosCameraPipe::setPipeName(const char *pipeName)
@@ -1357,7 +1397,15 @@ status_t ExynosCameraPipe::m_setNodeInfo(ExynosCameraNode *node, camera_pipe_inf
                             (enum v4l2_memory)pipeInfos->bufInfo.memory);
 
         if (flagValidSetFormatInfo == true) {
-#ifdef DEBUG_RAWDUMP
+#ifdef SAMSUNG_DNG
+            if (m_parameters->getDNGCaptureModeOn() && getPipeId() == PIPE_FLITE) {
+                CLOGV(" DNG flite node->setFormat() getPipeId()(%d)",getPipeId());
+                if (node->setFormat() != NO_ERROR) {
+                    CLOGE(" node->setFormat() fail");
+                    return INVALID_OPERATION;
+                }
+            } else
+#elif defined(DEBUG_RAWDUMP)
             if (m_configurations->checkBayerDumpEnable() && flagBayer == true) {
                 //bytesPerLine[0] = (maxW + 16) * 2;
                 if (node->setFormat() != NO_ERROR) {
@@ -1819,6 +1867,8 @@ void ExynosCameraPipe::m_init(void)
 
     m_timeLogCount = TIME_LOG_COUNT;
     m_state = PIPE_STATE_NONE;
+    m_prevPipeId = -1;
+    m_flagStreamLeader = 0;
 }
 
 status_t ExynosCameraPipe::m_transitState(pipe_state_t state)

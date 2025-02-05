@@ -168,6 +168,9 @@ public:
     bool getNeedCaptureFlash(void);
     void notifyAfResultHAL3(void);
     void notifyAeResult(void);
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+    void setAeFlashModeForLcdFlashHAL3(camera2_shot_ext *shot_ext, int flashStep);
+#endif
 
 private:
     bool m_isNeedFlash;

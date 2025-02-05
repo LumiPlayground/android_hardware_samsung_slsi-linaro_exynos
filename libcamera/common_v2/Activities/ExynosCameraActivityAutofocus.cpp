@@ -56,8 +56,19 @@ ExynosCameraActivityAutofocus::ExynosCameraActivityAutofocus()
 
     m_recordingHint = false;
     m_flagFaceDetection = false;
+#ifdef SAMSUNG_DOF
+    m_flagPDAF = false;
+    m_flagLensMoveStart = false;
+#endif
+#ifdef SAMSUNG_OT
+    m_isOTstart = false;
+#endif
+#ifdef SUPPORT_MULTI_AF
+    m_flagMultiAf = false;
+#endif
     m_macroPosition = AUTOFOCUS_MACRO_POSITION_BASE;
     m_fpsValue = 0;
+    m_samsungCamera = false;
     m_afInMotionResult = false;
 
     m_af_mode_info = 0;
@@ -69,6 +80,7 @@ ExynosCameraActivityAutofocus::ExynosCameraActivityAutofocus()
     m_af_time_info = 0;
     m_af_factory_info = 0;
     m_paf_from_info = 0;
+    m_paf_error_code = 0;
 }
 
 ExynosCameraActivityAutofocus::~ExynosCameraActivityAutofocus()
@@ -100,7 +112,7 @@ int ExynosCameraActivityAutofocus::t_funcISPAfter(__unused void *args)
     return 1;
 }
 
-int ExynosCameraActivityAutofocus::t_func3ABeforeHAL3(void *args)
+int ExynosCameraActivityAutofocus::t_func3ABeforeHAL3(__unused void *args)
 {
     return 1;
 }
@@ -110,7 +122,7 @@ int ExynosCameraActivityAutofocus::t_func3AAfterHAL3(__unused void *args)
     return 1;
 }
 
-int ExynosCameraActivityAutofocus::t_funcSCPBefore(void *args)
+int ExynosCameraActivityAutofocus::t_funcSCPBefore(__unused void *args)
 {
     return 1;
 }
@@ -342,6 +354,11 @@ int ExynosCameraActivityAutofocus::getFpsValue()
     return m_fpsValue;
 }
 
+void ExynosCameraActivityAutofocus::setSamsungCamera(int flags)
+{
+    m_samsungCamera = flags;
+}
+
 void ExynosCameraActivityAutofocus::setAfInMotionResult(bool afInMotion)
 {
     m_afInMotionResult = afInMotion;
@@ -364,6 +381,7 @@ void ExynosCameraActivityAutofocus::displayAFInfo(void)
     ALOGD("(%s):0x%x", "CMGEFL", m_af_time_info);
     ALOGD("(%s):0x%x", "CMGEFL", m_af_factory_info);
     ALOGD("(%s):0x%x", "CMGEFL", m_paf_from_info);
+    ALOGD("(%s):0x%x", "CMGEFL", m_paf_error_code);
     ALOGD("(%s):==================================================", "CMGEFL");
     return ;
 }

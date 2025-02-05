@@ -29,6 +29,10 @@
 #include <videodev2_exynos_camera.h>
 #include <map>
 
+#ifdef USE_CSC_FEATURE
+#include <SecNativeFeature.h>
+#endif
+
 #include "ExynosCameraObject.h"
 #include "ExynosCameraCommonInclude.h"
 #include "ExynosCameraSensorInfoBase.h"
@@ -42,7 +46,23 @@
 #include "ExynosCameraAutoTimer.h"
 #include "ExynosCameraConfigurations.h"
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraParameters.h"
+#include "SecCameraUtil.h"
+#endif
+#ifdef SAMSUNG_OIS
+#include "ExynosCameraNode.h"
+#endif
+#ifdef SAMSUNG_DNG
+#include "SecCameraDng.h"
+#include "SecCameraDngThumbnail.h"
+#endif
+
 #include "ExynosCameraSensorInfo.h"
+
+#ifdef SAMSUNG_UNI_API
+#include "uni_api_wrapper.h"
+#endif
 
 #define FW_CUSTOM_OFFSET (1)
 #define V4L2_FOURCC_LENGTH 5
@@ -145,6 +165,8 @@ enum HW_INFO_SIZE_TYPE {
     HW_INFO_HW_BNS_SIZE,
     HW_INFO_HW_PREVIEW_SIZE,
     HW_INFO_HW_PICTURE_SIZE,
+#ifdef SAMSUNG_TN_FEATURE
+#endif
     HW_INFO_SIZE_MAX,
 };
 
@@ -470,12 +492,17 @@ public:
                                 enum pipeline dstPipeId);
 
     bool                isUse3aaInputCrop(void);
+    void                setVideoStreamExistStatus(bool);
+    bool                isVideoStreamExist(void);
+    bool                isUse3aaBDSOff();
+
     bool                isUseIspInputCrop(void);
     bool                isUseMcscInputCrop(void);
     bool                isUseReprocessing3aaInputCrop(void);
     bool                isUseReprocessingIspInputCrop(void);
     bool                isUseReprocessingMcscInputCrop(void);
     bool                isUseEarlyFrameReturn(void);
+    bool                isUse3aaDNG(void);
     bool                isUseHWFC(void);
     bool                isUseThumbnailHWFC(void) {return true;};
     bool                isHWFCOnDemand(void);
@@ -513,21 +540,21 @@ public:
     bool                checkFaceDetectMeta(struct camera2_shot_ext *shot_ext);
     void                getFaceDetectMeta(camera2_shot_ext *shot_ext);
 
-    void                checkPostProcessingCapture();
-    status_t            m_checkHIFILLSCapture();
-
     bool                getHfdMode(void);
     bool                getGmvMode(void);
 
     void                getVendorRatioCropSizeForVRA(ExynosRect *ratioCropSize);
-    void                getVendorRatioCropSize(ExynosRect *ratioCropSize,
-                                               ExynosRect *mcscSize,
-                                               int portIndex,
-                                               int isReprocessing);
-
-#ifdef USES_DUAL_CAMERA_SOLUTION_ARCSOFT
-    void                setArcSoftImageRatio(float imageRatio) { m_arcSoftImageRatio = imageRatio; }
-    float               getArcSoftImageRatio(void) { return m_arcSoftImageRatio; }
+    void                getVendorRatioCropSize(ExynosRect *ratioCropSize
+                                                            , ExynosRect *mcscSize
+                                                            , int portIndex
+                                                            , int isReprocessing
+#if defined(SAMSUNG_HIFI_VIDEO) && defined(HIFIVIDEO_ZOOM_SUPPORTED)
+                                                            , ExynosRect *sensorSize
+                                                            , ExynosRect *mcscInputSize
+#endif
+                                                            );
+#ifdef CORRECT_TIMESTAMP_FOR_SENSORFUSION
+    uint64_t            getCorrectTimeForSensorFusion(void);
 #endif
 
 private:
@@ -578,6 +605,7 @@ private:
     bool                        m_usePureBayerReprocessing;
 
     bool                        m_fastenAeStableOn;
+    bool                        m_videoStreamExist;
 
     int                         m_previewPortId;
     int                         m_recordingPortId;
@@ -588,15 +616,58 @@ private:
 
     int                         m_previewDsInputPortId;
     int                         m_captureDsInputPortId;
+
+
     ExynosRect                  m_activeZoomRect;
     float                       m_activeZoomRatio;
     int                         m_activeZoomMargin;
 
 /* Vedor specific API */
-public:
+private:
     status_t        m_vendorReInit(void);
 
+#ifdef SAMSUNG_HRM
+    void            m_setHRM(int ir_data, int flicker_data, int status);
+#endif
+
+#ifdef SAMSUNG_LIGHT_IR
+    void            m_setLight_IR(SensorListenerEvent_t data);
+#endif
+
+#ifdef SAMSUNG_GYRO
+    void            m_setGyro(SensorListenerEvent_t data);
+    SensorListenerEvent_t            *getGyroData(void);
+#endif
+
+#ifdef SAMSUNG_ACCELEROMETER
+    void            m_setAccelerometer(SensorListenerEvent_t data);
+#endif
+
+#ifdef SAMSUNG_DOF
+    void            m_setLensPos(int pos);
+#endif
+
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    status_t        m_getFusionSize(int w, int h, ExynosRect *rect, bool flagSrc, int margin);
+#endif
+
+
+public:
+#ifdef SAMSUNG_PROX_FLICKER
+    void            setProxFlicker(SensorListenerEvent_t data);
+#endif
+
 /* Additional API. */
+#ifdef SAMSUNG_PAF
+     /* Gets PAF */
+    enum camera2_paf_mode            getPaf(void);
+#endif
+
+#ifdef SAMSUNG_RTHDR
+     /* Gets RT HDR */
+    enum camera2_wdr_mode            getRTHdr(void);
+    void                             setRTHdr(enum camera2_wdr_mode rtHdrMode);
+#endif
 
 /* Vendor specific APIs */
 #ifdef USE_LLS_REPROCESSING
@@ -607,17 +678,106 @@ public:
     void            setLLSCaptureCount(int count);
 #endif
 
+#ifdef SAMSUNG_TN_FEATURE
     void            setImageUniqueId(char *uniqueId);
-
-/* Vendor specific adjust function */
-    void            updateMetaDataParam(struct camera2_shot_ext *shot);
-#ifdef USES_HIFI_LLS
-    void            m_setHifiLLSMeta(struct camera2_shot_ext *shot);
-    int             getHifiLLSMeta(int &brightness, bool &hifillsOn);
 #endif
 
-    void            m_setLLSValue(struct camera2_shot_ext *shot);
-    int             getLLSValue(void);
+#ifdef SAMSUNG_STR_PREVIEW
+    bool            getSTRPreviewEnable(void);
+#endif
+
+#ifdef SAMSUNG_SW_VDIS
+    void            getSWVdisYuvSize(int w, int h, int fps, int *newW, int *newH);
+    void            getSWVdisAdjustYuvSize(int *width, int *height, int fps);
+    bool            isSWVdisOnPreview(void);
+#ifdef SAMSUNG_SW_VDIS_USE_OIS
+    void            setSWVdisMetaCtlOISCoef(uint32_t coef);
+    void            setSWVdisPreviewFrameExposureTime(int exposureTime);
+    int             getSWVdisPreviewFrameExposureTime(void);
+#endif
+#endif
+
+#ifdef SAMSUNG_HYPERLAPSE
+    void            getHyperlapseYuvSize(int w, int h, int fps, int *newW, int *newH);
+    void            getHyperlapseAdjustYuvSize(int *width, int *height, int fps);
+#endif
+
+/* Vendor specific adjust function */
+#ifdef SAMSUNG_SSM
+    status_t        checkSSMEnable(const CameraParameters& params);
+    void            m_setSSMEnable(bool flagSSMEnable);
+#endif
+
+#ifdef LLS_CAPTURE
+    void                setLLSValue(struct camera2_shot_ext *shot);
+    int                 getLLSValue(void);
+#endif
+
+
+#ifdef OIS_CAPTURE
+    void                checkOISCaptureMode(int multiCaptureMode);
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    void                checkLDCaptureMode(bool skipLDCapture = false);
+    void                setLLSdebugInfo(unsigned char *data, unsigned int size);
+#ifdef SUPPORT_ZSL_MULTIFRAME
+    void                checkZslMultiframeMode(void);
+#endif
+#ifdef SAMSUNG_MFHDR_CAPTURE
+    void                setMFHDRdebugInfo(unsigned char *data, unsigned int size);
+#endif
+#ifdef SAMSUNG_LLHDR_CAPTURE
+    void                setLLHDRdebugInfo(unsigned char *data, unsigned int size);
+#endif
+#endif
+
+#ifdef SAMSUNG_STR_CAPTURE
+    void                checkSTRCaptureMode(bool hasCaptureStream);
+    void                setSTRdebugInfo(unsigned char *data, unsigned int size);
+#endif
+
+#ifdef SAMSUNG_VIDEO_BEAUTY_SNAPSHOT
+    void                checkBeautyCaptureMode(bool hasCaptureStream);
+#endif
+
+#ifdef SAMSUNG_FACTORY_DRAM_TEST
+    int                 getFactoryDramTestCount(void);
+#endif
+
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    status_t            adjustDualSolutionSize(int targetWidth, int targetHeight);
+    status_t            getFusionSize(int w, int h, ExynosRect *srcRect, ExynosRect *dstRect,
+                                  int margin = DUAL_SOLUTION_MARGIN_VALUE_30);
+    void                getDualSolutionSize(int *dstW, int *dstH, int *wideW, int *wideH, int *teleW, int *teleH,
+                                    int margin = DUAL_SOLUTION_MARGIN_VALUE_30);
+    int                 getDualSolutionMarginValue(ExynosRect* targetRect, ExynosRect* SrcRect);
+
+    void                storeAeState(int aeState);
+    int                 getAeState(void);
+    void                storeSceneDetectIndex(int scene_index);
+    int                 getSceneDetectIndex(void);
+#endif
+
+#ifdef SAMSUNG_DUAL_ZOOM_CAPTURE
+    void                setFusionCapturedebugInfo(unsigned char *data, unsigned int size);
+    bool                useCaptureExtCropROI(void);
+    void                setCaptureExtCropROI(UTrect captureExtCropROI);
+#endif
+
+#ifdef SAMSUNG_SSRM
+    struct ssrmCameraInfo* getSsrmCameraInfo(void) {return &m_ssrmCameraInfo; }
+#endif
+
+#ifdef SAMSUNG_HIFI_VIDEO
+    bool            isValidHiFiVideoSize(int w, int h, int fps);
+    void            getHiFiVideoYuvSize(int w, int h, int fps, int *newW, int *newH);
+    void            getHiFiVideoAdjustYuvSize(int *width, int *height, int fps);
+    void            getHiFiVideoScalerControlInfo(int vid, ExynosRect *refRect, ExynosRect *srcRect, ExynosRect *dstRect);
+    void            getHiFiVideoZoomRatio(float viewZoomRatio, float *activeZoomRatio, int *activeMargin);
+    void            getHiFiVideoCropRegion(ExynosRect *cropRegion);
+    void            setHFVZdebugInfo(unsigned char *data, unsigned int size);
+#endif
 
 /* Vedor specific member */
 private:
@@ -626,19 +786,50 @@ private:
     int                         m_LLSCaptureCount;
 #endif
 
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    int                         m_dualDstWidth;
+    int                         m_dualDstHeight;
+    int                         m_dualSrcWideWidth;
+    int                         m_dualSrcWideHeight;
+    int                         m_dualSrcTeleWidth;
+    int                         m_dualSrcTeleHeight;
+    int                         m_dualMargin20SrcWideWidth;
+    int                         m_dualMargin20SrcWideHeight;
+    int                         m_dualMargin20SrcTeleWidth;
+    int                         m_dualMargin20SrcTeleHeight;
+
+    int                         m_aeState;
+    int                         m_sceneDetectIndex;
+#endif
+
+#ifdef SAMSUNG_GYRO
+    SensorListenerEvent_t       m_gyroListenerData;
+#endif
+
+#ifdef SAMSUNG_HIFI_VIDEO
+    mutable Mutex               m_metaInfoLock;
+#endif
+
+#ifdef SAMSUNG_SW_VDIS_USE_OIS
+    int                         m_SWVdisPreviewFrameExposureTime;
+#endif
+
+#ifdef SAMSUNG_SSRM
+    struct ssrmCameraInfo      m_ssrmCameraInfo;
+#endif
+
+#ifdef SAMSUNG_DUAL_ZOOM_CAPTURE
+    ExynosRect                 m_captureExtCropROI;
+#endif
+
 #ifdef LLS_CAPTURE
     int                         m_LLSValue;
     int                         m_needLLS_history[LLS_HISTORY_COUNT];
 #endif
 
-#ifdef USES_DUAL_CAMERA_SOLUTION_ARCSOFT
-private:
-    float                       m_arcSoftImageRatio;
+#ifdef CORRECT_TIMESTAMP_FOR_SENSORFUSION
+    uint64_t                    m_correctionTime;
 #endif
-
-    int                         m_brightnessValue;
-    bool                        m_hifillsOn;
-    mutable Mutex               m_hifillsMetaLock;
 
 /* Add vendor rearrange function */
 private:
@@ -649,7 +840,6 @@ private:
                                               bool &isWriteExif,
                                               camera2_shot_t *shot,
                                               bool useDebugInfo2 = false);
-
 
 };
 

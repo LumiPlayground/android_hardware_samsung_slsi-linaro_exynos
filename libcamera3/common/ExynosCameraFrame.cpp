@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraFrame"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraFrame.h"
 
@@ -38,7 +38,6 @@ ExynosCameraFrame::ExynosCameraFrame(
     m_cameraId = cameraId;
     m_parameters = obj_param;
     m_frameCount = frameCount;
-    m_frameIndex = 0;
     m_frameType = frameType;
     memset(m_name, 0x00, sizeof(m_name));
 
@@ -52,7 +51,6 @@ ExynosCameraFrame::ExynosCameraFrame(int cameraId)
     m_cameraId = cameraId;
     m_parameters = NULL;
     m_frameCount = 0;
-    m_frameIndex = 0;
     m_frameType = FRAME_TYPE_OTHERS;
     memset(m_name, 0x00, sizeof(m_name));
 
@@ -726,7 +724,7 @@ uint32_t ExynosCameraFrame::getNumRequestPipe(void)
 uint32_t ExynosCameraFrame::getNumRemainPipe(void)
 {
     int numRemainPipe = m_numRequestPipe - m_numCompletePipe;
-
+    
     return (numRemainPipe > 0) ? numRemainPipe : 0;
 }
 
@@ -897,42 +895,6 @@ ExynosCameraFrameEntity *ExynosCameraFrame::getFrameDoneFirstEntity(uint32_t pip
                 }
                 break;
             default:
-                break;
-            }
-        }
-        r++;
-        curEntity = *r;
-    }
-
-    return NULL;
-}
-
-ExynosCameraFrameEntity *ExynosCameraFrame::getFirstEntityNotComplete(void)
-{
-    List<ExynosCameraFrameEntity *>::iterator r;
-    ExynosCameraFrameEntity *curEntity = NULL;
-
-    Mutex::Autolock l(m_linkageLock);
-    if (m_linkageList.empty()) {
-        CLOGE("m_linkageList is empty");
-        return NULL;
-    }
-
-    r = m_linkageList.begin()++;
-    curEntity = *r;
-
-    while (r != m_linkageList.end()) {
-        if (curEntity != NULL) {
-            switch (curEntity->getEntityState()) {
-            case ENTITY_STATE_FRAME_SKIP:
-            case ENTITY_STATE_COMPLETE:
-                if (curEntity->getNextEntity() != NULL) {
-                    curEntity = curEntity->getNextEntity();
-                    continue;
-                }
-                break;
-            default:
-                return curEntity;
                 break;
             }
         }
@@ -1507,16 +1469,6 @@ int ExynosCameraFrame::getCameraId(void)
     return m_cameraId;
 }
 
-void ExynosCameraFrame::setFrameIndex(int index)
-{
-    m_frameIndex = index;
-}
-
-int ExynosCameraFrame::getFrameIndex(void)
-{
-    return m_frameIndex;
-}
-
 /* backup for reprocessing */
 void ExynosCameraFrame::setReprocessingFrameType(frame_type_t frameType)
 {
@@ -1571,6 +1523,18 @@ int64_t ExynosCameraFrame::getTimeStamp(uint32_t srcNodeIndex)
 
     return (int64_t)getMetaDmSensorTimeStamp(&m_metaData[srcNodeIndex]);
 }
+
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+int64_t ExynosCameraFrame::getTimeStampBoot(uint32_t srcNodeIndex)
+{
+    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
+        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
+        return BAD_VALUE;
+    }
+
+    return (int64_t)getMetaUdmSensorTimeStampBoot(&m_metaData[srcNodeIndex]);
+}
+#endif
 
 void ExynosCameraFrame::getFpsRange(uint32_t *min, uint32_t *max, uint32_t srcNodeIndex)
 {
@@ -1783,7 +1747,11 @@ status_t ExynosCameraFrame::m_init()
     m_hasRequest = false;
     m_updateResult = false;
 
-    m_stateInSelector = FRAME_STATE_IN_SELECTOR_BASE;
+#ifdef SAMSUNG_TN_FEATURE
+    for (int i = 0; i < MAX_PIPE_UNI_NUM; i++) {
+        m_scenario[i] = -1;
+    }
+#endif
 
     return NO_ERROR;
 }
@@ -1824,10 +1792,6 @@ status_t ExynosCameraFrame::m_deinit()
         m_linkageList.erase(r);
     }
 
-    m_selectorTagQueueLock.lock();
-    m_selectorTagQueue.clear();
-    m_selectorTagQueueLock.unlock();
-
     return NO_ERROR;
 }
 
@@ -1851,7 +1815,6 @@ status_t ExynosCameraFrame::setRotation(uint32_t pipeId, int rotation)
 
 status_t ExynosCameraFrame::getRotation(uint32_t pipeId)
 {
-    status_t ret = NO_ERROR;
     ExynosCameraFrameEntity *entity = searchEntityByPipeId(pipeId);
     if (entity == NULL) {
         CLOGE("Could not find entity, pipeID(%d)", pipeId);
@@ -1881,7 +1844,6 @@ status_t ExynosCameraFrame::setFlipHorizontal(uint32_t pipeId, int flipHorizonta
 
 status_t ExynosCameraFrame::getFlipHorizontal(uint32_t pipeId)
 {
-    status_t ret = NO_ERROR;
     ExynosCameraFrameEntity *entity = searchEntityByPipeId(pipeId);
     if (entity == NULL) {
         CLOGE("Could not find entity, pipeID(%d)", pipeId);
@@ -1911,7 +1873,6 @@ status_t ExynosCameraFrame::setFlipVertical(uint32_t pipeId, int flipVertical)
 
 status_t ExynosCameraFrame::getFlipVertical(uint32_t pipeId)
 {
-    status_t ret = NO_ERROR;
     ExynosCameraFrameEntity *entity = searchEntityByPipeId(pipeId);
     if (entity == NULL) {
         CLOGE("Could not find entity, pipeID(%d)", pipeId);
@@ -1920,6 +1881,58 @@ status_t ExynosCameraFrame::getFlipVertical(uint32_t pipeId)
 
     return entity->getFlipVertical();
 }
+
+#ifdef SAMSUNG_TN_FEATURE
+void ExynosCameraFrame::setScenario(int index, int scenario)
+{
+    if (index < MAX_PIPE_UNI_NUM) {
+        m_scenario[index] = scenario;
+    }
+}
+
+int32_t ExynosCameraFrame::getScenario(int pipeId)
+{
+    switch (pipeId) {
+    case PIPE_PP_UNI_REPROCESSING:
+    case PIPE_PP_UNI_REPROCESSING2:
+        return m_scenario[pipeId - PIPE_PP_UNI_REPROCESSING];
+        break;
+    case PIPE_PP_UNI:
+    case PIPE_PP_UNI2:
+        return m_scenario[pipeId - PIPE_PP_UNI];
+        break;
+    default:
+        return -1;
+        break;
+    }
+}
+
+int32_t ExynosCameraFrame::getScenarioIndex(int scenario)
+{
+    int index = -1;
+    for (int i = 0; i < MAX_PIPE_UNI_NUM; i++) {
+        if (m_scenario[i] == scenario) {
+            index = i;
+            break;
+        }
+    }
+
+    return index;
+}
+
+bool ExynosCameraFrame::hasScenario(int scenario)
+{
+    int ret = false;
+    for (int i = 0; i < MAX_PIPE_UNI_NUM; i++) {
+        if (m_scenario[i] == scenario) {
+            ret = true;
+            break;
+        }
+    }
+
+    return ret;
+}
+#endif
 
 void ExynosCameraFrame::setStreamRequested(int stream, bool flag)
 {
@@ -1945,178 +1958,6 @@ void ExynosCameraFrame::setUpdateResult(bool flag)
 bool ExynosCameraFrame::getUpdateResult(void)
 {
     return m_updateResult;
-}
-
-/* selector tag helper functions */
-void ExynosCameraFrame::lockSelectorTagList(void)
-{
-    m_selectorTagQueueLock.lock();
-}
-
-void ExynosCameraFrame::unlockSelectorTagList(void)
-{
-    m_selectorTagQueueLock.unlock();
-}
-
-status_t ExynosCameraFrame::addSelectorTag(int selectorId, int pipeId, int bufPos, bool isSrc)
-{
-    Mutex::Autolock l(m_selectorTagQueueLock);
-
-    return addRawSelectorTag(selectorId, pipeId, bufPos, isSrc);
-}
-
-bool ExynosCameraFrame::findSelectorTag(ExynosCameraFrameSelectorTag *compareTag)
-{
-    Mutex::Autolock l(m_selectorTagQueueLock);
-
-    return findRawSelectorTag(compareTag);
-}
-
-bool ExynosCameraFrame::removeSelectorTag(ExynosCameraFrameSelectorTag *removeTag)
-{
-    Mutex::Autolock l(m_selectorTagQueueLock);
-
-    return removeRawSelectorTag(removeTag);
-}
-
-bool ExynosCameraFrame::getFirstSelectorTag(ExynosCameraFrameSelectorTag *tag)
-{
-    Mutex::Autolock l(m_selectorTagQueueLock);
-
-    return getFirstRawSelectorTag(tag);
-}
-
-void ExynosCameraFrame::setStateInSelector(FRAME_STATE_IN_SELECTOR_T state)
-{
-    Mutex::Autolock l(m_selectorTagQueueLock);
-
-    setRawStateInSelector(state);
-}
-
-FRAME_STATE_IN_SELECTOR_T ExynosCameraFrame::getStateInSelector(void)
-{
-    Mutex::Autolock l(m_selectorTagQueueLock);
-
-    return getRawStateInSelector();
-}
-
-/*
- * It needs lock.
- * It appends the new tag to this frame.
- */
-status_t ExynosCameraFrame::addRawSelectorTag(int selectorId, int pipeId, int bufPos, bool isSrc)
-{
-    ExynosCameraFrameSelectorTag tempTag;
-
-    tempTag.selectorId = selectorId;
-    tempTag.pipeId = pipeId;
-    tempTag.bufPos = bufPos;
-    tempTag.isSrc = isSrc;
-
-    m_selectorTagQueue.push_back(tempTag);
-
-    return NO_ERROR;
-}
-
-/*
- * It needs lock.
- * It returns first tag to match with compareTag.
- */
-bool ExynosCameraFrame::findRawSelectorTag(ExynosCameraFrameSelectorTag *compareTag)
-{
-    selector_tag_queue_t::iterator r;
-    bool found = false;
-    selector_tag_queue_t *list = getSelectorTagList();
-
-    if (list->empty())
-        return false;
-
-    r = list->begin()++;
-
-    do {
-        if ((r->selectorId == compareTag->selectorId || compareTag->selectorId < 0)
-                && (r->pipeId == compareTag->pipeId || compareTag->pipeId < 0)
-                && (r->bufPos == compareTag->bufPos || compareTag->bufPos < 0)
-                && (r->isSrc == compareTag->isSrc || compareTag->isSrc < 0)) {
-            *compareTag = *r;
-            found = true;
-            break;
-        }
-
-        r++;
-    } while (r != list->end());
-
-    return found;
-}
-
-/*
- * It needs lock.
- * It removes the existing tag from this frame.
- */
-bool ExynosCameraFrame::removeRawSelectorTag(ExynosCameraFrameSelectorTag *removeTag)
-{
-    selector_tag_queue_t::iterator r;
-    bool removed = false;
-    selector_tag_queue_t *list = getSelectorTagList();
-
-    if (list->empty())
-        return false;
-
-    r = list->begin()++;
-
-    do {
-        if (*r == *removeTag) {
-            r = list->erase(r);
-            removed = true;
-            break;
-        }
-
-        r++;
-    } while (r != list->end());
-
-    return removed;
-}
-
-/*
- * It needs lock.
- * It returns the first tag from this frame.
- */
-bool ExynosCameraFrame::getFirstRawSelectorTag(ExynosCameraFrameSelectorTag *tag)
-{
-    selector_tag_queue_t::iterator r;
-    bool found = false;
-    selector_tag_queue_t *list = getSelectorTagList();
-
-    if (list->empty())
-        return false;
-
-    r = list->begin()++;
-    *tag = *r;
-
-    return true;
-}
-
-/*
- * It needs lock.
- * It updates the state which this frame is processing on the selector.
- */
-void ExynosCameraFrame::setRawStateInSelector(FRAME_STATE_IN_SELECTOR_T state)
-{
-    m_stateInSelector = state;
-}
-
-/*
- * It needs lock.
- * It returns the state which this frame is processing on the selector.
- */
-FRAME_STATE_IN_SELECTOR_T ExynosCameraFrame::getRawStateInSelector(void)
-{
-    return m_stateInSelector;
-}
-
-selector_tag_queue_t *ExynosCameraFrame::getSelectorTagList(void)
-{
-    return &m_selectorTagQueue;
 }
 
 /*

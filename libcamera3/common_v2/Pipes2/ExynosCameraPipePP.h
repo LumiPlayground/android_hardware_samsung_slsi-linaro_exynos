@@ -53,11 +53,11 @@ public:
     virtual status_t        stopThread(void);
 
     /* Helper functions for PipePP */
-    void                    connectScenario(int32_t scenario);
+    void                    connectPPScenario(int32_t scenario);
     void                    extControl(int scenario, int controlType, void *data);
-    void                    startScenario(void);
-    void                    stopScenario(bool suspendFlag = false);
-    int                     getScenario(void);
+    void                    startPPScenario(void);
+    void                    stopPPScenario(bool suspendFlag = false);
+    int                     getPPScenario(void);
 
 protected:
     virtual bool            m_mainThreadFunc(void);
@@ -71,6 +71,11 @@ private:
 private:
     int                     m_nodeNum;
     ExynosCameraPP         *m_pp;
+#ifdef SAMSUNG_TN_FEATURE
+    static ExynosCameraPP  *m_ppScenario[PP_SCENARIO_MAX];
+    int                     m_scenario;
+    bool                    m_isPreviewFactory;
+#endif
 };
 
 }; /* namespace android */

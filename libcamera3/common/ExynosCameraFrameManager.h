@@ -30,7 +30,7 @@
 #include <binder/MemoryBase.h>
 #include <binder/MemoryHeapBase.h>
 #include <hardware/camera.h>
-#include <camera/CameraParameters.h>
+#include <CameraParameters.h>
 #include <media/hardware/MetadataBufferType.h>
 #include <map>
 #include <list>

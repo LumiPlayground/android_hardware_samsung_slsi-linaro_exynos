@@ -32,14 +32,31 @@
 #include "ExynosCameraTimeLogger.h"
 #include "ExynosCameraFrameJpegReprocessingFactory.h"
 
+#include "ExynosCameraTuningInterface.h"
+
 #ifdef USE_DUAL_CAMERA
 #include "ExynosCameraFrameFactoryPreviewDual.h"
 #include "ExynosCameraFrameReprocessingFactoryDual.h"
 #endif
 
-#ifdef USES_SW_VDIS
-//class ExynosCameraSolutionSWVdis;
-#include "ExynosCameraSolutionSWVdis.h"
+#ifdef SAMSUNG_UNIPLUGIN
+#include "uni_plugin_wrapper.h"
+#endif
+#ifdef SAMSUNG_SENSOR_LISTENER
+#include "sensor_listener_wrapper.h"
+#endif
+#ifdef SAMSUNG_UNI_API
+#include "uni_api_wrapper.h"
+#endif
+
+#ifdef SAMSUNG_DUAL_PORTRAIT_SEF
+#include "libraries/sec/SEFAPIs.h"
+#include "libraries/sec/SEFFileTypes.h"
+#include "libraries/sec/SEFKeyName.h"
+#endif
+
+#ifdef SAMSUNG_DUAL_PORTRAIT_SOLUTION
+#include "ExynosCameraBokehInclude.h"
 #endif
 
 namespace android {
@@ -56,6 +73,9 @@ namespace android {
 
 typedef ExynosCameraThread<ExynosCamera> mainCameraThread;
 typedef ExynosCameraList<ExynosCameraFrameFactory *> framefactory3_queue_t;
+#ifdef SAMSUNG_FACTORY_DRAM_TEST
+typedef ExynosCameraList<ExynosCameraBuffer> vcbuffer_queue_t;
+#endif
 
 class ExynosCameraStreamThread : public ExynosCameraThread <ExynosCameraStreamThread>
 {
@@ -115,6 +135,7 @@ typedef struct {
     ExynosCameraFrameFactory *reprocessingFactory;
     ExynosCameraActivityControl *activityControl;
     ExynosCameraFrameSelector *captureSelector;
+    int currentCameraId;
 } frame_handle_components_t;
 
 #ifdef USE_DUAL_CAMERA
@@ -176,6 +197,10 @@ public:
     /* For Vendor */
     status_t    setParameters(const CameraParameters& params);
 
+#ifdef DEBUG_IQ_OSD
+    void        printOSD(char *Y, char *UV, int yuvSizeW, int yuvSizeH, struct camera2_shot_ext *meta_shot_ext);
+#endif
+
     bool        previewStreamFunc(ExynosCameraFrameSP_sptr_t newFrame, int pipeId);
 
 private:
@@ -211,7 +236,11 @@ private:
     status_t    m_sendDepthStreamResult(ExynosCameraRequestSP_sprt_t request, ExynosCameraBuffer *buffer, int streamId);
 #endif
     status_t    m_sendYuvStreamResult(ExynosCameraRequestSP_sprt_t request, ExynosCameraBuffer *buffer,
-                                                    int streamId, bool skipBuffer, uint64_t streamTimeStamp
+                                                    int streamId, bool skipBuffer, uint64_t streamTimeStamp,
+                                                    ExynosCameraParameters *params
+#ifdef SAMSUNG_SSM
+                                                    , bool ssmframeFlag = false
+#endif
                                                     );
     status_t    m_sendYuvStreamStallResult(ExynosCameraRequestSP_sprt_t request, ExynosCameraBuffer *buffer, int streamId);
     status_t    m_sendThumbnailStreamResult(ExynosCameraRequestSP_sprt_t request, ExynosCameraBuffer *buffer, int streamId);
@@ -268,6 +297,7 @@ private:
     status_t    m_setHWFCBuffer(uint32_t pipeId, ExynosCameraFrameSP_sptr_t newFrame, uint32_t srcPipeId, uint32_t dstPipeId);
     /* helper functions for frame factory */
     status_t    m_constructFrameFactory(void);
+    status_t    m_destroyPreviewFrameFactory(void);
     status_t    m_startFrameFactory(ExynosCameraFrameFactory *factory);
     status_t    m_startReprocessingFrameFactory(ExynosCameraFrameFactory *factory);
     status_t    m_stopFrameFactory(ExynosCameraFrameFactory *factory);
@@ -276,7 +306,8 @@ private:
 
     /* frame Generation / Done handler */
     status_t    m_checkMultiCaptureMode(ExynosCameraRequestSP_sprt_t request);
-    status_t    m_createInternalFrameFunc(ExynosCameraRequestSP_sprt_t request, enum Request_Sync_Type syncType,
+    status_t    m_createInternalFrameFunc(ExynosCameraRequestSP_sprt_t request, bool flagFinishFactoryStart,
+                                                        enum Request_Sync_Type syncType,
                                                         frame_type_t frameType = FRAME_TYPE_INTERNAL);
     status_t    m_createPreviewFrameFunc(enum Request_Sync_Type syncType, bool flagFinishFactoryStart);
     status_t    m_createVisionFrameFunc(enum Request_Sync_Type syncType, bool flagFinishFactoryStart);
@@ -293,6 +324,7 @@ private:
                                       frame_type_t frameType);
     bool        m_previewStreamFunc(ExynosCameraFrameSP_sptr_t newFrame, int pipeId);
 
+    status_t    m_updateLatestInfoToShot(struct camera2_shot_ext *shot_ext, frame_type_t frameType);
     void        m_updateCropRegion(struct camera2_shot_ext *shot_ext);
     status_t    m_updateJpegControlInfo(const struct camera2_shot_ext *shot_ext);
     void        m_updateFD(struct camera2_shot_ext *shot_ext, enum facedetect_mode fdMode,
@@ -303,7 +335,9 @@ private:
     void        m_updateMasterCam(struct camera2_shot_ext *shot_ext);
     void        m_setTransientActionInfo(frame_handle_components_t *components);
     void        m_setApertureControl(frame_handle_components_t *components, struct camera2_shot_ext *shot_ext);
-    status_t    m_updateYsumValue(ExynosCameraFrameSP_sptr_t frame, ExynosCameraRequestSP_sprt_t request);
+    status_t    m_updateYsumValue(ExynosCameraFrameSP_sptr_t frame,
+                                  ExynosCameraRequestSP_sprt_t request,
+                                  int srcPipeId, NODE_TYPE dstNodeType = OUTPUT_NODE);
     void        m_adjustSlave3AARegion(frame_handle_components_t *components, ExynosCameraFrameSP_sptr_t frame);
 
     /* helper functions for frame */
@@ -329,8 +363,7 @@ private:
                                           List<ExynosCameraFrameSP_sptr_t> *list,
                                           Mutex *listLock,
                                           ExynosCameraFrameSP_dptr_t newFrame,
-                                          frame_type_t frameType,
-                                          ExynosCameraRequestSP_sprt_t request);
+                                          frame_type_t frameType);
 #endif
     status_t    m_searchFrameFromList(List<ExynosCameraFrameSP_sptr_t> *list,
                                       Mutex *listLock,
@@ -358,7 +391,7 @@ private:
                                           bool bufferSkip = false);
     void        m_checkUpdateResult(ExynosCameraFrameSP_sptr_t frame, uint32_t streamConfigBit);
     status_t    m_updateTimestamp(ExynosCameraRequestSP_sprt_t request, ExynosCameraFrameSP_sptr_t frame,
-                                ExynosCameraBuffer *timestampBuffer);
+                                ExynosCameraBuffer *timestampBuffer, frame_handle_components_t *components);
     status_t    m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame, int pipeId, ExynosCameraFrameFactory *factory);
     status_t    m_handleVisionFrame(ExynosCameraFrameSP_sptr_t frame, int pipeId, ExynosCameraFrameFactory *factory);
     status_t    m_handleInternalFrame(ExynosCameraFrameSP_sptr_t frame, int pipeId, ExynosCameraFrameFactory *factory);
@@ -369,9 +402,6 @@ private:
     status_t    m_handleBayerBuffer(ExynosCameraFrameSP_sptr_t frame, ExynosCameraRequestSP_sprt_t request, int pipeId);
 #ifdef SUPPORT_DEPTH_MAP
     status_t    m_handleDepthBuffer(ExynosCameraFrameSP_sptr_t frame, ExynosCameraRequestSP_sprt_t request);
-#endif
-#ifdef USES_SW_VDIS
-    status_t    m_handleVdisFrame(ExynosCameraFrameSP_sptr_t frame, ExynosCameraRequestSP_sprt_t request, int pipeId, ExynosCameraFrameFactory * factory);
 #endif
 #ifdef USE_DUAL_CAMERA
     status_t    m_checkDualOperationMode(ExynosCameraRequestSP_sprt_t request,
@@ -402,6 +432,7 @@ private:
     status_t    m_setStreamInfo(camera3_stream_configuration *streamList);
     status_t    m_enumStreamInfo(camera3_stream_t *stream);
     status_t    m_checkStreamInfo(void);
+    void        m_checkRequestStreamChanged(char *handlerName, uint32_t currentStreamBit);
 
     status_t    m_getBayerServiceBuffer(ExynosCameraFrameSP_sptr_t frame,
                                         ExynosCameraBuffer *buffer,
@@ -479,6 +510,7 @@ private:
     int                             m_prepareFrameCount;
 
     mutable Mutex                   m_frameCompleteLock;
+    mutable Mutex                   m_updateShotInfoLock;
 
     int                             m_shutterSpeed;
     int                             m_gain;
@@ -497,12 +529,14 @@ private:
     bool                            m_videoStreamExist;
 
     bool                            m_recordingEnabled;
+    uint32_t                        m_prevStreamBit;
 
     struct ExynosConfigInfo         *m_exynosconfig;
 
-    mutable Mutex                   m_currentPreviewShotLock;
-    struct camera2_shot_ext         *m_currentPreviewShot;
-    struct camera2_shot_ext         *m_currentCaptureShot;
+    struct camera2_shot_ext         *m_currentPreviewShot[CAMERA_ID_MAX];
+    struct camera2_shot_ext         *m_currentInternalShot[CAMERA_ID_MAX];
+    struct camera2_shot_ext         *m_currentCaptureShot[CAMERA_ID_MAX];
+    struct camera2_shot_ext         *m_currentVisionShot[CAMERA_ID_MAX];
 
 #ifdef MONITOR_LOG_SYNC
     static uint32_t                 cameraSyncLogId;
@@ -536,13 +570,15 @@ private:
     uint32_t                        m_earlyTriggerRequestKey;
 
     List<ExynosCameraRequestSP_sprt_t>  m_essentialRequestList;
-    List<ExynosCameraRequestSP_sprt_t>  m_latestRequestList;
-    mutable Mutex                   m_latestRequestListLock;
 
     enum DUAL_OPERATION_MODE        m_earlyDualOperationMode;
 
     volatile int32_t                m_needSlaveDynamicBayerCount;
 #endif
+
+    List<ExynosCameraRequestSP_sprt_t>  m_latestRequestList;
+    mutable Mutex                   m_latestRequestListLock;
+
     List<ExynosCameraRequestSP_sprt_t>  m_requestPreviewWaitingList;
     List<ExynosCameraRequestSP_sprt_t>  m_requestCaptureWaitingList;
     mutable Mutex                   m_requestPreviewWaitingLock;
@@ -579,7 +615,7 @@ private:
 
     sp<ExynosCameraStreamThread>    m_previewStream3AAThread;
 
-    sp<ExynosCameraStreamThread>            m_previewStreamGMVThread;
+    sp<mainCameraThread>            m_previewStreamGMVThread;
     bool                            m_previewStreamGMVPipeThreadFunc(void);
 
     sp<ExynosCameraStreamThread>            m_previewStreamISPThread;
@@ -587,8 +623,6 @@ private:
     sp<ExynosCameraStreamThread>            m_previewStreamMCSCThread;
 
     sp<ExynosCameraStreamThread>            m_previewStreamGDCThread;
-
-    sp<ExynosCameraStreamThread>    m_previewStreamVDISThread;
 
     sp<mainCameraThread>            m_previewStreamVRAThread;
     bool                            m_previewStreamVRAPipeThreadFunc(void);
@@ -657,6 +691,12 @@ private:
     bool                            m_gdcThreadFunc(void);
 #endif
 
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    sp<mainCameraThread>            m_fastenAeThread;
+    bool                            m_fastenAeThreadFunc(void);
+    status_t                        m_waitFastenAeThreadEnd(void);
+#endif
+
     sp<mainCameraThread>            m_thumbnailCbThread;
     bool                            m_thumbnailCbThreadFunc(void);
     frame_queue_t                   *m_thumbnailCbQ;
@@ -697,7 +737,9 @@ private:
     status_t                        m_setDepthInternalBuffer();
 #endif
 
+#ifndef SAMSUNG_UNIPLUGIN
 #define PP_SCENARIO_NONE 0
+#endif
     status_t                        m_setupPreviewGSC(ExynosCameraFrameSP_sptr_t frame,
                                                                             ExynosCameraRequestSP_sprt_t request,
                                                                             int pipeId, int subPipeId,
@@ -706,6 +748,7 @@ private:
 void                                m_copyPreviewCbThreadFunc(ExynosCameraRequestSP_sprt_t request,
                                                             ExynosCameraFrameSP_sptr_t frame,
                                                             ExynosCameraBuffer *buffer);
+
 
     ExynosCameraPP                  *m_previewCallbackPP;
     status_t                        m_copyPreview2Callback(ExynosCameraFrameSP_sptr_t frame, ExynosCameraBuffer *srcBuffer, ExynosCameraBuffer *dstBuffer);
@@ -726,16 +769,17 @@ void                                m_copyPreviewCbThreadFunc(ExynosCameraReques
     ExynosCameraDurationTimer       m_firstPreviewTimer;
     bool                            m_flagFirstPreviewTimerOn;
 
-    ExynosCameraDurationTimer       m_previewDurationTimer;
-    int                             m_previewDurationTime;
+    ExynosCameraDurationTimer       m_previewDurationTimer[2];
+    int                             m_previewDurationTime[2];
     uint32_t                        m_captureResultToggle;
     uint32_t                        m_displayPreviewToggle;
     int                             m_burstFps_history[4];
 
-    uint32_t                        m_needDynamicBayerCount;
-
 #ifdef SUPPORT_DEPTH_MAP
     bool                            m_flagUseInternalDepthMap;
+#endif
+#ifdef DEBUG_IQ_OSD
+    int                             m_isOSDMode;
 #endif
 #ifdef FPS_CHECK
     int32_t                         m_debugFpsCount[MAX_PIPE_NUM];
@@ -755,33 +799,346 @@ private:
     void                            m_vendorSpecificDestructorDeinitalize(void);
     void                            m_vendorUpdateExposureTime(struct camera2_shot_ext *shot_ext);
 	status_t                        setParameters_vendor(const CameraParameters& params);
+
+#ifdef SAMSUNG_TN_FEATURE
+    status_t                        m_checkMultiCaptureMode_vendor_captureHint(ExynosCameraRequestSP_sprt_t request, CameraMetadata *meta);
+#endif
+
     status_t                        m_checkMultiCaptureMode_vendor_update(ExynosCameraRequestSP_sprt_t request);
     status_t                        processCaptureRequest_vendor_initDualSolutionZoom(camera3_capture_request *request, status_t& ret);
     status_t						processCaptureRequest_vendor_initDualSolutionPortrait(camera3_capture_request *request, status_t& ret);
+
+#ifdef SAMSUNG_TN_FEATURE
+    bool                            m_isSkipBurstCaptureBuffer_vendor(frame_type_t frameType, int& isSkipBuffer, int& ratio, int& runtime_fps, int& burstshotTargetFps);
+#endif
+
 	status_t                        m_captureFrameHandler_vendor_updateConfigMode(ExynosCameraRequestSP_sprt_t request, ExynosCameraFrameFactory *targetfactory, frame_type_t& frameType);
+
+#ifdef SAMSUNG_TN_FEATURE
+	status_t                        m_captureFrameHandler_vendor_updateCaptureMode(ExynosCameraRequestSP_sprt_t request, frame_handle_components_t& components, ExynosCameraActivitySpecialCapture *sCaptureMgr);
+#endif
+
     status_t                        m_captureFrameHandler_vendor_updateDualROI(ExynosCameraRequestSP_sprt_t request, frame_handle_components_t& components, frame_type_t frameType);
+
+#ifdef OIS_CAPTURE
+    status_t                        m_captureFrameHandler_vendor_updateIntent(ExynosCameraRequestSP_sprt_t request, frame_handle_components_t& components);
+#endif
+
+#ifdef SAMSUNG_SW_VDIS
+    status_t                        configureStreams_vendor_updateVDIS();
+#endif
+
 	status_t                        m_previewFrameHandler_vendor_updateRequest(ExynosCameraFrameFactory *targetfactory);
 
 	status_t                        m_handlePreviewFrame_vendor_handleBuffer(ExynosCameraFrameSP_sptr_t frame, int pipeId, ExynosCameraFrameFactory *factory, frame_handle_components_t& components, status_t& ret);
 
+
     status_t                        m_checkStreamInfo_vendor(status_t &ret);
 
-#ifdef USE_SLSI_PLUGIN
-    status_t                        m_configurePlugInMode(bool &dynamicBayer);
-    status_t                        m_prepareCaptureMode(ExynosCameraRequestSP_sprt_t request, frame_handle_components_t& components);
-    status_t                        m_prepareCapturePlugin(ExynosCameraFrameFactory *targetfactory, list<int> *scenarioList);
-    status_t                        m_setupCapturePlugIn(ExynosCameraFrameSP_sptr_t frame,
-                                                         int pipeId, int subPipeId, int pipeId_next);
-    status_t                        m_handleCaptureFramePlugin(ExynosCameraFrameSP_sptr_t frame,
+#ifdef SAMSUNG_TN_FEATURE
+    void                            m_updateTemperatureInfo(struct camera2_shot_ext *shot_ext);
+#endif
+
+#ifdef SAMSUNG_RTHDR
+    void                            m_updateWdrMode(struct camera2_shot_ext *shot_ext, bool isCaptureFrame);
+#endif
+
+#if defined (SAMSUNG_DUAL_ZOOM_PREVIEW) || defined (SAMSUNG_DUAL_PORTRAIT_SOLUTION)
+    status_t                        m_updateBeforeForceSwitchSolution(ExynosCameraFrameSP_sptr_t frame, int pipeId);
+    status_t                        m_updateAfterForceSwitchSolution(ExynosCameraFrameSP_sptr_t frame);
+    status_t                        m_updateBeforeDualSolution(ExynosCameraFrameSP_sptr_t frame, int pipeId);
+    status_t                        m_updateAfterDualSolution(ExynosCameraFrameSP_sptr_t frame);
+    status_t                        m_readDualCalData(ExynosCameraFusionWrapper *fusionWrapper);
+    bool                            m_check2XButtonPressed(float curZoomRatio, float prevZoomRatio);
+#endif /* SAMSUNG_DUAL_ZOOM_PREVIEW || SAMSUNG_DUAL_PORTRAIT_SOLUTION */
+
+#ifdef SAMSUNG_DUAL_PORTRAIT_SEF
+    status_t                        m_sendSefStreamResult(ExynosCameraRequestSP_sprt_t request,
+                                                ExynosCameraFrameSP_sptr_t frame, ExynosCameraBuffer *bokehOuputBuffer);
+#endif
+
+#if defined(USE_DUAL_CAMERA) && defined(SAMSUNG_DUAL_ZOOM_PREVIEW)
+    void                            m_updateCropRegion_vendor(struct camera2_shot_ext *shot_ext,
+                                                int &sensorMaxW, int &sensorMaxH,
+                                                ExynosRect &targetActiveZoomRect,
+                                                ExynosRect &subActiveZoomRect,
+                                                int &subSolutionMargin);
+#endif
+
+#ifdef SAMSUNG_HIFI_CAPTURE
+void                                m_setupReprocessingPipeline_HifiCapture(ExynosCameraFrameFactory *factory);
+#endif
+
+#ifdef SAMSUNG_DOF
+void                                m_selectBayer_dof(int shotMode,
+                                                    ExynosCameraActivityAutofocus *autoFocusMgr,
+                                                    frame_handle_components_t components);
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+bool                                m_selectBayer_tn(ExynosCameraFrameSP_sptr_t frame,
+                                                    uint64_t captureExposureTime,
+                                                    camera2_shot_ext *shot_ext,
+                                                    ExynosCameraBuffer &bayerBuffer,
+                                                    ExynosCameraBuffer &depthMapBuffer);
+#endif
+
+#ifdef SAMSUNG_DUAL_PORTRAIT_SEF
+void                                m_captureStreamThreadFunc_dualPortraitSef(ExynosCameraFrameSP_sptr_t frame,
+                                                            frame_handle_components_t &components,
+                                                            int &dstPipeId);
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+int                                 m_captureStreamThreadFunc_tn(ExynosCameraFrameSP_sptr_t frame,
+                                                            frame_handle_components_t &components,
+                                                            ExynosCameraFrameEntity *entity,
+                                                            int yuvStallPipeId);
+
+status_t                            m_captureStreamThreadFunc_caseUniProcessing(ExynosCameraFrameSP_sptr_t frame,
+                                                            ExynosCameraFrameEntity *entity,
+                                                            int currentLDCaptureStep,
+                                                            int LDCaptureLastStep);
+
+status_t                            m_captureStreamThreadFunc_caseUniProcessing2(ExynosCameraFrameSP_sptr_t frame,
+                                                            ExynosCameraFrameEntity *entity);
+#endif
+
+#ifdef SAMSUNG_DUAL_PORTRAIT_SEF
+status_t                            m_captureStreamThreadFunc_caseSyncReprocessingDualPortraitSef(ExynosCameraFrameSP_sptr_t frame,
+                                                            ExynosCameraFrameEntity *entity,
+                                                            frame_handle_components_t &components,
+                                                            ExynosCameraRequestSP_sprt_t request);
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+void                                m_handleNV21CaptureFrame_tn(ExynosCameraFrameSP_sptr_t frame,
+                                                            int leaderPipeId,
+                                                            int &nodePipeId);
+
+bool                                m_handleNV21CaptureFrame_useInternalYuvStall(ExynosCameraFrameSP_sptr_t frame,
+                                                            int leaderPipeId,
+                                                            ExynosCameraRequestSP_sprt_t request,
+                                                            ExynosCameraBuffer &dstBuffer,
+                                                            int nodePipeId,
+                                                            int streamId,
+                                                            status_t &error);
+
+status_t                            m_handleNV21CaptureFrame_unipipe(ExynosCameraFrameSP_sptr_t frame,
                                                             int leaderPipeId,
                                                             int &pipeId_next,
                                                             int &nodePipeId);
 #endif
 
+#if defined(SAMSUNG_DUAL_ZOOM_PREVIEW)
+void                                m_setBuffers_dualZoomPreview(ExynosRect &previewRect);
+#endif
+
+#ifdef SAMSUNG_SW_VDIS
+status_t                            m_setupBatchFactoryBuffers_swVdis(ExynosCameraFrameSP_sptr_t frame,
+                                                  ExynosCameraFrameFactory *factory,
+                                                  int streamId,
+                                                  uint32_t &leaderPipeId,
+                                                  buffer_manager_tag_t &bufTag);
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+status_t                            m_setReprocessingBuffer_tn(int maxPictureW, int maxPictureH);
+#endif
 
 private:
-#ifdef USES_SW_VDIS
-    ExynosCameraSolutionSWVdis*      m_exCameraSolutionSWVdis;
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    bool                            m_2x_btn;
+    int                             m_prevRecomCamType;
+    float                           m_holdZoomRatio;
+#endif
+
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    ExynosCameraFusionWrapper       *m_fusionZoomPreviewWrapper;
+#ifdef SAMSUNG_DUAL_ZOOM_CAPTURE
+    ExynosCameraFusionWrapper       *m_fusionZoomCaptureWrapper;
+#endif
+    void                            *m_previewSolutionHandle;
+    void                            *m_captureSolutionHandle;
+#endif
+
+#ifdef SAMSUNG_DUAL_PORTRAIT_SOLUTION
+    ExynosCameraFusionWrapper       *m_bokehPreviewWrapper;
+    ExynosCameraFusionWrapper       *m_bokehCaptureWrapper;
+    void                            *m_bokehPreviewSolutionHandle;
+    void                            *m_bokehCaptureSolutionHandle;
+#endif
+
+#ifdef SAMSUNG_UNIPLUGIN
+    void                            *m_uniPlugInHandle[PP_SCENARIO_MAX];
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+    sp<mainCameraThread>            m_previewStreamPPPipe2Thread;
+    bool                            m_previewStreamPPPipe2ThreadFunc(void);
+
+    sp<mainCameraThread>            m_previewStreamPPPipe3Thread;
+    bool                            m_previewStreamPPPipe3ThreadFunc(void);
+
+    sp<mainCameraThread>            m_gscPreviewCbThread;
+    bool                            m_gscPreviewCbThreadFunc();
+#endif
+
+#ifdef SAMSUNG_DUAL_PORTRAIT_LLS_CAPTURE
+    frame_queue_t                   *m_slaveJpegDoneQ;
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+    sp<mainCameraThread>            m_dscaledYuvStallPostProcessingThread;
+    bool                            m_dscaledYuvStallPostProcessingThreadFunc(void);
+    frame_queue_t                   *m_dscaledYuvStallPPCbQ;
+    frame_queue_t                   *m_dscaledYuvStallPPPostCbQ;
+#endif
+
+#ifdef SAMSUNG_FACTORY_DRAM_TEST
+    int                             m_dramTestQCount;
+    int                             m_dramTestDoneCount;
+    vcbuffer_queue_t                *m_postVC0Q;
+    sp<mainCameraThread>            m_postVC0Thread;
+    bool                            m_postVC0ThreadFunc(void);
+#endif
+
+#ifdef SAMSUNG_READ_ROM
+    sp<mainCameraThread>            m_readRomThread;
+    bool                            m_readRomThreadFunc(void);
+    status_t                        m_waitReadRomThreadEnd(void);
+#endif
+
+#ifdef SAMSUNG_UNIPLUGIN
+    sp<mainCameraThread>            m_uniPluginThread;
+    bool                            m_uniPluginThreadFunc(void);
+#endif
+
+#ifdef SAMSUNG_LENS_DC
+    void                            *m_DCpluginHandle;
+    bool                            m_skipLensDC;
+    int                             m_LensDCIndex;
+    void                            m_setLensDCMap(void);
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+    bool                            m_pipePPPreviewStart[MAX_PIPE_UNI_NUM];
+    bool                            m_pipePPReprocessingStart[MAX_PIPE_UNI_NUM];
+#endif
+
+#ifdef SAMSUNG_HLV
+    void                            *m_HLV;
+    int                             m_HLVprocessStep;
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    ExynosCameraBuffer              m_LDBuf[MAX_LD_CAPTURE_COUNT];
+#endif
+
+#ifdef SAMSUNG_DUAL_PORTRAIT_LLS_CAPTURE
+    ExynosCameraBuffer              m_liveFocusLLSBuf[CAMERA_ID_MAX][MAX_LD_CAPTURE_COUNT];
+    ExynosCameraBuffer              m_liveFocusFirstSlaveJpegBuf;
+#endif
+
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    bool                            m_isFirstParametersSet;
+    bool                            m_fastEntrance;
+    int                             m_fastenAeThreadResult;
+    mutable Mutex                   m_previewFactoryLock;
+#endif
+
+#ifdef SAMSUNG_SENSOR_LISTENER
+    sp<mainCameraThread>            m_sensorListenerThread;
+    bool                            m_sensorListenerThreadFunc(void);
+    bool                            m_getSensorListenerData(frame_handle_components_t *components);
+    sp<mainCameraThread>            m_sensorListenerUnloadThread;
+    bool                            m_sensorListenerUnloadThreadFunc(void);
+#ifdef SAMSUNG_HRM
+    void*                           m_uv_rayHandle;
+    SensorListenerEvent_t           m_uv_rayListenerData;
+#endif
+#ifdef SAMSUNG_LIGHT_IR
+    void*                           m_light_irHandle;
+    SensorListenerEvent_t           m_light_irListenerData;
+#endif
+#ifdef SAMSUNG_GYRO
+    void*                           m_gyroHandle;
+    SensorListenerEvent_t           m_gyroListenerData;
+#endif
+#ifdef SAMSUNG_ACCELEROMETER
+    void*                           m_accelerometerHandle;
+    SensorListenerEvent_t           m_accelerometerListenerData;
+#endif
+#ifdef SAMSUNG_ROTATION
+    void*                           m_rotationHandle;
+    SensorListenerEvent_t           m_rotationListenerData;
+#endif
+#ifdef SAMSUNG_PROX_FLICKER
+    void*                           m_proximityHandle;
+    SensorListenerEvent_t           m_proximityListenerData;
+#endif
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+    int                             m_getPortPreviewUniPP(ExynosCameraRequestSP_sprt_t request, int pp_scenario);
+    status_t                        m_setupPreviewUniPP(ExynosCameraFrameSP_sptr_t frame,
+                                                        ExynosCameraRequestSP_sprt_t request,
+                                                        int pipeId, int subPipeId, int pipeId_next);
+    status_t                        m_setupCaptureUniPP(ExynosCameraFrameSP_sptr_t frame,
+                                                        int pipeId, int subPipeId, int pipeId_next);
+    int                             m_connectPreviewUniPP(ExynosCameraRequestSP_sprt_t request,
+                                                        ExynosCameraFrameFactory *targetfactory);
+    int                             m_connectCaptureUniPP(ExynosCameraFrameFactory *targetfactory);
+    status_t                        m_initUniPP(void);
+    status_t                        m_deinitUniPP(void);
+#endif
+
+#if defined(SAMSUNG_HIFI_VIDEO) && defined(HIFIVIDEO_INPUTCOPY_DISABLE)
+    buffer_queue_t                  *m_hifiVideoBufferQ;
+    uint32_t                        m_hifiVideoBufferCount;
+#endif
+
+#ifdef SAMSUNG_SSM
+    void                            m_setupSSMMode(ExynosCameraRequestSP_sprt_t request,
+                                                            frame_handle_components_t components);
+    void                            m_checkSSMState(ExynosCameraRequestSP_sprt_t request,
+                                                            struct camera2_shot_ext *shot_ext);
+    status_t                        m_SSMProcessing(ExynosCameraRequestSP_sprt_t request,
+                                                            ExynosCameraFrameSP_sptr_t frame, int pipeId,
+                                                            ExynosCameraBuffer *buffer, int streamId);
+    status_t                        m_sendForceSSMResult(ExynosCameraRequestSP_sprt_t request);
+    enum SSM_STATE                  m_SSMState;
+    int                             m_SSMAutoDelay;
+    frame_queue_t                   *m_SSMAutoDelayQ;
+    uint64_t                        m_SSMRecordingtime;
+    uint64_t                        m_SSMOrgRecordingtime;
+    int                             m_SSMSkipToggle;
+    int                             m_SSMRecordingToggle;
+    buffer_queue_t                  *m_SSMSaveBufferQ;
+    ExynosRect2                     m_SSMRegion;
+    int                             m_SSMMode;
+    int                             m_SSMCommand;
+    bool                            m_SSMUseAutoDelayQ;
+    int                             m_SSMFirstRecordingRequest;
+    ExynosCameraDurationTimer       m_SSMDetectDurationTimer;
+    int                             m_SSMDetectDurationTime;
+    bool                            m_checkRegister;
+#endif
+
+#ifdef SAMSUNG_DOF
+    bool                            m_isFocusSet;
+#endif
+
+#ifdef SAMSUNG_EVENT_DRIVEN
+    int                             m_eventDrivenToggle;
+#endif
+
+#ifdef SAMSUNG_HYPERLAPSE_DEBUGLOG
+    uint32_t                        m_recordingCallbackCount;
+#endif
+
+#ifdef SAMSUNG_HIFI_CAPTURE
+    bool                            m_hifiLLSPowerOn;
 #endif
 };
 

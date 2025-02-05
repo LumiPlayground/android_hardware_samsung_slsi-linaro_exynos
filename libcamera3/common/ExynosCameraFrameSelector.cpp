@@ -20,23 +20,45 @@
 
 #include "ExynosCameraFrameSelector.h"
 
+#define FLASHED_LLS_COUNT 4
+
 namespace android {
 
 ExynosCameraFrameSelector::ExynosCameraFrameSelector(int cameraId,
                                                      ExynosCameraParameters *param,
                                                      ExynosCameraBufferSupplier *bufferSupplier,
-                                                     ExynosCameraFrameManager *manager)
+                                                     ExynosCameraFrameManager *manager
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+                                                    , ExynosCameraBufferManager *DNGbufMgr
+#endif
+                                                    )
 {
     m_frameMgr = manager;
     m_parameters = param;
     m_bufferSupplier = bufferSupplier;
     m_activityControl = m_parameters->getActivityControl();
     m_frameHoldList.setWaitTime(2000000000);
+#ifdef OIS_CAPTURE
+    m_OISFrameHoldList.setWaitTime(130000000);
+#endif
+#ifdef RAWDUMP_CAPTURE
+    m_RawFrameHoldList.setWaitTime(2000000000);
+#endif
+
     m_reprocessingCount = 0;
     m_frameHoldCount = 1;
     m_isFirstFrame = true;
     isCanceled = false;
     removeFlags = false;
+#ifdef SAMSUNG_DNG
+    m_DNGFrameCount = 0;
+    m_preDNGFrameCount = 0;
+    m_preDNGFrame = NULL;
+
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    m_DNGbufMgr = DNGbufMgr;
+#endif
+#endif
 #ifdef SUPPORT_DEPTH_MAP
     m_depthCallbackQ = NULL;
     m_depthMapbufMgr = NULL;
@@ -46,7 +68,6 @@ ExynosCameraFrameSelector::ExynosCameraFrameSelector(int cameraId,
     m_cameraId = cameraId;
     memset(m_name, 0x00, sizeof(m_name));
     m_state = STATE_BASE;
-    m_selectorId = SELECTOR_ID_BASE;
 }
 
 ExynosCameraFrameSelector::~ExynosCameraFrameSelector()
@@ -133,14 +154,15 @@ status_t ExynosCameraFrameSelector::m_manageHdrFrameHoldList(ExynosCameraFrameSP
         CLOGI("hdrFcount %d, fliteFcount %d",  hdrFcount, fliteFcount);
         m_pushQ(&m_hdrFrameHoldList, newFrame, true);
     } else {
-        m_frameComplete(newFrame, false, true);
+        m_frameComplete(newFrame, false, pipeID, isSrc, dstPos, true);
         newFrame = NULL;
     }
 
     return ret;
 }
 
-ExynosCameraFrameSP_sptr_t ExynosCameraFrameSelector::m_selectHdrFrame(int tryCount)
+ExynosCameraFrameSP_sptr_t ExynosCameraFrameSelector::m_selectHdrFrame(__unused int pipeID, __unused bool isSrc,
+                                                                                int tryCount, __unused int32_t dstPos)
 {
     int ret = 0;
     ExynosCameraFrameSP_sptr_t selectedFrame = NULL;
@@ -156,18 +178,20 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameSelector::m_selectHdrFrame(int tryCo
 
 /* It's for dynamic bayer */
 ExynosCameraFrameSP_sptr_t ExynosCameraFrameSelector::selectDynamicFrames(__unused int count,
-                                                                  int tryCount)
+                                                                  int pipeID,
+                                                                  bool isSrc,
+                                                                  int tryCount,
+                                                                  int32_t dstPos)
 {
-        return m_selectNormalFrame(tryCount);
+        return m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
 }
 
- ExynosCameraFrameSP_sptr_t ExynosCameraFrameSelector::m_selectCaptureFrame(uint32_t frameCount, int tryCount)
+ ExynosCameraFrameSP_sptr_t ExynosCameraFrameSelector::m_selectCaptureFrame(uint32_t frameCount, int pipeID, bool isSrc, int tryCount, int32_t dstPos)
 {
-    int ret = 0;
     ExynosCameraFrameSP_sptr_t selectedFrame = NULL;
 
     for (int i = 0; i < CAPTURE_WAITING_COUNT; i++) {
-        selectedFrame = m_selectNormalFrame(tryCount);
+        selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
         if (selectedFrame == NULL) {
             CLOGE("selectedFrame is NULL");
             break;
@@ -181,7 +205,7 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameSelector::selectDynamicFrames(__unus
                 CLOGE("m_bufferSupplier is NULL");
                 return NULL;
             } else {
-                m_frameComplete(selectedFrame, false, true);
+                m_frameComplete(selectedFrame, false, pipeID, isSrc, dstPos, true);
                 selectedFrame = NULL;
             }
         } else {
@@ -281,12 +305,13 @@ status_t ExynosCameraFrameSelector::m_popQ(frame_queue_t *list,
     return ret;
 }
 
-status_t ExynosCameraFrameSelector::m_frameComplete(ExynosCameraFrameSP_sptr_t frame, bool isForcelyDelete, bool flagReleaseBuf)
+status_t ExynosCameraFrameSelector::m_frameComplete(ExynosCameraFrameSP_sptr_t frame, bool isForcelyDelete,
+                                                        int pipeID, bool isSrc, int32_t dstPos, bool flagReleaseBuf)
 {
     int ret = OK;
 
-    if (flagReleaseBuf) {
-        m_releaseBuffer(frame);
+    if(flagReleaseBuf) {
+        m_releaseBuffer(frame, pipeID, isSrc, dstPos);
     }
 
     if (isForcelyDelete == true) {
@@ -318,11 +343,12 @@ status_t ExynosCameraFrameSelector::m_frameComplete(ExynosCameraFrameSP_sptr_t f
  * the frame from deallocation), so please use with caution.
  * This function is required to remove a frame from frameHoldingList.
  */
-status_t ExynosCameraFrameSelector::m_LockedFrameComplete(ExynosCameraFrameSP_sptr_t frame)
+status_t ExynosCameraFrameSelector::m_LockedFrameComplete(ExynosCameraFrameSP_sptr_t frame, int pipeID,
+                                                                bool isSrc, int32_t dstPos)
 {
     int ret = OK;
 
-    m_releaseBuffer(frame);
+    m_releaseBuffer(frame, pipeID, isSrc, dstPos);
 
     if (m_frameMgr != NULL) {
     } else {
@@ -338,6 +364,9 @@ uint32_t ExynosCameraFrameSelector::getSizeOfHoldFrame(void)
 
     size += m_frameHoldList.getSizeOfProcessQ();
     size += m_hdrFrameHoldList.getSizeOfProcessQ();
+#ifdef OIS_CAPTURE
+    size += m_OISFrameHoldList.getSizeOfProcessQ();
+#endif
 
     return size;
 }
@@ -349,16 +378,11 @@ status_t ExynosCameraFrameSelector::wakeupQ(void)
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameSelector::m_clearList(frame_queue_t *list)
+status_t ExynosCameraFrameSelector::m_clearList(frame_queue_t *list,int pipeID, bool isSrc, int32_t dstPos)
 {
     int ret = 0;
     ExynosCameraFrameSP_sptr_t frame = NULL;
     ExynosCameraBuffer buffer;
-
-    if (m_bufferSupplier == NULL) {
-        CLOGE("m_bufferSupplier is NULL");
-        return INVALID_OPERATION;
-    }
 
     while (list->getSizeOfProcessQ() > 0) {
         if (m_popQ(list, frame, false, 1) != NO_ERROR) {
@@ -368,24 +392,42 @@ status_t ExynosCameraFrameSelector::m_clearList(frame_queue_t *list)
             m_bufMgr->printBufferQState();
 #endif
         } else {
-            m_releaseBuffer(frame);
-            /*
-               Frames in m_frameHoldList and m_hdrFrameHoldList are locked when they are inserted
-               on the list. So we need to use m_LockedFrameComplete() to remove those frames.
-               Please beware that the frame might be deleted in elsewhere, epically on erroneous
-               conditions. So if the program encounters memory fault here, please check the other
-               frame deallocation(delete) routines.
-               */
+            ret = m_getBufferFromFrame(frame, pipeID, isSrc, &buffer, dstPos);
+            if( ret != NO_ERROR ) {
+                CLOGE("m_getBufferFromFrame fail pipeID(%d) BufferType(%s)",
+                         pipeID, (isSrc)?"Src":"Dst");
+            }
+            if (m_bufferSupplier == NULL) {
+                CLOGE("m_bufferSupplier is NULL");
+                return INVALID_OPERATION;
+            } else {
+                if (buffer.index >= 0)
+                    ret = m_bufferSupplier->putBuffer(buffer);
+                if (ret < 0) {
+                    CLOGE("putIndex is %d",  buffer.index);
+#if 0
+                    m_bufMgr->printBufferState();
+                    m_bufMgr->printBufferQState();
+#endif
+                }
+                /*
+                 Frames in m_frameHoldList and m_hdrFrameHoldList are locked when they are inserted
+                 on the list. So we need to use m_LockedFrameComplete() to remove those frames.
+                 Please beware that the frame might be deleted in elsewhere, epically on erroneous
+                 conditions. So if the program encounters memory fault here, please check the other
+                 frame deallocation(delete) routines.
+                 */
 
-            /* Rather than blindly deleting frame in m_LockedFrameComplete(), we do following:
-             * 1. Check whether frame is complete. Delete the frame if it is complete.
-             * 2. If the frame is not complete, unlock it. mainThread will delete this frame.
-             */
+                /* Rather than blindly deleting frame in m_LockedFrameComplete(), we do following:
+                 * 1. Check whether frame is complete. Delete the frame if it is complete.
+                 * 2. If the frame is not complete, unlock it. mainThread will delete this frame.
+                 */
 
-            //m_LockedFrameComplete(frame);
+                //m_LockedFrameComplete(frame);
 
-            if (m_frameMgr == NULL) {
-                CLOGE("m_frameMgr is NULL (%d)",  frame->getFrameCount());
+                if (m_frameMgr == NULL) {
+                    CLOGE("m_frameMgr is NULL (%d)",  frame->getFrameCount());
+                }
             }
         }
     }
@@ -429,13 +471,4 @@ void ExynosCameraFrameSelector::setWaitTime(uint64_t waitTime)
     m_frameHoldList.setWaitTime(waitTime);
 }
 
-void ExynosCameraFrameSelector::setId(SELECTOR_ID_t selectorId)
-{
-    m_selectorId = selectorId;
-}
-
-ExynosCameraFrameSelector::SELECTOR_ID_t ExynosCameraFrameSelector::getId(void)
-{
-    return m_selectorId;
-}
 }

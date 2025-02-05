@@ -53,9 +53,15 @@ status_t ExynosCameraPipeJpeg::m_run(void)
     ExynosCameraAutoTimer autoTimer(__FUNCTION__);
     status_t ret = 0;
     ExynosCameraFrameSP_sptr_t newFrame = NULL;
-    ExynosCameraFrameEntity *entity = NULL;
+
     ExynosCameraBuffer yuvBuf;
     ExynosCameraBuffer jpegBuf;
+
+#ifdef SAMSUNG_DNG
+    dng_thumbnail_t *dngThumbnailBuf = NULL;
+    char *thumbBufAddr = NULL;
+    unsigned int thumbBufSize = 0;
+#endif
 
     ExynosRect pictureRect;
     ExynosRect thumbnailRect;
@@ -90,12 +96,6 @@ status_t ExynosCameraPipeJpeg::m_run(void)
     if (newFrame == NULL) {
         CLOGE("new frame is NULL");
         return NO_ERROR;
-    }
-
-    entity = newFrame->searchEntityByPipeId(getPipeId());
-    if (entity == NULL || entity->getSrcBufState() == ENTITY_BUFFER_STATE_ERROR) {
-        CLOGE("frame(%d) entityState(ENTITY_BUFFER_STATE_ERROR), skip jpeg", newFrame->getFrameCount());
-        goto func_exit;
     }
 
     if (newFrame->getFrameYuvStallPortUsage() == YUV_STALL_USAGE_PICTURE) {
@@ -145,6 +145,22 @@ status_t ExynosCameraPipeJpeg::m_run(void)
 
     m_jpegEnc.setExtScalerNum(m_parameters->getScalerNodeNumPicture());
 
+#ifdef SAMSUNG_JQ
+    if (m_parameters->getJpegQtableOn() == true && m_parameters->getJpegQtableStatus() != JPEG_QTABLE_DEINIT) {
+        if (m_parameters->getJpegQtableStatus() == JPEG_QTABLE_UPDATED) {
+            CLOGD("[JQ]:Get JPEG Q-table");
+            m_parameters->setJpegQtableStatus(JPEG_QTABLE_RETRIEVED);
+            m_parameters->getJpegQtable(m_qtable);
+        }
+
+        CLOGD("[JQ]:Set JPEG Q-table");
+        if (m_jpegEnc.setQuality(m_qtable)) {
+            CLOGE("[JQ]:m_jpegEnc.setQuality(qtable[]) fail");
+            ret = INVALID_OPERATION;
+            goto jpeg_encode_done;
+        }
+    } else
+#endif
     {
         if (m_jpegEnc.setQuality(jpegQuality)) {
             CLOGE("m_jpegEnc.setQuality() fail");
@@ -201,6 +217,14 @@ status_t ExynosCameraPipeJpeg::m_run(void)
     newFrame->getDynamicMeta(m_shot_ext);
     newFrame->getUserDynamicMeta(m_shot_ext);
 
+#ifdef SAMSUNG_TN_FEATURE
+    if (m_configurations->getModeValue(CONFIGURATION_EXIF_CAPTURE_STEP_COUNT) > 0) {
+        CLOGD("get (%d)frame meta for multi frame capture",
+                m_configurations->getModeValue(CONFIGURATION_EXIF_CAPTURE_STEP_COUNT));
+        m_configurations->getExifMetaData(&m_shot_ext->shot);
+    }
+#endif
+
     m_parameters->setExifChangedAttribute(&exifInfo, &pictureRect, &thumbnailRect, &m_shot_ext->shot);
 
     if (m_jpegEnc.setInBuf((int *)&(yuvBuf.fd), (int *)yuvBuf.size)) {
@@ -221,11 +245,45 @@ status_t ExynosCameraPipeJpeg::m_run(void)
         goto jpeg_encode_done;
     }
 
+#ifdef SAMSUNG_DNG
+    if (m_parameters->getDNGCaptureModeOn() == true
+        && m_configurations->getModeValue(CONFIGURATION_SERIES_SHOT_MODE) != SERIES_SHOT_MODE_BURST) {
+        thumbBufSize = thumbnailRect.w * thumbnailRect.h * 2;
+        dngThumbnailBuf = m_parameters->createDngThumbnailBuffer(thumbBufSize);
+        thumbBufAddr = dngThumbnailBuf->buf;
+    }
+#endif
+
     if (m_jpegEnc.encode((int *)&jpegBuf.size, &exifInfo, (char **)jpegBuf.addr, m_parameters->getDebugAttribute())) {
         CLOGE("m_jpegEnc.encode() fail");
         ret = INVALID_OPERATION;
         goto jpeg_encode_done;
     }
+
+#ifdef SAMSUNG_DNG
+    if (m_parameters->getDNGCaptureModeOn() == true
+        && m_configurations->getModeValue(CONFIGURATION_SERIES_SHOT_MODE) != SERIES_SHOT_MODE_BURST) {
+        if (thumbBufAddr) {
+            dngThumbnailBuf->size = m_jpegEnc.GetThumbnailImage(thumbBufAddr, thumbBufSize);
+            if (!dngThumbnailBuf->size)
+                CLOGE("[DNG] GetThumbnailImage failed");
+        } else {
+            CLOGE("[DNG] Thumbnail buf is NULL");
+            dngThumbnailBuf->size = 0;
+        }
+
+        if (m_configurations->getCaptureExposureTime() > CAMERA_PREVIEW_EXPOSURE_TIME_LIMIT) {
+            dngThumbnailBuf->frameCount = 0;
+        } else {
+            dngThumbnailBuf->frameCount = m_shot_ext->shot.dm.request.frameCount;
+        }
+
+        m_parameters->putDngThumbnailBuffer(dngThumbnailBuf);
+
+        CLOGD("[DNG] Thumbnail enable(%d), (addr:size:frame_count) [%p:%d:%d]",
+                exifInfo.enableThumb, thumbBufAddr, dngThumbnailBuf->size, dngThumbnailBuf->frameCount);
+    }
+#endif
 
     newFrame->setJpegSize(jpegBuf.size[0]);
 
@@ -250,21 +308,8 @@ jpeg_encode_done:
         m_jpegEnc.destroy();
 
     CLOGI(" -OUT-");
+
     return ret;
-
-func_exit:
-
-    ret = newFrame->setEntityState(getPipeId(), ENTITY_STATE_FRAME_DONE);
-    if (ret < 0) {
-        CLOGE("set entity state fail, ret(%d)", ret);
-        /* TODO: doing exception handling */
-        return OK;
-    }
-
-    m_outputFrameQ->pushProcessQ(&newFrame);
-
-    CLOGI(" -OUT-");
-    return NO_ERROR;
 }
 
 void ExynosCameraPipeJpeg::m_init(void)

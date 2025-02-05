@@ -21,6 +21,14 @@
 #include "ExynosCameraConfig.h"
 #include "ExynosJpegEncoderForCamera.h"
 
+#ifdef USE_CSC_FEATURE
+#include <cutils/properties.h>
+#include <SecNativeFeature.h>
+#endif
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecAppMarker.h"
+#endif
+
 int iJpegSize;
 
 unsigned int measure_time(struct timeval *start, struct timeval *stop)
@@ -140,6 +148,24 @@ int ExynosJpegEncoderForCamera::encode(int *size, exif_attribute_t *exifInfo, ch
         //             exifLen - thumbLen, EXIF_INFO_LIMIT_SIZE);
         }
 
+#ifdef SAMSUNG_DEBUG_MARKER
+        if (debugInfo != NULL && debugInfo->num_of_appmarker > 0) {
+            SecAppMarker *m_debugMarker;
+            char *startDbgAddr = NULL;
+            m_debugMarker = new SecAppMarker;
+            m_debugMarker->setExifStartAddr((char *)exifOut, exifLen);
+            startDbgAddr = debugInfo->debugData[debugInfo->idx[0][0]];
+            m_debugMarker->setDebugStartAddr(startDbgAddr, totalDbgSize);
+            m_debugMarker->pushDebugData((void *)debugInfo);
+            debugOut = m_debugMarker->getResultData();
+            exifLen = m_debugMarker->getResultDataSize();
+            CLOGD2("AppMarker exif + debug size = %d", exifLen);
+            memcpy((void *)exifOut, (void *)debugOut, exifLen);
+            m_debugMarker->destroy();
+            delete m_debugMarker;
+            m_debugMarker = NULL;
+        }
+#endif
         CLOGD2("wait JPEG main encoder");
         m_jpegMainEncodeThread->join();
 

@@ -89,6 +89,7 @@ public:
 
     /* set size */
     status_t setQuality(int quality);
+    status_t setQuality(const unsigned char qtable[]);
 
     /* set size */
     status_t setSize(int w, int h);

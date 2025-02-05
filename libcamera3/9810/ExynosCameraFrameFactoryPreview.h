@@ -61,6 +61,8 @@ public:
     virtual status_t        create(void);
     virtual status_t        postcreate(void);
 
+    virtual status_t        fastenAeStable(int32_t numFrames, ExynosCameraBuffer *buffers);
+
     virtual status_t        initPipes(void);
     virtual status_t        mapBuffers(void);
     virtual status_t        preparePipes(void);
@@ -89,6 +91,12 @@ protected:
 
     /* pipe setting */
     virtual status_t        m_initPipes(uint32_t frameRate);
+
+    /* pipe setting for fastAE */
+    virtual status_t        m_initPipesFastenAeStable(int32_t numFrames,
+                                                      int hwSensorW,
+                                                      int hwSensorH,
+                                                      uint32_t frameRate);
 
     virtual status_t        m_initFrameMetadata(ExynosCameraFrameSP_sptr_t frame);
     virtual status_t        m_fillNodeGroupInfo(ExynosCameraFrameSP_sptr_t frame);

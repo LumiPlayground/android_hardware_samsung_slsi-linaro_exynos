@@ -77,9 +77,6 @@ void updateNodeGroupInfo(
     ExynosRect bdsSize;
     ExynosRect ispSize;
     ExynosRect mcscInputSize;
-#if defined(USE_SW_MCSC) && (USE_SW_MCSC == true)
-    ExynosRect swMcscSize;
-#endif
     ExynosRect ratioCropSize;
     ExynosRect mcscSize[MAX_YUV_STREAM_COUNT];
 
@@ -106,46 +103,28 @@ void updateNodeGroupInfo(
 
         for (int i = 0; i < params->getYuvStreamMaxNum(); i++)
             params->getYuvSize(&mcscSize[i].w, &mcscSize[i].h, i);
-#if defined(USE_SW_MCSC) && (USE_SW_MCSC == true)
-        params->getCalculatedMaxYuvSize(&(swMcscSize.w), &(swMcscSize.h));
-        if (params->isFullOtfPreview() == true
-            && (swMcscSize.w > mcscInputSize.w || swMcscSize.h > mcscInputSize.h)) {
-            swMcscSize = mcscInputSize;
-        }
-        if (pipeId == PIPE_SW_MCSC) {
-            mcscInputSize = swMcscSize;
-        } else {
-            mcscSize[0] = swMcscSize;
-        }
-#endif
     } else {
-        switch (params->getReprocessingMode()) {
-        case PROCESSING_MODE_REPROCESSING_PURE_BAYER:
+        if (params->getUsePureBayerReprocessing() == true) {
             params->getPictureBayerCropSize(&bnsSize, &bayerCropSize);
             params->getPictureBdsSize(&bdsSize);
-            break;
-        case PROCESSING_MODE_REPROCESSING_PROCESSED_BAYER:
+        } else { /* If dirty bayer is used for reprocessing, reprocessing ISP input size should be set preview bayer crop size */
             params->getPreviewBayerCropSize(&bnsSize, &bayerCropSize);
             params->getPreviewBdsSize(&bdsSize);
-            break;
-        default:
-            CLOGE2("Unsupported reprocessing mode(%d)",
-                    params->getReprocessingMode());
-            break;
         }
 
         if (params->isUseReprocessingIspInputCrop() == true)
             params->getPictureYuvCropSize(&ispSize);
+        else if (params->getUsePureBayerReprocessing() == true)
+            params->getPictureBdsSize(&ispSize);
         else /* for dirty bayer reprocessing */
-            ispSize = bdsSize;
+            ispSize = bayerCropSize;
 
         if (params->isUseReprocessingMcscInputCrop() == true)
             params->getPictureYuvCropSize(&mcscInputSize);
         else
             mcscInputSize = ispSize;
 
-        switch (params->getNumOfHwChains()) {
-        case 1:
+        if (params->isSingleChain() == true) {
             /*
                                   Single      Dual
              mcscSize[0] -> MCSC    P0         P3
@@ -168,14 +147,9 @@ void updateNodeGroupInfo(
 
             params->getPictureSize(&mcscSize[1].w, &mcscSize[1].h);
             params->getThumbnailSize(&mcscSize[2].w, &mcscSize[2].h);
-            break;
-        case 2:
+        } else {
             params->getPictureSize(&mcscSize[0].w, &mcscSize[0].h);
             params->getThumbnailSize(&mcscSize[1].w, &mcscSize[1].h);
-            break;
-        default:
-            CLOGE2("Unsupported HW chain count(%d)!", params->getNumOfHwChains());
-            break;
         }
     }
 
@@ -206,11 +180,6 @@ void updateNodeGroupInfo(
         /* Leader MCSCS : [crop] : YUV Crop Size */
         setLeaderSizeToNodeGroupInfo(node_group_info, mcscInputSize.x, mcscInputSize.y, mcscInputSize.w, mcscInputSize.h);
         break;
-#if defined(USE_SW_MCSC) && (USE_SW_MCSC == true)
-    case PIPE_SW_MCSC:
-        setLeaderSizeToNodeGroupInfo(node_group_info, 0, 0, swMcscSize.w, swMcscSize.h);
-        break;
-#endif
     default:
         CLOGE2("Invalid pipeId %d", pipeId);
         return;
@@ -239,11 +208,6 @@ void updateNodeGroupInfo(
     case PIPE_MCSC_REPROCESSING:
         pipeName = "MCSC";
         break;
-#if defined(USE_SW_MCSC) && (USE_SW_MCSC == true)
-    case PIPE_SW_MCSC:
-        pipeName = "SW_MCSC";
-        break;
-#endif
     default:
         break;
     }
@@ -280,6 +244,16 @@ void updateNodeGroupInfo(
         case FIMC_IS_VIDEO_SS3VC1_NUM:
         case FIMC_IS_VIDEO_SS3VC2_NUM:
         case FIMC_IS_VIDEO_SS3VC3_NUM:
+#ifdef SAMSUNG_QUICK_SWITCH
+        case FIMC_IS_VIDEO_SS4VC0_NUM:
+        case FIMC_IS_VIDEO_SS4VC1_NUM:
+        case FIMC_IS_VIDEO_SS4VC2_NUM:
+        case FIMC_IS_VIDEO_SS4VC3_NUM:
+        case FIMC_IS_VIDEO_SS5VC0_NUM:
+        case FIMC_IS_VIDEO_SS5VC1_NUM:
+        case FIMC_IS_VIDEO_SS5VC2_NUM:
+        case FIMC_IS_VIDEO_SS5VC3_NUM:
+#endif
             /* SENSOR : [X] : SENSOR output size for zsl bayer */
             setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, sensorSize.w, sensorSize.h);
             perframePosition++;
@@ -357,18 +331,10 @@ void updateNodeGroupInfo(
                 ratioCropSize.h = mcscInputSize.h;
             }
 
-            if (params->getReprocessingMode() == PROCESSING_MODE_NON_REPROCESSING_YUV
-#if defined(USE_SW_MCSC) && (USE_SW_MCSC == true)
-                && pipeId != PIPE_SW_MCSC
-#endif
-               ) {
-                setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, mcscInputSize.w, mcscInputSize.h);
-            } else {
-                setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
-                                                        ratioCropSize.x, ratioCropSize.y,
-                                                        ratioCropSize.w, ratioCropSize.h,
-                                                        mcscSize[1].w, mcscSize[1].h);
-            }
+            setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
+                                                    ratioCropSize.x, ratioCropSize.y,
+                                                    ratioCropSize.w, ratioCropSize.h,
+                                                    mcscSize[1].w, mcscSize[1].h);
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_M2P_NUM:

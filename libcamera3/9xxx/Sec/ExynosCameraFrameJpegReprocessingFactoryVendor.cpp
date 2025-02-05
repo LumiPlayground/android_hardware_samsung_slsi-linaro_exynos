@@ -155,8 +155,9 @@ status_t ExynosCameraFrameJpegReprocessingFactory::m_setupConfig(void)
     CLOGI("");
 
     int pipeId = -1;
+
     int node3Paf = -1;
-    int node3aa = -1, node3ac = -1, node3ap = -1, node3af = -1;
+    int node3aa = -1, node3ac = -1, node3ap = -1, node3af = -1, node3ag = -1;
     int nodeIsp = -1, nodeIspc = -1, nodeIspp = -1;
     int nodeMcsc = -1;
     int nodeMcscpJpeg = -1, nodeMcscpThumb = -1;
@@ -342,6 +343,17 @@ status_t ExynosCameraFrameJpegReprocessingFactory::m_setupConfig(void)
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "REPROCESSING_3AA_CAPTURE_OPT", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_3AA_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
 
+    if (m_parameters->isUse3aaDNG()) {
+        /* 3AG */
+        node3ag = FIMC_IS_VIDEO_31G_NUM;
+        nodeType = getNodeType(PIPE_3AG_REPROCESSING);
+        m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_3AG_REPROCESSING;
+        m_deviceInfo[pipeId].nodeNum[nodeType] = node3ag;
+        m_deviceInfo[pipeId].bufferManagerType[nodeType] = BUFFER_MANAGER_SERVICE_GRALLOC_TYPE;
+        strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "REPROCESSING_3AA_DNG", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+        m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_3AG_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
+    }
+
     /* 3AP */
     nodeType = getNodeType(PIPE_3AP_REPROCESSING);
     m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_3AP_REPROCESSING;
@@ -364,7 +376,7 @@ status_t ExynosCameraFrameJpegReprocessingFactory::m_setupConfig(void)
          * VRA
          */
         previousPipeId = pipeId;
-        
+
         vraSrcPipeId = INDEX(PIPE_3AF_REPROCESSING);
         nodeType = getNodeType(PIPE_VRA_REPROCESSING);
         m_deviceInfo[vraPipeId].pipeId[nodeType]  = PIPE_VRA;
@@ -619,6 +631,7 @@ status_t ExynosCameraFrameJpegReprocessingFactory::m_initFrameMetadata(ExynosCam
     }
 
     frame->setRequest(PIPE_3AC_REPROCESSING, m_request[INDEX(PIPE_3AC_REPROCESSING)]);
+    frame->setRequest(PIPE_3AG_REPROCESSING, m_request[INDEX(PIPE_3AG_REPROCESSING)]);
     frame->setRequest(PIPE_3AP_REPROCESSING, m_request[INDEX(PIPE_3AP_REPROCESSING)]);
     frame->setRequest(PIPE_3AF_REPROCESSING, m_request[INDEX(PIPE_3AF_REPROCESSING)]);
     frame->setRequest(PIPE_ISPC_REPROCESSING, m_request[INDEX(PIPE_ISPC_REPROCESSING)]);
@@ -656,22 +669,22 @@ status_t ExynosCameraFrameJpegReprocessingFactory::m_initFrameMetadata(ExynosCam
     return ret;
 }
 
-void ExynosCameraFrameJpegReprocessingFactory::connectPPScenario(int pipeId, int scenario)
+void ExynosCameraFrameJpegReprocessingFactory::connectScenario(int pipeId, int scenario)
 {
     CLOGD("pipeId(%d), scenario(%d)", pipeId, scenario);
 }
 
-void ExynosCameraFrameJpegReprocessingFactory::startPPScenario(int pipeId)
+void ExynosCameraFrameJpegReprocessingFactory::startScenario(int pipeId)
 {
     CLOGD("pipeId(%d)", pipeId);
 }
 
-void ExynosCameraFrameJpegReprocessingFactory::stopPPScenario(int pipeId, bool suspendFlag)
+void ExynosCameraFrameJpegReprocessingFactory::stopScenario(int pipeId, bool suspendFlag)
 {
     CLOGD("pipeId(%d), suspendFlag(%d)", pipeId, suspendFlag);
 }
 
-int ExynosCameraFrameJpegReprocessingFactory::getPPScenario(__unused int pipeId)
+int ExynosCameraFrameJpegReprocessingFactory::getScenario(__unused int pipeId)
 {
     int scenario = 0;
     return scenario;

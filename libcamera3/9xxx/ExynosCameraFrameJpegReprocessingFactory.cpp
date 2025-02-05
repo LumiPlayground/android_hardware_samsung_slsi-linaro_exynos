@@ -103,7 +103,7 @@ status_t ExynosCameraFrameJpegReprocessingFactory::initPipes(void)
     memset(&nullPipeInfo, 0, sizeof(camera_pipe_info_t));
 
 #ifdef DEBUG_RAWDUMP
-    if (m_configurations->checkBayerDumpEnable()) {
+    if (m_parameters->checkBayerDumpEnable()) {
         bayerFormat = CAMERA_DUMP_BAYER_FORMAT;
     }
 #endif
@@ -614,7 +614,7 @@ status_t ExynosCameraFrameJpegReprocessingFactory::startPipes(void)
 
     /* VRA Reprocessing */
     if ((m_flagMcscVraOTF == HW_CONNECTION_MODE_M2M) ||
-			(m_flag3aaVraOTF == HW_CONNECTION_MODE_M2M)) { 
+			(m_flag3aaVraOTF == HW_CONNECTION_MODE_M2M)) {
         ret = m_pipes[INDEX(PIPE_VRA_REPROCESSING)]->start();
         if (ret != NO_ERROR) {
             CLOGE("VRA start fail, ret(%d)", ret);
@@ -888,15 +888,15 @@ status_t ExynosCameraFrameJpegReprocessingFactory::m_fillNodeGroupInfo(ExynosCam
         node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
         node_group_info_temp->capture[perframePosition].pixelformat = m_parameters->getBayerFormat(nodePipeId);
         perframePosition++;
-    }
 
-    /* VRA */
-    if (m_flag3aaVraOTF == HW_CONNECTION_MODE_M2M) {
-        nodePipeId = PIPE_3AF_REPROCESSING;
-        node_group_info_temp->capture[perframePosition].request = m_request[INDEX(nodePipeId)];
-        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
-        node_group_info_temp->capture[perframePosition].pixelformat = m_parameters->getHwVraInputFormat();
-        perframePosition++;
+        /* VRA */
+        if (m_flag3aaVraOTF == HW_CONNECTION_MODE_M2M) {
+            nodePipeId = PIPE_3AF_REPROCESSING;
+            node_group_info_temp->capture[perframePosition].request = m_request[INDEX(nodePipeId)];
+            node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
+            node_group_info_temp->capture[perframePosition].pixelformat = m_parameters->getHwVraInputFormat();
+            perframePosition++;
+        }
     }
 
     /* ISP for Reprocessing */

@@ -125,8 +125,8 @@ status_t ExynosCameraPlugInConverterVDIS::m_make(Map_t *map)
         //CLOGD("bcrop (%d %d %d %d)", m_bcrop.x, m_bcrop.y, m_bcrop.w, m_bcrop.h);
         (*map)[PLUGIN_BCROP_RECT] = (Map_data_t)&m_bcrop;
 
-        //m_zoomRatio[0] = configurations->getZoomRatio();
-        //(*map)[PLUGIN_ZOOM_RATIO] = (Map_data_t)m_zoomRatio;
+        m_zoomRatio[0] = configurations->getZoomRatio();
+        (*map)[PLUGIN_ZOOM_RATIO] = (Map_data_t)m_zoomRatio;
 
 #ifdef USE_MSL_VDIS_GYRO
         gyroData = frame->getGyroData();

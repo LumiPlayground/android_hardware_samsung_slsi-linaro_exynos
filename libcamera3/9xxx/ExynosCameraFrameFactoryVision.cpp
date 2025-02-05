@@ -64,6 +64,13 @@ status_t ExynosCameraFrameFactoryVision::create()
 
     ret = m_transitState(FRAME_FACTORY_STATE_CREATE);
 
+#ifdef SAMSUNG_SSRM
+    struct ssrmCameraInfo *cameraInfo = m_parameters->getSsrmCameraInfo();
+    memset(cameraInfo, 0, sizeof(ssrmCameraInfo));
+    cameraInfo->sensorOn = 1;
+    cameraInfo->cameraId = m_cameraId;
+#endif
+
     return ret;
 }
 
@@ -124,7 +131,7 @@ status_t ExynosCameraFrameFactoryVision::m_fillNodeGroupInfo(ExynosCameraFrameSP
 
     int pipeId = -1;
     uint32_t perframePosition = 0;
-    int bayerFormat = V4L2_PIX_FMT_SGRBG8;
+    int bayerFormat = (m_cameraId == CAMERA_ID_SECURE) ? V4L2_PIX_FMT_SBGGR8 : V4L2_PIX_FMT_SGRBG8;
 
     memset(&node_group_info_flite, 0x0, sizeof(camera2_node_group));
 
@@ -142,7 +149,10 @@ status_t ExynosCameraFrameFactoryVision::m_fillNodeGroupInfo(ExynosCameraFrameSP
 
     sensorSize.x = 0;
     sensorSize.y = 0;
-    {
+    if (m_cameraId == CAMERA_ID_SECURE) {
+        sensorSize.w = SECURE_CAMERA_WIDTH;
+        sensorSize.h = SECURE_CAMERA_HEIGHT;
+    } else {
         sensorSize.w = VISION_WIDTH;
         sensorSize.h = VISION_HEIGHT;
     }
@@ -193,6 +203,8 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryVision::createNewFrame(uint32
 
     /* TODO: make it dynamic */
     frame->setNumRequestPipe(requestEntityCount);
+    frame->setParameters(m_parameters);
+    frame->setCameraId(m_cameraId);
 
     m_fillNodeGroupInfo(frame);
 
@@ -223,7 +235,12 @@ status_t ExynosCameraFrameFactoryVision::initPipes(void)
 
     pipeId = PIPE_FLITE;
 
-    {
+    if (m_cameraId == CAMERA_ID_SECURE) {
+        hwSensorW = SECURE_CAMERA_WIDTH;
+        hwSensorH = SECURE_CAMERA_HEIGHT;
+        bayerFormat = V4L2_PIX_FMT_SBGGR8;
+        bufferCount = RESERVED_NUM_SECURE_BUFFERS;
+    } else {
         hwSensorW = VISION_WIDTH;
         hwSensorH = VISION_HEIGHT;
         bayerFormat = V4L2_PIX_FMT_SGRBG8;
@@ -339,6 +356,28 @@ status_t ExynosCameraFrameFactoryVision::startPipes(void)
 
     CLOGI("Starting Vision Success!");
 
+#ifdef SAMSUNG_SSRM
+    struct ssrmCameraInfo *cameraInfo = m_parameters->getSsrmCameraInfo();
+    int width = 0, height = 0;
+    uint32_t minfps = 0, maxfps = 0;
+
+    if (m_configurations->getMode(CONFIGURATION_RECORDING_MODE) == true) {
+        m_configurations->getSize(CONFIGURATION_VIDEO_SIZE, (uint32_t *)&width, (uint32_t *)&height);
+    } else {
+        m_configurations->getSize(CONFIGURATION_MAX_YUV_SIZE, (uint32_t *)&width, (uint32_t *)&height);
+    }
+    m_configurations->getPreviewFpsRange(&minfps, &maxfps);
+
+    cameraInfo->operation = SSRM_CAMERA_INFO_SET;
+    cameraInfo->cameraId = m_cameraId;
+    cameraInfo->width = width;
+    cameraInfo->height = height;
+    cameraInfo->minFPS = (int)minfps;
+    cameraInfo->maxFPS = (int)maxfps;
+
+    storeSsrmCameraInfo(cameraInfo);
+#endif
+
     return NO_ERROR;
 }
 
@@ -410,6 +449,14 @@ status_t ExynosCameraFrameFactoryVision::stopPipes(void)
         funcRet |= ret;
     }
 
+#ifdef SAMSUNG_SSRM
+    struct ssrmCameraInfo *cameraInfo = m_parameters->getSsrmCameraInfo();
+
+    cameraInfo->operation = SSRM_CAMERA_INFO_CLEAR;
+    cameraInfo->cameraId = m_cameraId;
+    storeSsrmCameraInfo(cameraInfo);
+#endif
+
     CLOGI("Stopping Vsion Success!");
 
     return funcRet;
@@ -428,6 +475,9 @@ status_t ExynosCameraFrameFactoryVision::m_setupConfig()
 
     m_initDeviceInfo(PIPE_FLITE);
 
+    if (m_cameraId == CAMERA_ID_SECURE)
+        enableSecure = true;
+
     pipeId = PIPE_FLITE;
     nodeType = getNodeType(PIPE_FLITE);
     m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_FLITE;
@@ -439,7 +489,10 @@ status_t ExynosCameraFrameFactoryVision::m_setupConfig()
     m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "FLITE", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
 
-    sensorScenario = SENSOR_SCENARIO_VISION;
+    if (enableSecure == true)
+        sensorScenario = SENSOR_SCENARIO_SECURE;
+    else
+        sensorScenario = SENSOR_SCENARIO_VISION;
 
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[nodeType], false, flagStreamLeader, flagReprocessing, sensorScenario);
 
@@ -546,7 +599,11 @@ void ExynosCameraFrameFactoryVision::stopPPScenario(__unused int pipeId, __unuse
 
 int ExynosCameraFrameFactoryVision::getPPScenario(__unused int pipeId)
 {
+#ifdef SAMSUNG_TN_FEATURE
+    int scenario = PP_SCENARIO_NONE;
+#else
     int scenario = -1;
+#endif
 
     return scenario;
 }

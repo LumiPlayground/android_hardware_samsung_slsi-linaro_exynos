@@ -90,6 +90,11 @@ status_t ExynosCameraFrameFactory3aaIspM2M::m_setDeviceInfo(void)
     int t3aaNums[MAX_NODE];
     int ispNums[MAX_NODE];
 
+#ifdef RAWDUMP_CAPTURE
+    t3aaNums[OUTPUT_NODE]    = FIMC_IS_VIDEO_31S_NUM;
+    t3aaNums[CAPTURE_NODE_1] = FIMC_IS_VIDEO_31C_NUM;
+    t3aaNums[CAPTURE_NODE_2] = FIMC_IS_VIDEO_31P_NUM;
+#else
     if (m_parameters->getDualMode() == true) {
         t3aaNums[OUTPUT_NODE]    = FIMC_IS_VIDEO_31S_NUM;
         t3aaNums[CAPTURE_NODE_1] = FIMC_IS_VIDEO_31C_NUM;
@@ -99,6 +104,7 @@ status_t ExynosCameraFrameFactory3aaIspM2M::m_setDeviceInfo(void)
         t3aaNums[CAPTURE_NODE_1] = FIMC_IS_VIDEO_30C_NUM;
         t3aaNums[CAPTURE_NODE_2] = FIMC_IS_VIDEO_30P_NUM;
     }
+#endif
 
     ispNums[OUTPUT_NODE]    = FIMC_IS_VIDEO_I0S_NUM;
     ispNums[CAPTURE_NODE_1] = FIMC_IS_VIDEO_I0C_NUM;

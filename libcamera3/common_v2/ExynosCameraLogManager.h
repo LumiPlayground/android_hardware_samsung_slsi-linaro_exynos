@@ -27,6 +27,8 @@
 #ifndef EXYNOS_CAMERA_LOG_MANAGER_H
 #define EXYNOS_CAMERA_LOG_MANAGER_H
 
+#ifdef USE_DEBUG_PROPERTY
+
 #include <map>
 #include <utils/Log.h>
 #include <utils/Mutex.h>
@@ -118,8 +120,8 @@ public:
                 MetaMapper *remove = it->second;
                 if (remove != nullptr) {
                     removeChild(remove->child); //recursive
-                    delete remove;
                     child.erase(it);
+                    delete remove;
                 }
             }
         }
@@ -406,4 +408,5 @@ private:
     /* Mata Mapper */
     static MetaMapper kLv1MetaMap;
 };
+#endif //USE_DEBUG_PROPERTY
 #endif //EXYNOS_CAMERA_LOG_MANAGER_H

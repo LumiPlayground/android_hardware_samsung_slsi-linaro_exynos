@@ -147,9 +147,7 @@ public:
 protected:
     virtual bool            m_putBufferThreadFunc(void);
     virtual bool            m_getBufferThreadFunc(void);
-#ifdef DEBUG_DUMP_IMAGE
-    virtual bool            m_dumpBufferThreadFunc(void);
-#endif
+
     virtual status_t        m_putBuffer(void);
     virtual status_t        m_getBuffer(void);
 
@@ -221,10 +219,6 @@ protected:
     typedef ExynosCameraThread<ExynosCameraMCPipe> MCPipeThread;
     sp<MCPipeThread>            m_putBufferThread;
     sp<MCPipeThread>            m_getBufferThread;
-#ifdef DEBUG_DUMP_IMAGE
-    sp<Thread>                  m_dumpBufferThread;
-    uint32_t                    m_dumpBufferCount;
-#endif
 /*
     struct ExynosConfigInfo    *m_exynosconfig;
 
@@ -241,6 +235,7 @@ protected:
     uint32_t                    m_numOfRunningFrame[MAX_NODE];
 
     uint32_t                    m_pipeIdArr[MAX_NODE];
+
 /*
     uint32_t                    m_pipeId;
 
@@ -274,9 +269,6 @@ protected:
     camera_device_info_t       *m_deviceInfo;
 
     frame_queue_t              *m_requestFrameQ;
-#ifdef DEBUG_DUMP_IMAGE
-    frame_queue_t              *m_dumpFrameQ;
-#endif
 
     ExynosCameraBuffer          m_skipBuffer[MAX_NODE];
     bool                        m_skipPutBuffer[MAX_NODE];
@@ -288,6 +280,9 @@ protected:
     void                        m_lockSerializeOperation(enum pipeline pipeId);
     void                        m_unlockSerializeOperation(enum pipeline pipeId);
 #endif
+#ifdef SAMSUNG_JQ
+    unsigned char               m_qtable[128];
+#endif
 
     int                         m_sensorNodeIndex;
 #ifdef SUPPORT_DEPTH_MAP
@@ -297,9 +292,6 @@ protected:
     /* for print internal frame log duration */
     int                         m_putInternalFrameLogCnt;
     int                         m_getInternalFrameLogCnt;
-
-    int                         m_lastFrameCount;
-    int                         m_lastMetaFrameCount;
 };
 
 }; /* namespace android */

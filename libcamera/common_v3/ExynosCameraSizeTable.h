@@ -58,12 +58,12 @@ enum SIZE_LUT_INDEX {
 /* LSI Sensor */
 #if defined(CAMERA_LCD_SIZE) && (CAMERA_LCD_SIZE >= LCD_SIZE_2560_1440)
 #include "ExynosCameraSizeTable2P2_WQHD.h"
+#include "ExynosCameraSizeTable2L7_WQHD.h"
 #include "ExynosCameraSizeTable5E2.h"
 #else
 #include "ExynosCameraSizeTable2P2_FHD.h"
 #endif
-#include "ExynosCameraSizeTable2L7.h"
-#include "ExynosCameraSizeTable2P8.h"
+#include "ExynosCameraSizeTable2P8_WQHD.h"
 #include "ExynosCameraSizeTable2T2_WQHD.h"
 #include "ExynosCameraSizeTable2P2_12M.h"
 #include "ExynosCameraSizeTable2P3.h"
@@ -99,8 +99,6 @@ enum SIZE_LUT_INDEX {
 #include "ExynosCameraSizeTable8B1.h"
 #include "ExynosCameraSizeTable6D1.h"
 #include "ExynosCameraSizeTable4E6.h"
-#include "ExynosCameraSizeTable2P7SX.h"
-#include "ExynosCameraSizeTable3P8SP.h"
 
 /* Sony Sensor */
 #include "ExynosCameraSizeTableIMX134.h"
@@ -127,7 +125,6 @@ enum SIZE_LUT_INDEX {
 #include "ExynosCameraSizeTableIMX258.h"
 #include "ExynosCameraSizeTableIMX333_2L2_WQHD.h"
 #include "ExynosCameraSizeTableIMX320_3H1.h"
-#include "ExynosCameraSizeTableIMX386.h"
 
 /*Siliconfile Sensor */
 #include "ExynosCameraSizeTableSR261.h"
@@ -136,7 +133,6 @@ enum SIZE_LUT_INDEX {
 
 /*OV Sensor */
 #include "ExynosCameraSizeTableOV5670.h"
-#include "ExynosCameraSizeTableOV5695.h"
 
 }; /* namespace android */
 #endif

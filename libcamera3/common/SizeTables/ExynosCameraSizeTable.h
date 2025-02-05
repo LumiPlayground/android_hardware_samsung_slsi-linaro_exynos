@@ -17,7 +17,7 @@
 
 #ifndef EXYNOS_CAMERA_SIZE_TABLE_H
 #define EXYNOS_CAMERA_SIZE_TABLE_H
-#include <cutils/log.h>
+#include <log/log.h>
 #include <utils/String8.h>
 #include "ExynosCameraConfig.h"
 
@@ -63,13 +63,11 @@ enum SIZE_LUT_INDEX {
 #include "ExynosCameraSizeTable2L3_WQHD.h"
 #include "ExynosCameraSizeTable3M3.h"
 #include "ExynosCameraSizeTable5F1.h"
-#include "ExynosCameraSizeTableRPB.h"
 
 /* Sony Sensor */
 #include "ExynosCameraSizeTableIMX260_2L1_WQHD.h"
 #include "ExynosCameraSizeTableIMX333_2L2_WQHD.h"
 #include "ExynosCameraSizeTableIMX320_3H1.h"
-#include "ExynosCameraSizeTable6B2.h"
 
 }; /* namespace android */
 #endif

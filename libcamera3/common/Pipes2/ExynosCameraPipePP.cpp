@@ -34,7 +34,6 @@ status_t ExynosCameraPipePP::start(void)
 status_t ExynosCameraPipePP::stop(void)
 {
     CLOGD("");
-    status_t ret = NO_ERROR;
 
     m_flagTryStop = true;
 

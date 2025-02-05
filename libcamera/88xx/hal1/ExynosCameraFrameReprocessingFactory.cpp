@@ -75,15 +75,17 @@ status_t ExynosCameraFrameReprocessingFactory::create(__unused bool active)
     CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
             m_pipes[INDEX(PIPE_MCSC_REPROCESSING)]->getPipeName(), PIPE_MCSC_REPROCESSING);
 
-    /* GSC_REPROCESSING pipe initialize */
-    ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->create();
-    if (ret != NO_ERROR) {
-        CLOGE("ERR(%s[%d]):GSC create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
-        /* TODO: exception handling */
-        return INVALID_OPERATION;
+    if (m_parameters->needGSCForCapture(m_cameraId) == true) {
+        /* GSC_REPROCESSING pipe initialize */
+        ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->create();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):GSC create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+        CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
+                m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->getPipeName(), PIPE_GSC_REPROCESSING);
     }
-    CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
-            m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->getPipeName(), PIPE_GSC_REPROCESSING);
 
     /* GSC_REPROCESSING3 pipe initialize */
     ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING3)]->create();
@@ -300,7 +302,8 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
         pipeInfo[nodeType].bytesPerPlane[0] = getBayerLineSize(tempRect.fullW, bayerFormat);
 
         /* set v4l2 video node buffer count */
-        pipeInfo[nodeType].bufInfo.count = m_supportPureBayerReprocessing ? config->current->bufInfo.num_picture_buffers : config->current->bufInfo.num_bayer_buffers;
+        pipeInfo[nodeType].bufInfo.count = m_supportPureBayerReprocessing ? config->current->bufInfo.num_picture_buffers \
+                                                                          : config->current->bufInfo.num_bayer_buffers;
 
         /* Set output node default info */
         int ispPerframeInfoIndex = m_supportPureBayerReprocessing ? PERFRAME_INFO_PURE_REPROCESSING_ISP : PERFRAME_INFO_DIRTY_REPROCESSING_ISP;
@@ -379,8 +382,16 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
     perFramePos = PERFRAME_REPROCESSING_MCSC2_POS;
 
     /* set v4l2 buffer size */
-    tempRect.fullW = pictureW;
-    tempRect.fullH = pictureH;
+#ifdef SAMSUNG_LENS_DC
+    if (!m_parameters->getSamsungCamera() && m_parameters->getLensDCMode()) {
+        tempRect.fullW = maxPictureW;
+        tempRect.fullH = maxPictureH;
+    } else
+#endif
+    {
+        tempRect.fullW = pictureW;
+        tempRect.fullH = pictureH;
+    }
     tempRect.colorFormat = V4L2_PIX_FMT_NV21;
 
     /* set v4l2 video node buffer count */
@@ -594,11 +605,14 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
     }
 
     /* GSC Reprocessing Thread stop */
-    ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->stopThread();
-    if (ret != NO_ERROR) {
-        CLOGE("ERR(%s[%d]):GSC stopThread fail, ret(%d)", __FUNCTION__, __LINE__, ret);
-        /* TODO: exception handling */
-        return INVALID_OPERATION;
+    if (m_parameters->needGSCForCapture(m_cameraId) == true
+        && m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->isThreadRunning() == true) {
+        ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->stopThread();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):GSC stopThread fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
     }
 
     /* 3AA Reprocessing stop */
@@ -632,11 +646,13 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
     }
 
     /* GSC Reprocessing stop */
-    ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->stop();
-    if (ret != NO_ERROR) {
-        CLOGE("ERR(%s[%d]):GSC stop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
-        /* TODO: exception handling */
-        return INVALID_OPERATION;
+    if (m_parameters->needGSCForCapture(m_cameraId) == true) {
+        ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->stop();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):GSC stop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
     }
 
     /* GSC3 Reprocessing stop */
@@ -645,6 +661,16 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         CLOGE("ERR(%s[%d]):GSC3 stop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
         /* TODO: exception handling */
         return INVALID_OPERATION;
+    }
+
+    if (m_flagHWFCEnabled == false || (m_flagHWFCEnabled && m_parameters->isHWFCOnDemand())) {
+        /* JPEG Reprocessing stop */
+        ret = m_pipes[INDEX(PIPE_JPEG_REPROCESSING)]->stop();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):JPEG stop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
     }
 
     CLOGI("INFO(%s[%d]):Stopping Reprocessing [3AA>MCSC] Success!", __FUNCTION__, __LINE__);
@@ -734,7 +760,11 @@ ExynosCameraFrame * ExynosCameraFrameReprocessingFactory::createNewFrame(void)
     pipeId = PIPE_GSC_REPROCESSING2;
     newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
     frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
-    if (m_parameters->getIsThumbnailCallbackOn() == true)
+    if (m_parameters->getIsThumbnailCallbackOn() == true
+#ifdef SAMSUNG_MAGICSHOT
+        || curShotMode == SHOT_MODE_MAGIC
+#endif
+       )
         requestEntityCount++;
 
     /* set JPEG pipe to linkageList */
@@ -746,8 +776,16 @@ ExynosCameraFrame * ExynosCameraFrameReprocessingFactory::createNewFrame(void)
         && curSeriesShotMode != SERIES_SHOT_MODE_SIS
         && m_parameters->getShotMode() != SHOT_MODE_FRONT_PANORAMA
         && m_parameters->getHighResolutionCallbackMode() == false
-        && (m_flagHWFCEnabled == false || (m_flagHWFCEnabled && m_parameters->isHWFCOnDemand())))
+        && (m_flagHWFCEnabled == false || (m_flagHWFCEnabled && m_parameters->isHWFCOnDemand()))) {
         requestEntityCount++;
+    }
+
+#ifdef SUPPORT_DEPTH_MAP
+    /* set VC1 pipe to linkageList */
+    pipeId = PIPE_VC1;
+    newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
+    frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
+#endif
 
     ret = m_initPipelines(frame);
     if (ret != NO_ERROR) {
@@ -914,7 +952,7 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
     previousPipeId = pipeId;
 
     if (m_flagIspMcscOTF == false && m_flagTpuMcscOTF == false)
-        pipeId = PIPE_MCSC_REPROCESSING;
+        pipeId = INDEX(PIPE_MCSC_REPROCESSING);
 
     /* MCSC */
     nodeType = getNodeType(PIPE_MCSC_REPROCESSING);
@@ -1052,11 +1090,18 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
     camera2_node_group node_group_info_3aa;
     camera2_node_group node_group_info_isp;
     camera2_node_group node_group_info_mcsc;
-    camera2_node_group *node_group_info_temp;
+    camera2_node_group *node_group_info_temp = NULL;
+    size_control_info_t sizeControlInfo;
 
     int zoom = m_parameters->getZoomLevel();
     int pipeId = -1;
     uint32_t perframePosition = 0;
+
+#ifdef SR_CAPTURE
+    if(m_parameters->getSROn()) {
+        zoom = ZOOM_LEVEL_0;
+    }
+#endif
 
     memset(&node_group_info_3aa, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_isp, 0x0, sizeof(camera2_node_group));
@@ -1117,9 +1162,31 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
     node_group_info_temp->capture[perframePosition].request = m_requestMCSC4;
     node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC4_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
 
+    if (m_parameters->getUsePureBayerReprocessing() == true) {
+        m_parameters->getPictureBayerCropSize(&sizeControlInfo.bnsSize,
+                                              &sizeControlInfo.bayerCropSize);
+        m_parameters->getPictureBdsSize(&sizeControlInfo.bdsSize);
+    } else {
+        /* If dirty bayer is used for reprocessing,
+         * reprocessing ISP input size should be set preview bayer crop size.
+         */
+        m_parameters->getPreviewBayerCropSize(&sizeControlInfo.bnsSize,
+                                              &sizeControlInfo.bayerCropSize);
+        sizeControlInfo.bdsSize = sizeControlInfo.bayerCropSize;
+    }
+
+    m_parameters->getPictureYuvCropSize(&sizeControlInfo.yuvCropSize);
+    m_parameters->getPreviewSize(&sizeControlInfo.previewSize.w,
+                                 &sizeControlInfo.previewSize.h);
+    m_parameters->getPictureSize(&sizeControlInfo.pictureSize.w,
+                                 &sizeControlInfo.pictureSize.h);
+    m_parameters->getThumbnailSize(&sizeControlInfo.thumbnailSize.w,
+                                   &sizeControlInfo.thumbnailSize.h);
+
     updateNodeGroupInfo(
             PIPE_3AA_REPROCESSING,
             m_parameters,
+            sizeControlInfo,
             &node_group_info_3aa);
     frame->storeNodeGroupInfo(&node_group_info_3aa, PERFRAME_INFO_PURE_REPROCESSING_3AA, zoom);
 
@@ -1127,6 +1194,7 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
         updateNodeGroupInfo(
                 PIPE_ISP_REPROCESSING,
                 m_parameters,
+                sizeControlInfo,
                 &node_group_info_isp);
         if (m_supportPureBayerReprocessing == true)
             frame->storeNodeGroupInfo(&node_group_info_isp, PERFRAME_INFO_PURE_REPROCESSING_ISP, zoom);
@@ -1140,7 +1208,7 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
 void ExynosCameraFrameReprocessingFactory::m_init(void)
 {
     m_flagReprocessing = true;
-    m_flagHWFCEnabled = m_parameters->isHWFCEnabled();
+    m_flagHWFCEnabled = m_parameters->isUseHWFC();
 }
 
 }; /* namespace android */

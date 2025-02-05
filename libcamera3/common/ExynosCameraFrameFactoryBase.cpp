@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraFrameFactoryBase"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraFrameFactoryBase.h"
 
@@ -146,6 +146,12 @@ status_t ExynosCameraFrameFactoryBase::destroy(void)
 }
 
 status_t ExynosCameraFrameFactoryBase::mapBuffers(void)
+{
+    CLOGE("Must use the concreate class, don't use superclass");
+    return INVALID_OPERATION;
+}
+
+status_t ExynosCameraFrameFactoryBase::fastenAeStable(__unused int32_t numFrames, __unused ExynosCameraBuffer *buffers)
 {
     CLOGE("Must use the concreate class, don't use superclass");
     return INVALID_OPERATION;
@@ -441,7 +447,6 @@ void ExynosCameraFrameFactoryBase::dump()
 status_t ExynosCameraFrameFactoryBase::dumpFimcIsInfo(uint32_t pipeId, bool bugOn)
 {
     status_t ret = NO_ERROR;
-    int pipeIdIsp = 0;
 
     if (m_pipes[INDEX(pipeId)] != NULL)
         ret = m_pipes[INDEX(pipeId)]->dumpFimcIsInfo(bugOn);
@@ -455,7 +460,6 @@ status_t ExynosCameraFrameFactoryBase::dumpFimcIsInfo(uint32_t pipeId, bool bugO
 status_t ExynosCameraFrameFactoryBase::syncLog(uint32_t pipeId, uint32_t syncId)
 {
     status_t ret = NO_ERROR;
-    int pipeIdIsp = 0;
 
     if (m_pipes[INDEX(pipeId)] != NULL)
         ret = m_pipes[INDEX(pipeId)]->syncLog(syncId);
@@ -559,7 +563,6 @@ status_t ExynosCameraFrameFactoryBase::m_checkPipeInfo(uint32_t srcPipeId, uint3
 {
     int srcFullW, srcFullH, srcColorFormat;
     int dstFullW, dstFullH, dstColorFormat;
-    int isDifferent = 0;
     status_t ret = NO_ERROR;
 
     ret = m_pipes[INDEX(srcPipeId)]->getPipeInfo(&srcFullW, &srcFullH, &srcColorFormat, SRC_PIPE);
@@ -710,9 +713,7 @@ void ExynosCameraFrameFactoryBase::m_init(void)
     m_supportReprocessing = false;
     m_flagReprocessing = false;
     m_supportPureBayerReprocessing = false;
-
     m_state = FRAME_FACTORY_STATE_NONE;
-
     m_factoryType = FRAME_FACTORY_TYPE_MAX;
     m_sensorStandby = false;
 }

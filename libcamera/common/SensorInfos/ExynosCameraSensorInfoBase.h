@@ -67,6 +67,21 @@
 #define COMMON_DENOMINATOR       (100)
 #define EFFECTMODE_META_2_HAL(x) (1 << x)
 
+#ifdef SAMSUNG_OIS
+#define OIS_EXIF_SIZE         50
+#define OIS_EXIF_TAG         "ssois"
+#endif
+
+#ifdef SAMSUNG_BD
+#define BD_EXIF_SIZE    70
+#define BD_EXIF_TAG "ssbd"
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+#define LLS_EXIF_SIZE    310
+#define LLS_EXIF_TAG "sslls"
+#endif
+
 namespace android {
 
 enum max_3a_region {
@@ -123,6 +138,32 @@ int getSensorIdFromFile(int camId);
 #endif
 #ifdef SENSOR_FW_GET_FROM_FILE
 const char *getSensorFWFromFile(struct ExynosSensorInfoBase *info, int camId);
+#endif
+#ifdef SAMSUNG_OIS
+char *getOisEXIFFromFile(struct ExynosSensorInfoBase *info, int mode);
+
+struct ois_exif_data {
+    char ois_exif[OIS_EXIF_SIZE];
+};
+#endif
+
+#ifdef SAMSUNG_BD
+struct bd_exif_data {
+    char bd_exif[BD_EXIF_SIZE];
+};
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+struct lls_exif_data {
+    char lls_exif[LLS_EXIF_SIZE];
+};
+#endif
+
+#ifdef SAMSUNG_UTC_TS
+#define UTC_TS_SIZE 24 /* Tag (2bytes) + Length (2bytes) + Time (20bytes) */
+struct utc_ts {
+    char utc_ts_data[UTC_TS_SIZE];
+};
 #endif
 
 struct exynos_camera_info {
@@ -224,19 +265,39 @@ public:
 
     bool    scalableSensorMode;
     char    imageUniqueId[UNIQUE_ID_BUF_SIZE];
+    bool    samsungCamera;
 
     int     autoFocusMacroPosition;
     int     deviceOrientation;
     uint32_t    bnsScaleRatio;
     uint32_t    binningScaleRatio;
+#ifdef SAMSUNG_DOF
+    int lensPosTbl[6];
+#endif
 
     int     seriesShotMode;
+
+#ifdef SAMSUNG_OIS
+    enum optical_stabilization_mode oisMode;
+#endif
 };
 
 struct ExynosSensorInfoBase {
 public:
 #ifdef SENSOR_FW_GET_FROM_FILE
     char	sensor_fw[25];
+#endif
+
+#ifdef SAMSUNG_OIS
+    struct ois_exif_data     ois_exif_info;
+#endif
+
+#ifdef SAMSUNG_BD
+    struct bd_exif_data     bd_exif_info;
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    struct lls_exif_data     lls_exif_info;
 #endif
 
     int     maxPreviewW;
@@ -427,6 +488,22 @@ public:
     /* Android LED Static Metadata */
     uint8_t   *leds;
     size_t    ledsLength;
+
+    /* Samsung Vendor Feature */
+#ifdef SAMSUNG_CONTROL_METERING
+    int32_t   *vendorMeteringModes;
+    size_t    vendorMeteringModesLength;
+#endif
+
+#ifdef SAMSUNG_COMPANION
+    int32_t   vendorHdrRange[RANGE_TYPE_MAX];
+    uint8_t   vendorPafAvailable;
+#endif
+
+#ifdef SAMSUNG_OIS
+    int32_t   *vendorOISModes;
+    size_t    vendorOISModesLength;
+#endif
 
     /* Android Info Static Metadata */
     uint8_t   supportedHwLevel;
@@ -619,11 +696,6 @@ public:
     ExynosSensorIMX219Base();
 };
 
-struct ExynosSensorIMX230Base : public ExynosSensorInfoBase {
-public:
-    ExynosSensorIMX230Base();
-};
-
 struct ExynosSensorS5K8B1Base : public ExynosSensorInfoBase {
 public:
     ExynosSensorS5K8B1Base();
@@ -698,6 +770,12 @@ enum {
     SCENE_MODE_SPORTS         = (1 << 12),
     SCENE_MODE_PARTY          = (1 << 13),
     SCENE_MODE_CANDLELIGHT    = (1 << 14),
+#ifdef SAMSUNG_COMPANION
+    SCENE_MODE_HDR    = (1 << 15),
+#endif
+#ifdef SAMSUNG_FOOD_MODE
+    SCENE_MODE_FOOD    = (1 << 16),
+#endif
     SCENE_MODE_AQUA           = (1 << 17),
 };
 
@@ -711,6 +789,13 @@ enum {
     FOCUS_MODE_CONTINUOUS_PICTURE = (1 << 6),
     FOCUS_MODE_TOUCH              = (1 << 7),
     FOCUS_MODE_CONTINUOUS_PICTURE_MACRO = (1 << 8),
+#ifdef SAMSUNG_OT
+    FOCUS_MODE_OBJECT_TRACKING_PICTURE = (1 << 9),
+    FOCUS_MODE_OBJECT_TRACKING_VIDEO = (1 << 10),
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+    FOCUS_MODE_MANUAL = (1 << 11),
+#endif
 };
 
 enum {
@@ -781,6 +866,11 @@ enum SHOT_MODE {
     SHOT_MODE_3DTOUR            = 0x15,
     SHOT_MODE_SEQUENCE          = 0x16,
     SHOT_MODE_LIGHT_TRACE       = 0x17,
+#ifdef USE_LIMITATION_FOR_THIRD_PARTY
+    THIRD_PARTY_BLACKBOX_MODE   = 0x19,
+    THIRD_PARTY_VTCALL_MODE     = 0x20,
+    THIRD_PARTY_HANGOUT_MODE    = 0x21,
+#endif
     SHOT_MODE_FRONT_PANORAMA    = 0x1B,
     SHOT_MODE_SELFIE_ALARM      = 0x1C,
     SHOT_MODE_INTERACTIVE       = 0x1D,
@@ -801,8 +891,22 @@ enum SERIES_SHOT_MODE {
     SERIES_SHOT_MODE_BEST_PHOTO        = 6,
     SERIES_SHOT_MODE_MAGIC             = 7,
     SERIES_SHOT_MODE_SELFIE_ALARM      = 8,
+#ifdef ONE_SECOND_BURST_CAPTURE
+    SERIES_SHOT_MODE_ONE_SECOND_BURST  = 9,
+#endif
     SERIES_SHOT_MODE_MAX,
 };
+
+#ifdef SAMSUNG_LLS_DEBLUR
+enum MULTI_SHOT_MODE {
+    MULTI_SHOT_MODE_NONE              = 0,
+    MULTI_SHOT_MODE_MULTI1            = 1,
+    MULTI_SHOT_MODE_MULTI2            = 2,
+    MULTI_SHOT_MODE_MULTI3            = 3,
+    MULTI_SHOT_MODE_DEBLUR            = 4,
+    MULTI_SHOT_MODE_MAX,
+};
+#endif
 
 enum ISO_VALUES {
     ISO_AUTO = (1 << 0),

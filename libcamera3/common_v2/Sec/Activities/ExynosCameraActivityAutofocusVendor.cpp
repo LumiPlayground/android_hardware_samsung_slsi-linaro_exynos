@@ -95,6 +95,59 @@ int ExynosCameraActivityAutofocus::t_func3ABeforeHAL3(void *args)
         return false;
     }
 
+#ifdef SAMSUNG_OT
+    if ((shot_ext->shot.ctl.aa.vendor_afmode_option & SET_BIT(AA_AFMODE_OPTION_BIT_OBJECT_TRACKING)) != 0) {
+        switch (m_autofocusStep) {
+        case AUTOFOCUS_STEP_REQUEST:
+            shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_OFF;
+            shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00;
+            shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+
+            m_autofocusStep = AUTOFOCUS_STEP_SCANNING;
+            break;
+        case AUTOFOCUS_STEP_SCANNING:
+            shot_ext->shot.ctl.aa.afRegions[0] = 0;
+            shot_ext->shot.ctl.aa.afRegions[1] = 0;
+            shot_ext->shot.ctl.aa.afRegions[2] = 0;
+            shot_ext->shot.ctl.aa.afRegions[3] = 0;
+
+            shot_ext->shot.uctl.aaUd.af_data.focusState = m_OTfocusData.focusState;
+            shot_ext->shot.uctl.aaUd.af_data.focusROILeft = m_OTfocusData.focusROI.left;
+            shot_ext->shot.uctl.aaUd.af_data.focusROIRight = m_OTfocusData.focusROI.right;
+            shot_ext->shot.uctl.aaUd.af_data.focusROITop = m_OTfocusData.focusROI.top;
+            shot_ext->shot.uctl.aaUd.af_data.focusROIBottom = m_OTfocusData.focusROI.bottom;
+            shot_ext->shot.uctl.aaUd.af_data.focusWeight = m_OTfocusData.focusWeight;
+            shot_ext->shot.uctl.aaUd.af_data.w_movement = m_OTfocusData.w_movement;
+            shot_ext->shot.uctl.aaUd.af_data.h_movement = m_OTfocusData.h_movement;
+            shot_ext->shot.uctl.aaUd.af_data.w_velocity = m_OTfocusData.w_velocity;
+            shot_ext->shot.uctl.aaUd.af_data.h_velocity = m_OTfocusData.h_velocity;
+            CLOGV("[OBTR]Library state: %d, x1: %d, x2: %d, y1: %d, y2: %d, weight: %d",
+                    m_OTfocusData.focusState,
+                    m_OTfocusData.focusROI.left, m_OTfocusData.focusROI.right,
+                    m_OTfocusData.focusROI.top, m_OTfocusData.focusROI.bottom, m_OTfocusData.focusWeight);
+
+            CLOGV("AF-Mode(FW)=(%d(%d)) AF-Region(x1,y1,x2,y2,weight)=(%d, %d, %d, %d, %d)",
+                    shot_ext->shot.ctl.aa.afMode, shot_ext->shot.ctl.aa.vendor_afmode_option,
+                    shot_ext->shot.ctl.aa.afRegions[0],
+                    shot_ext->shot.ctl.aa.afRegions[1],
+                    shot_ext->shot.ctl.aa.afRegions[2],
+                    shot_ext->shot.ctl.aa.afRegions[3],
+                    shot_ext->shot.ctl.aa.afRegions[4]);
+            break;
+        }
+    } else {
+        m_autofocusStep = AUTOFOCUS_STEP_REQUEST;
+    }
+#endif
+
+#ifdef SAMSUNG_DOF
+    if (m_flagLensMoveStart) {
+        shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_OFF;
+        shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00;
+        shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+    }
+#endif
+
     return 1;
 }
 
@@ -102,6 +155,39 @@ enum aa_afstate ExynosCameraActivityAutofocus::getAfState(void)
 {
     return (enum aa_afstate)m_aaAfState;
 }
+
+#ifdef SAMSUNG_OT
+bool ExynosCameraActivityAutofocus::setObjectTrackingAreas(UniPluginFocusData_t *focusData)
+{
+    if(focusData == NULL) {
+        CLOGE(" NULL focusData is received!!");
+        return false;
+    }
+    Mutex::Autolock l(m_OTfocusDataLock);
+
+    memcpy(&m_OTfocusData, focusData, sizeof(UniPluginFocusData_t));
+
+    return true;
+}
+
+bool ExynosCameraActivityAutofocus::getObjectTrackingAreas(UniPluginFocusData_t *focusData)
+{
+    Mutex::Autolock l(m_OTfocusDataLock);
+
+    memcpy(focusData, &m_OTfocusData, sizeof(UniPluginFocusData_t));
+
+    return true;
+}
+#endif
+
+#ifdef SAMSUNG_DOF
+void ExynosCameraActivityAutofocus::setStartLensMove(bool toggle)
+{
+    CLOGI("toggle(%d)", toggle);
+
+    m_flagLensMoveStart = toggle;
+}
+#endif
 
 ExynosCameraActivityAutofocus::AUTOFOCUS_STATE ExynosCameraActivityAutofocus::afState2AUTOFOCUS_STATE(enum aa_afstate aaAfState)
 {

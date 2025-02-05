@@ -39,6 +39,18 @@
 #include "ExynosCameraScalableSensor.h"
 #include "ExynosCameraFrameSelector.h"
 
+#ifdef USE_CAMERA_PREVIEW_FRAME_SCHEDULER
+#include "SecCameraPreviewFrameSchedulerSimple.h"
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraParameters.h"
+#endif
+
+#ifdef SAMSUNG_DNG
+#include "SecCameraDngCreator.h"
+#endif
+
 namespace android {
 
 typedef struct ExynosCameraJpegCallbackBuffer {
@@ -53,6 +65,25 @@ typedef ExynosCameraList<ExynosCameraFrameFactory *> framefactory_queue_t;
 typedef ExynosCameraList<jpeg_callback_buffer_t> jpeg_callback_queue_t;
 typedef ExynosCameraList<ExynosCameraBuffer> postview_callback_queue_t;
 typedef ExynosCameraList<ExynosCameraBuffer> thumbnail_callback_queue_t;
+#ifdef SAMSUNG_DNG
+typedef ExynosCameraList<ExynosCameraBuffer> dng_capture_queue_t;
+#endif
+#ifdef SAMSUNG_DEBLUR
+typedef ExynosCameraList<ExynosCameraBuffer> deblur_capture_queue_t;
+#endif
+
+#ifdef SAMSUNG_LBP
+typedef struct ExynosCameraLBPbuffer {
+    ExynosCameraBuffer buffer;
+    uint32_t frameNumber;
+} lbp_buffer_t;
+
+typedef ExynosCameraList<lbp_buffer_t> lbp_queue_t;
+#endif
+
+#ifdef SAMSUNG_BD
+typedef ExynosCameraList<UTstr> bd_queue_t;
+#endif
 
 typedef ExynosCameraList<ExynosCameraFrame *> capture_queue_t;
 
@@ -111,6 +142,39 @@ enum EXYNOS_CAMERA_STREAM_CHARACTERISTICS_ID {
 
 
 //typedef ExynosCameraList<ExynosCameraFrameFactory *> framefactory_queue_t;
+
+#ifdef SAMSUNG_LLV
+enum LLV_status {
+    LLV_UNINIT              = 0,
+    LLV_INIT                = 1,
+    LLV_STOPPED,
+};
+#endif
+
+#ifdef SAMSUNG_HLV
+enum HLV_process_step {
+    HLV_PROCESS_DONE = 0,
+    HLV_PROCESS_PRE = 1,
+    HLV_PROCESS_SET,
+    HLV_PROCESS_START,
+};
+#endif
+
+#ifdef SAMSUNG_OT
+enum objet_tracking_status {
+    OBJECT_TRACKING_DEINIT              = 0,
+    OBJECT_TRACKING_INIT                = 1,
+    OBJECT_TRACKING_IDLE,
+};
+#endif
+
+#ifdef SAMSUNG_BD
+enum BD_status {
+    BLUR_DETECTION_DEINIT              = 0,
+    BLUR_DETECTION_INIT                = 1,
+    BLUR_DETECTION_IDLE,
+};
+#endif
 }
 
 #endif

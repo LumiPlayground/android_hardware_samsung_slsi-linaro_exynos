@@ -75,6 +75,7 @@ ExynosCameraActivityFlash::ExynosCameraActivityFlash(int cameraId) : ExynosCamer
 
     m_waitingFlashStableCount = 0;
     m_prevFlashMode = CAM2_FLASH_MODE_OFF;
+    m_isNeedFlashMainStart = false;
 }
 
 ExynosCameraActivityFlash::~ExynosCameraActivityFlash()
@@ -277,6 +278,16 @@ void ExynosCameraActivityFlash::notifyAeResult(void)
         setFlashStep(FLASH_STEP_PRE_DONE);
         CLOGD(" AE DONE (for flash)");
     }
+}
+
+void ExynosCameraActivityFlash::setNeedFlashMainStart(bool isFlashMainStart)
+{
+    m_isNeedFlashMainStart = isFlashMainStart;
+
+}
+bool ExynosCameraActivityFlash::getNeedFlashMainStart(void)
+{
+    return m_isNeedFlashMainStart;
 }
 
 }/* namespace android */

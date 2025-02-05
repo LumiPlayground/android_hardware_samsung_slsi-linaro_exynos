@@ -95,8 +95,6 @@ bool FrameWorker::m_getEnable()
 status_t FrameWorker::m_setMargin(int32_t maxMargin, int32_t minMargin)
 {
     int32_t ret = FRAMEMGR_ERRCODE::OK;
-    int32_t oldMin = m_nMinMargin;
-    int32_t oldMax = m_nMaxMargin;
 
     if (minMargin <= 0)
         m_nMinMargin = CREATE_WORKER_DEFAULT_MARGIN_MIN;
@@ -107,10 +105,6 @@ status_t FrameWorker::m_setMargin(int32_t maxMargin, int32_t minMargin)
         m_nMaxMargin = CREATE_WORKER_DEFAULT_MARGIN_MAX;
     else
         m_nMaxMargin = maxMargin;
-
-    if ((oldMin != m_nMinMargin) || (oldMax != m_nMaxMargin)) {
-        CLOGD("margin is updated, margin[MAX/MIN]=(%d x %d) -> (%d x %d)", oldMax, oldMin, m_nMaxMargin, m_nMinMargin);
-    }
 
     return ret;
 }
@@ -218,21 +212,6 @@ status_t CreateWorker::execute(ExynosCameraFrameSP_sptr_t inframe, ExynosCameraF
         CLOGE(" m_execute is invalid (outframe = NULL)");
         ret = FRAMEMGR_ERRCODE::ERR;
     }
-    return ret;
-}
-
-status_t CreateWorker::setMargin(int32_t max, int32_t min)
-{
-    int32_t ret = FRAMEMGR_ERRCODE::OK;
-
-    if (m_getEnable() == true) {
-        CLOGE("invalid state, Need to stop Worker before update Info(%d %d)", min, max);
-        ret = FRAMEMGR_ERRCODE::ERR;
-        return ret;
-    }
-
-    m_setMargin(max, min);
-
     return ret;
 }
 
@@ -713,15 +692,6 @@ status_t RunWorker::execute(ExynosCameraFrameSP_sptr_t inframe, ExynosCameraFram
     return ret;
 }
 
-status_t RunWorker::setMargin(int32_t max, int32_t min)
-{
-    int32_t ret = FRAMEMGR_ERRCODE::OK;
-
-    CLOGD("worker(%d) do not support change margin", FRAMEMGR_WORKER::RUNNING, min, max);
-
-    return ret;
-}
-
 status_t RunWorker::start()
 {
     if (m_worklist.size() > 0) {
@@ -1171,11 +1141,6 @@ sp<FrameWorker> ExynosCameraFrameManager::getWorker(int key)
     Mutex::Autolock lock(m_stateLock);
     sp<FrameWorker> ret;
     map<uint32_t, sp<FrameWorker> >::iterator iter;
-
-    if (m_getEnable() == true) {
-        CLOGE("invalid state, Need to stop FrameMgr before getWorker(%d)", key);
-        return NULL;
-    }
 
     iter = m_workerList.find(key);
     if (iter != m_workerList.end()) {

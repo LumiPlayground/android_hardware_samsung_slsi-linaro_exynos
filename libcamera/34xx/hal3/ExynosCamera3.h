@@ -310,6 +310,9 @@ private:
     bool                            m_flushWaitEnable;
     bool                            m_factoryStartFlag;
     bool                            m_flushFlag;
+#ifdef USE_FASTEN_AE_STABLE
+    bool                            m_flagRunFastAE;
+#endif
     bool                            m_flagStartFrameFactory;
     bool                            m_flagStartReprocessingFrameFactory;
     bool                            m_flagBayerRequest;
@@ -401,6 +404,25 @@ private:
     status_t                        m_setReprocessingBuffer(void);
 
     bool                            m_doInternalFrame(ExynosCameraRequest *request);
+
+#ifdef SAMSUNG_COMPANION
+    int                             m_getSensorId(int m_cameraId);
+    sp<mainCameraThread>            m_companionThread;
+    bool                            m_companionThreadFunc(void);
+    ExynosCameraNode                *m_companionNode;
+#endif
+#ifdef SAMSUNG_EEPROM
+    sp<mainCameraThread>            m_eepromThread;
+    bool                            m_eepromThreadFunc(void);
+#endif
+
+    status_t                        m_startCompanion(void);
+    status_t                        m_stopCompanion(void);
+    status_t                        m_waitCompanionThreadEnd(void);
+
+#ifdef USE_FASTEN_AE_STABLE
+    status_t                        m_fastenAeStable(ExynosCamera3FrameFactory *factory);
+#endif
 };
 
 }; /* namespace android */

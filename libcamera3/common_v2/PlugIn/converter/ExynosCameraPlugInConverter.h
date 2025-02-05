@@ -79,10 +79,10 @@ protected:
     Pointer_const_char_t  m_libName;
     Pointer_const_char_t  m_buildDate;
     Pointer_const_char_t  m_buildTime;
-    Data_int32_t          m_srcCurBufCnt;
-    Data_int32_t          m_dstCurBufCnt;
-    Data_int32_t          m_srcMaxBufCnt;
-    Data_int32_t          m_dstMaxBufCnt;
+    Data_int32_t          m_curSrcBufCnt;
+    Data_int32_t          m_curDstBufCnt;
+    Data_int32_t          m_maxSrcBufCnt;
+    Data_int32_t          m_maxDstBufCnt;
 
     // for default converting to send the plugIn
     char   *m_srcBuf[PLUGIN_MAX_BUF][PLUGIN_MAX_PLANE];

@@ -38,7 +38,7 @@ public:
 
     virtual ~ExynosCamera3FrameReprocessingFactory();
 
-    virtual status_t        create(bool active = true);
+    virtual status_t        create(void);
 
     virtual status_t        initPipes(void);
     virtual status_t        preparePipes(void);

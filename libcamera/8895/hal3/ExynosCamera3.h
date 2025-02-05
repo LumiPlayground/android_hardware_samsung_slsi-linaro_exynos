@@ -27,7 +27,6 @@
 #include "ExynosCamera3FrameFactory.h"
 #include "ExynosCamera3FrameFactoryPreview.h"
 #include "ExynosCamera3FrameReprocessingFactory.h"
-#include "ExynosCamera3FrameNonReprocessingFactory.h"
 
 namespace android {
 
@@ -219,7 +218,7 @@ private:
 #endif
     status_t    m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame, int pipeId);
     status_t    m_handleInternalFrame(ExynosCameraFrameSP_sptr_t frame);
-    status_t    m_handleYuvCaptureFrame(ExynosCameraFrameSP_sptr_t frame, int pipeId_src);
+    status_t    m_handleYuvCaptureFrame(ExynosCameraFrameSP_sptr_t frame);
     status_t    m_handleJpegFrame(ExynosCameraFrameSP_sptr_t frame);
     status_t    m_handleBayerBuffer(ExynosCameraFrameSP_sptr_t frame);
 
@@ -275,7 +274,7 @@ private:
     ExynosCameraBufferManager               *m_ispReprocessingBufferMgr;
     ExynosCameraBufferManager               *m_yuvCaptureBufferMgr;
     ExynosCameraBufferManager               *m_thumbnailBufferMgr;
-    ExynosCameraBufferManager               *m_internalYuvBufferMgr;
+    ExynosCameraBufferManager               *m_internalScpBufferMgr;
 
     /* service buffer managers */
     ExynosCameraBufferManager               *m_bayerBufferMgr;
@@ -291,6 +290,9 @@ private:
     mutable Mutex                   m_resultLock;
     mutable Condition               m_captureResultDoneCondition;
     mutable Mutex                   m_captureResultDoneLock;
+#if defined(SAMSUNG_COMPANION) || defined(SAMSUNG_EEPROM)
+    bool                            m_use_companion;
+#endif
     uint64_t                        m_lastFrametime;
 
     /* HACK : check capture stream */
@@ -360,11 +362,6 @@ private:
     sp<mainCameraThread>            m_previewStreamMCSCThread;
     bool                            m_previewStreamMCSCPipeThreadFunc(void);
 
-#if defined(USE_SW_MCSC) && (USE_SW_MCSC == true)
-    sp<mainCameraThread>            m_previewStreamSWMCSCThread;
-    bool                            m_previewStreamSWMCSCPipeThreadFunc(void);
-#endif
-
     sp<mainCameraThread>            m_selectBayerThread;
     bool                            m_selectBayerThreadFunc(void);
 
@@ -404,10 +401,21 @@ private:
 
     status_t                        m_setReprocessingBuffer(void);
 
+#ifdef SAMSUNG_COMPANION
+    int                             m_getSensorId(int m_cameraId);
+    sp<mainCameraThread>            m_companionThread;
+    bool                            m_companionThreadFunc(void);
+    ExynosCameraNode                *m_companionNode;
+#endif
+#ifdef SAMSUNG_EEPROM
+    sp<mainCameraThread>            m_eepromThread;
+    bool                            m_eepromThreadFunc(void);
+#endif
+
     status_t                        m_startCompanion(void);
     status_t                        m_stopCompanion(void);
     status_t                        m_waitCompanionThreadEnd(void);
-    status_t                        m_setInternalYuvBuffer(void);
+    status_t                        m_setInternalScpBuffer(void);
 
     /* Functions for reprocessing YUV ouptput generation with external scaler */
     status_t                        m_generateDuplicateBuffers(ExynosCameraFrameSP_sptr_t frame, int pipeIdSrc);

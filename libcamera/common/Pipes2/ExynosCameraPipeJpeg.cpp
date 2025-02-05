@@ -113,7 +113,15 @@ status_t ExynosCameraPipeJpeg::m_run(void)
     ExynosRect thumbnailRect;
     int jpegQuality = m_parameters->getJpegQuality();
     int thumbnailQuality = m_parameters->getThumbnailQuality();
+#if !defined(SAMSUNG_DEBLUR) && !defined(SAMSUNG_LLS_DEBLUR)
     int jpegformat = (JPEG_INPUT_COLOR_FMT == V4L2_PIX_FMT_YUYV) ?  V4L2_PIX_FMT_JPEG_422 : V4L2_PIX_FMT_JPEG_420;
+#else
+    int jpegformat;
+    if(m_parameters->getLDCaptureMode() > 0)
+        jpegformat = V4L2_PIX_FMT_JPEG_420;
+    else
+        jpegformat = (JPEG_INPUT_COLOR_FMT == V4L2_PIX_FMT_YUYV) ?  V4L2_PIX_FMT_JPEG_422 : V4L2_PIX_FMT_JPEG_420;
+#endif
     memset(m_shot_ext, 0x00, sizeof(struct camera2_shot_ext));
 
     exif_attribute_t exifInfo;
@@ -121,7 +129,14 @@ status_t ExynosCameraPipeJpeg::m_run(void)
 
     pictureRect.colorFormat = m_parameters->getPictureFormat();
     if (needGSCForCapture(m_parameters->getCameraId()) == true) {
+#if !defined(SAMSUNG_DEBLUR) && !defined(SAMSUNG_LLS_DEBLUR)
         pictureRect.colorFormat = JPEG_INPUT_COLOR_FMT;
+#else
+        if(m_parameters->getLDCaptureMode() > 0)
+            pictureRect.colorFormat = V4L2_PIX_FMT_NV21;
+        else
+            pictureRect.colorFormat = JPEG_INPUT_COLOR_FMT;
+#endif
     }
 
     m_parameters->getPictureSize(&pictureRect.w, &pictureRect.h);
@@ -180,13 +195,35 @@ status_t ExynosCameraPipeJpeg::m_run(void)
         ret = INVALID_OPERATION;
         goto jpeg_encode_done;
     }
-
+#ifndef SAMSUNG_JQ
     if (m_jpegEnc.setQuality(jpegQuality)) {
         CLOGE("ERR(%s):m_jpegEnc.setQuality() fail", __FUNCTION__);
         ret = INVALID_OPERATION;
         goto jpeg_encode_done;
     }
+#else
+    if (m_parameters->getJpegQtableOn() == true && m_parameters->getJpegQtableStatus() != JPEG_QTABLE_DEINIT) {
+        if(m_parameters->getJpegQtableStatus() == JPEG_QTABLE_UPDATED) {
+            CLOGD("[JQ]DEBUG(%s):Get JPEG Q-table", __FUNCTION__);
+            m_parameters->setJpegQtableStatus(JPEG_QTABLE_RETRIEVED);
+            m_parameters->getJpegQtable(m_qtable);
+        }
 
+        CLOGD("[JQ]DEBUG(%s):Set JPEG Q-table", __FUNCTION__);
+        if (m_jpegEnc.setQuality(m_qtable)) {
+            CLOGE("[JQ]ERR(%s):m_jpegEnc.setQuality(qtable[]) fail", __FUNCTION__);
+            ret = INVALID_OPERATION;
+            goto jpeg_encode_done;
+        }
+    }
+    else {
+        if (m_jpegEnc.setQuality(jpegQuality)) {
+            CLOGE("[JQ]ERR(%s):m_jpegEnc.setQuality() fail", __FUNCTION__);
+            ret = INVALID_OPERATION;
+            goto jpeg_encode_done;
+        }
+    }
+#endif
     if (m_jpegEnc.setSize(pictureRect.w, pictureRect.h)) {
         CLOGE("ERR(%s):m_jpegEnc.setSize() fail", __FUNCTION__);
         ret = INVALID_OPERATION;

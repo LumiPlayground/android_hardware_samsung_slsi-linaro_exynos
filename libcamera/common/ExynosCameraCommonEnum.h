@@ -48,7 +48,6 @@ typedef enum
     SENSOR_NAME_IMX240              = 104,
     SENSOR_NAME_IMX228              = 106,
     SENSOR_NAME_IMX219              = 107,
-    SENSOR_NAME_IMX230              = 108,
 
     SENSOR_NAME_SR261               = 201, // 201 ~ 300 Other vendor sensors
     SENSOR_NAME_SR544               = 203,

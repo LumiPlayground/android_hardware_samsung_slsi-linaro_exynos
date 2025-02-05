@@ -492,34 +492,36 @@ static int VTCALL_SIZE_LUT_4E6[][SIZE_OF_LUT] =
     /* 16:9 (VT_Call) */
     { SIZE_RATIO_16_9,
      (1288 + 16),(968 + 12),   /* [sensor ] */
-      1304      , 980      ,   /* [bns    ] */
-      1280      , 720      ,   /* [bcrop  ] */
-      1280      , 720      ,   /* [bds    ] */
-      1280      , 720      ,   /* [target ] */
+      1304      ,  980     ,   /* [bns    ] */
+      1280      ,  720     ,   /* [bcrop  ] */
+      1280      ,  720     ,   /* [bds    ] */
+      1280      ,  720     ,   /* [target ] */
     },
     /* 4:3 (VT_Call) */
+    /* Bcrop size 1152*864 -> 1280*960, for flicker algorithm */
     { SIZE_RATIO_4_3,
     (1288 + 16),(968 + 12),   /* [sensor ] */
-     1304      , 980	  ,   /* [bns	 ] */
-     1152      , 864      ,   /* [bcrop  ] */
-      960      ,  720      ,   /* [bds    ] */
-      960      ,  720      ,   /* [target ] */
+     1304      ,  980     ,   /* [bns	 ] */
+     1280      ,  960     ,   /* [bcrop  ] */
+      960      ,  720     ,   /* [bds    ] */
+      960      ,  720     ,   /* [target ] */
     },
     /* 1:1 (VT_Call) */
     { SIZE_RATIO_1_1,
     (1288 + 16),(968 + 12),   /* [sensor ] */
-     1304      , 980	  ,   /* [bns	 ] */
-      976      ,  976      ,   /* [bcrop  ] */
-      720      ,  720      ,   /* [bds    ] */
-      720      ,  720      ,   /* [target ] */
+     1304      ,  980	  ,   /* [bns	 ] */
+      976      ,  976     ,   /* [bcrop  ] */
+      720      ,  720     ,   /* [bds    ] */
+      720      ,  720     ,   /* [target ] */
     },
     /* 11:9 (VT_Call) */
+    /* Bcrop size 1056*864 -> 1168*960, for flicker algorithm */
     { SIZE_RATIO_11_9,
     (1288 + 16),(968 + 12),   /* [sensor ] */
-     1304      , 980	  ,   /* [bns	 ] */
-     1056      , 864      ,   /* [bcrop  ] */
-      352      ,  288      ,   /* [bds    ] */
-      352      ,  288      ,   /* [target ] */
+     1304      ,  980     ,   /* [bns	 ] */
+     1168      ,  960     ,   /* [bcrop  ] */
+      352      ,  288     ,   /* [bds    ] */
+      352      ,  288     ,   /* [target ] */
     }
 };
 
@@ -583,14 +585,23 @@ static int S5K4E6_PREVIEW_LIST[][SIZE_OF_RESOLUTION] =
 
 static int S5K4E6_HIDDEN_PREVIEW_LIST[][SIZE_OF_RESOLUTION] =
 {
+#if defined(LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE)
+    { 2560, 1440, SIZE_RATIO_16_9},
+#endif
 #if !(defined(CAMERA_LCD_SIZE) && (CAMERA_LCD_SIZE >= LCD_SIZE_1920_1080))
     { 1920, 1080, SIZE_RATIO_16_9},
     { 1440, 1080, SIZE_RATIO_4_3},
     { 1072, 1072, SIZE_RATIO_1_1},
 #endif
+#ifdef USE_BDS_WIDE_SELFIE
+    { 1920, 1440, SIZE_RATIO_4_3}, /* For WideSelfie Shot */
+#endif
+    { 2240, 1680, SIZE_RATIO_4_3},  /* For Easy 360 */
     { 1600, 1200, SIZE_RATIO_4_3},
     { 1280,  960, SIZE_RATIO_4_3},
     { 1056,  864, SIZE_RATIO_11_9},
+    {  960,  960, SIZE_RATIO_1_1},  /* for Clip Movie */
+    {  640,  360, SIZE_RATIO_16_9},  /* for SWIS */
     {  720,  720, SIZE_RATIO_1_1},
     {  528,  432, SIZE_RATIO_11_9},
     {  800,  480, SIZE_RATIO_5_3},
@@ -649,6 +660,7 @@ static int S5K4E6_THUMBNAIL_LIST[][SIZE_OF_RESOLUTION] =
 static int S5K4E6_VIDEO_LIST[][SIZE_OF_RESOLUTION] =
 {
     { 1920, 1080, SIZE_RATIO_16_9},
+    { 1440, 1440, SIZE_RATIO_1_1},
     { 1440, 1080, SIZE_RATIO_4_3},
     { 1088, 1088, SIZE_RATIO_1_1},
     { 1280,  720, SIZE_RATIO_16_9},
@@ -668,6 +680,9 @@ static int S5K4E6_HIDDEN_VIDEO_LIST[][SIZE_OF_RESOLUTION] =
 #ifdef USE_WQHD_RECORDING
     { 2560, 1440, SIZE_RATIO_16_9},
 #endif
+    {  960,  960, SIZE_RATIO_1_1},  /* for Clip Movie */
+    {  864,  480, SIZE_RATIO_16_9}, /* for PLB mode */
+    {  432,  240, SIZE_RATIO_16_9}, /* for PLB mode */
 };
 
 static int S5K4E6_FPS_RANGE_LIST[][2] =
@@ -696,25 +711,39 @@ static int S5K4E6_YUV_LIST[][SIZE_OF_RESOLUTION] =
 {
     { 2592, 1944, SIZE_RATIO_4_3},
     { 2592, 1458, SIZE_RATIO_16_9},
-    { 1936, 1936, SIZE_RATIO_1_1},
     { 2560, 1440, SIZE_RATIO_16_9},
     { 2048, 1536, SIZE_RATIO_4_3},
+    { 1936, 1936, SIZE_RATIO_1_1},
     { 1920, 1440, SIZE_RATIO_4_3},
-    { 1440, 1440, SIZE_RATIO_1_1},
     { 1920, 1080, SIZE_RATIO_16_9},
-    { 1440, 1080, SIZE_RATIO_4_3},
-    { 1088, 1088, SIZE_RATIO_1_1},
+    { 1440, 1440, SIZE_RATIO_1_1},
     { 1280,  720, SIZE_RATIO_16_9},
     {  960,  720, SIZE_RATIO_4_3},
-    {  720,  720, SIZE_RATIO_1_1},
     {  720,  480, SIZE_RATIO_3_2},
     {  640,  480, SIZE_RATIO_4_3},
-    {  512,  384, SIZE_RATIO_4_3},
-    {  480,  320, SIZE_RATIO_3_2},
     {  352,  288, SIZE_RATIO_11_9},
     {  320,  240, SIZE_RATIO_4_3},
     {  256,  144, SIZE_RATIO_16_9},
-//  {  176,  144, SIZE_RATIO_11_9}, /* Too small to create thumbnail */
+    {  176,  144, SIZE_RATIO_11_9},
+};
+
+/* availble Jpeg size (only for  HAL_PIXEL_FORMAT_BLOB) */
+static int S5K4E6_JPEG_LIST[][SIZE_OF_RESOLUTION] =
+{
+    { 2592, 1944, SIZE_RATIO_4_3},
+    { 2592, 1458, SIZE_RATIO_16_9},
+    { 2560, 1440, SIZE_RATIO_16_9},
+    { 2048, 1536, SIZE_RATIO_4_3},
+    { 1936, 1936, SIZE_RATIO_1_1},
+    { 1920, 1440, SIZE_RATIO_4_3},
+    { 1920, 1080, SIZE_RATIO_16_9},
+    { 1440, 1440, SIZE_RATIO_1_1},
+    { 1280,  720, SIZE_RATIO_16_9},
+    {  960,  720, SIZE_RATIO_4_3},
+    {  720,  480, SIZE_RATIO_3_2},
+    {  640,  480, SIZE_RATIO_4_3},
+    {  352,  288, SIZE_RATIO_11_9},
+    {  320,  240, SIZE_RATIO_4_3},
 };
 
 static camera_metadata_rational UNIT_MATRIX_4E6_3X3[] =

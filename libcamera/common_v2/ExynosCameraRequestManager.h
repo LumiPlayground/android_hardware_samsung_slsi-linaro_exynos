@@ -215,6 +215,8 @@ public:
 
     virtual void                           setNeedInternalFrame(bool isNeedInternalFrame) = 0;
     virtual bool                           getNeedInternalFrame(void) = 0;
+    virtual void                           increasePipelineDepth(void) = 0;
+    virtual void                           updatePipelineDepth(void) = 0;
 };
 
 class ExynosCamera3Request : public virtual ExynosCameraRequest {
@@ -288,6 +290,8 @@ public:
 
     virtual void                           setNeedInternalFrame(bool isNeedInternalFrame);
     virtual bool                           getNeedInternalFrame(void);
+    virtual void                           increasePipelineDepth(void);
+    virtual void                           updatePipelineDepth(void);
 
 private:
     virtual status_t                       m_init();
@@ -337,7 +341,7 @@ private:
     mutable Mutex                 m_factoryMapLock;
 
     bool                          m_isNeedInternalFrame;
-
+    unsigned int                  m_pipelineDepth;
 };
 
 typedef list< uint32_t >           CallbackListkeys;
@@ -390,7 +394,7 @@ public:
     status_t             constructDefaultRequestSettings(int type, camera_metadata_t **request);
 
     /* Android meta data translation functions */
-    status_t                       registerServiceRequest(camera3_capture_request *request);
+    ExynosCameraRequest*           registerServiceRequest(camera3_capture_request *request);
     ExynosCameraRequest*           createServiceRequest();
     status_t                       deleteServiceRequest(uint32_t frameCount);
     ExynosCameraRequest*           getServiceRequest(uint32_t frameCount);
@@ -399,7 +403,7 @@ public:
     ExynosCameraMetadataConverter* getMetaDataConverter();
 
 
-    status_t                       setRequestsInfo(int key, ExynosCamera3FrameFactory *factory);
+    status_t                       setRequestsInfo(int key, ExynosCamera3FrameFactory *factory, ExynosCamera3FrameFactory *zslFactory = NULL);
     ExynosCamera3FrameFactory*      getFrameFactory(int key);
 
     status_t                       flush();
@@ -509,6 +513,8 @@ private:
 
     FrameFactoryMap               m_factoryMap;
     mutable Mutex                 m_factoryMapLock;
+    FrameFactoryMap               m_zslFactoryMap;
+    mutable Mutex                 m_zslFactoryMapLock;
 
     ExynosCameraCallbackSequencer *m_callbackSequencer;
     mutable Mutex                 m_callbackSequencerLock;

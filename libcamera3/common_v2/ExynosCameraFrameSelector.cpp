@@ -29,6 +29,9 @@ ExynosCameraFrameSelector::ExynosCameraFrameSelector(int cameraId,
                                                      ExynosCameraParameters *param,
                                                      ExynosCameraBufferSupplier *bufferSupplier,
                                                      ExynosCameraFrameManager *manager
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+                                                    , ExynosCameraBufferManager *DNGbufMgr
+#endif
                                                     )
 {
     m_frameMgr = manager;
@@ -37,12 +40,27 @@ ExynosCameraFrameSelector::ExynosCameraFrameSelector(int cameraId,
     m_bufferSupplier = bufferSupplier;
     m_activityControl = m_parameters->getActivityControl();
     m_frameHoldList.setWaitTime(2000000000);
+#ifdef OIS_CAPTURE
+    m_OISFrameHoldList.setWaitTime(130000000);
+#endif
+#ifdef RAWDUMP_CAPTURE
+    m_RawFrameHoldList.setWaitTime(2000000000);
+#endif
 
     m_reprocessingCount = 0;
     m_frameHoldCount = 1;
     m_isFirstFrame = true;
     m_isCanceled = false;
     removeFlags = false;
+#ifdef SAMSUNG_DNG
+    m_DNGFrameCount = 0;
+    m_preDNGFrameCount = 0;
+    m_preDNGFrame = NULL;
+
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    m_DNGbufMgr = DNGbufMgr;
+#endif
+#endif
     m_CaptureCount = 0;
 
     m_cameraId = cameraId;
@@ -339,6 +357,9 @@ uint32_t ExynosCameraFrameSelector::getSizeOfHoldFrame(void)
 
     size += m_frameHoldList.getSizeOfProcessQ();
     size += m_hdrFrameHoldList.getSizeOfProcessQ();
+#ifdef OIS_CAPTURE
+    size += m_OISFrameHoldList.getSizeOfProcessQ();
+#endif
 
     return size;
 }

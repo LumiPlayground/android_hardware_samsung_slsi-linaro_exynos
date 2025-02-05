@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraFrameFactoryVision"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraFrameFactoryVision.h"
 
@@ -145,7 +145,7 @@ status_t ExynosCameraFrameFactoryVision::m_fillNodeGroupInfo(ExynosCameraFrameSP
     return NO_ERROR;
 }
 
-ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryVision::createNewFrame(uint32_t frameCount, bool useJpegFlag)
+ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryVision::createNewFrame(uint32_t frameCount, __unused bool useJpegFlag)
 {
     status_t ret = NO_ERROR;
     ExynosCameraFrameEntity *newEntity[MAX_NUM_PIPES] = {0};
@@ -285,8 +285,6 @@ status_t ExynosCameraFrameFactoryVision::initPipes(void)
 
 status_t ExynosCameraFrameFactoryVision::preparePipes(void)
 {
-    status_t ret = NO_ERROR;
-
     CLOGI("");
 
     return NO_ERROR;
@@ -407,9 +405,6 @@ status_t ExynosCameraFrameFactoryVision::m_setupConfig()
 {
     CLOGI("");
 
-    int32_t *nodeNums = NULL;
-    int32_t *controlId = NULL;
-    int32_t *prevNode = NULL;
     bool enableSecure = false;
     int pipeId = -1;
     enum NODE_TYPE nodeType = INVALID_NODE;

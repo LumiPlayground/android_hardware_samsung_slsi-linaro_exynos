@@ -83,20 +83,6 @@ status_t getCropRectAlign(
             *crop_w = (int)((float)*crop_w / zoomRatio);
             *crop_h = (int)((float)*crop_h / zoomRatio);
         }
-    } else {
-#ifdef SCALER_MAX_SCALE_UP_RATIO
-        if (*crop_w * SCALER_MAX_SCALE_UP_RATIO < dst_w
-            || *crop_h * SCALER_MAX_SCALE_UP_RATIO < dst_h) {
-            int old_crop_w = 0;
-            int old_crop_h = 0;
-            old_crop_w = *crop_w;
-            old_crop_h = *crop_h;
-            *crop_w = (int)ceil((float)dst_w / SCALER_MAX_SCALE_UP_RATIO);
-            *crop_h = (int)ceil((float)dst_h / SCALER_MAX_SCALE_UP_RATIO);
-            ALOGD("DEBUG(%s[%d]):exceed max scaleup ratio : maxRatio(%d) old_crop(%d %d) new_crop(%d %d) dst(%d %d)",
-                  __FUNCTION__, __LINE__, SCALER_MAX_SCALE_UP_RATIO, old_crop_w, old_crop_h, *crop_w, *crop_h, dst_w, dst_h);
-        }
-#endif
     }
 
     if (dst_w == dst_h) {
@@ -358,31 +344,6 @@ bool isRectEqual(ExynosRect2 *rect1, ExynosRect2 *rect2)
         return true;
 
     return false;
-}
-
-char v4l2Format2Char(int v4l2Format, int pos)
-{
-    char c;
-
-    switch (pos) {
-    case 0:
-        c = (char)((v4l2Format >>  0) & 0xFF);
-        break;
-    case 1:
-        c = (char)((v4l2Format >> 8) & 0xFF);
-        break;
-    case 2:
-        c = (char)((v4l2Format >> 16) & 0xFF);
-        break;
-    case 3:
-        c = (char)((v4l2Format >> 24) & 0xFF);
-        break;
-    default:
-        c = ' ';
-        break;
-    }
-
-    return c;
 }
 
 ExynosRect2 convertingActualArea2HWArea(ExynosRect2 *srcRect, const ExynosRect *regionRect)
@@ -755,10 +716,7 @@ int32_t getMetaDmRequestFrameCount(struct camera2_dm *dm)
 
 void setMetaCtlAeTargetFpsRange(struct camera2_shot_ext *shot_ext, uint32_t min, uint32_t max)
 {
-    if (shot_ext->shot.ctl.aa.aeTargetFpsRange[0] != min ||
-            shot_ext->shot.ctl.aa.aeTargetFpsRange[1] != max) {
-        ALOGI("INFO(%s):aeTargetFpsRange(min=%d, min=%d)", __FUNCTION__, min, max);
-    }
+    ALOGI("INFO(%s):aeTargetFpsRange(min=%d, min=%d)", __FUNCTION__, min, max);
     shot_ext->shot.ctl.aa.aeTargetFpsRange[0] = min;
     shot_ext->shot.ctl.aa.aeTargetFpsRange[1] = max;
 }
@@ -1124,6 +1082,21 @@ void setMetaCtlSceneMode(struct camera2_shot_ext *shot_ext, enum aa_mode mode, e
         shot_ext->shot.ctl.edge.strength = default_edge_strength;
         shot_ext->shot.ctl.color.vendor_saturation = 3; /* "3" is default. */
         break;
+#ifdef SAMSUNG_FOOD_MODE
+    case AA_SCENE_MODE_FOOD:
+        shot_ext->shot.ctl.aa.aeMode = AA_AEMODE_MATRIX;
+
+        shot_ext->shot.ctl.aa.awbMode = AA_AWBMODE_WB_AUTO;
+        shot_ext->shot.ctl.aa.vendor_isoMode = AA_ISOMODE_AUTO;
+        shot_ext->shot.ctl.aa.vendor_isoValue = 0;
+        shot_ext->shot.ctl.sensor.sensitivity = 0;
+        shot_ext->shot.ctl.noise.mode = default_noise_mode;
+        shot_ext->shot.ctl.noise.strength = default_noise_strength;
+        shot_ext->shot.ctl.edge.mode = default_edge_mode;
+        shot_ext->shot.ctl.edge.strength = default_edge_strength;
+        shot_ext->shot.ctl.color.vendor_saturation = 3; /* "3" is default. */
+        break;
+#endif
     case AA_SCENE_MODE_AQUA:
         /* set default setting */
         if (shot_ext->shot.ctl.aa.aeMode == AA_AEMODE_OFF)
@@ -1334,6 +1307,30 @@ nsecs_t getMetaDmSensorTimeStamp(struct camera2_shot_ext *shot_ext)
     return shot_ext->shot.dm.sensor.timeStamp;
 }
 
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+status_t setMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext, uint64_t timeStamp)
+{
+    status_t status = NO_ERROR;
+    if (shot_ext == NULL) {
+        ALOGE("ERR(%s[%d]):buffer is NULL", __FUNCTION__, __LINE__);
+        status = INVALID_OPERATION;
+        return status;
+    }
+
+    shot_ext->shot.udm.sensor.timeStampBoot = timeStamp;
+    return status;
+}
+
+nsecs_t getMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext)
+{
+    if (shot_ext == NULL) {
+        ALOGE("ERR(%s[%d]):buffer is NULL", __FUNCTION__, __LINE__);
+        return 0;
+    }
+    return shot_ext->shot.udm.sensor.timeStampBoot;
+}
+#endif
+
 void setMetaNodeLeaderRequest(struct camera2_shot_ext* shot_ext, int value)
 {
     shot_ext->node_group.leader.request = value;
@@ -1496,7 +1493,6 @@ int getBayerLineSize(int width, int bayerFormat)
         bytesPerLine = ROUND_UP((width * 5 / 4), CAMERA_16PX_ALIGN);
         break;
     case V4L2_PIX_FMT_SBGGR8:
-    case V4L2_PIX_FMT_SGRBG8:
         bytesPerLine = ROUND_UP(width , CAMERA_16PX_ALIGN);
         break;
     default:
@@ -1768,12 +1764,14 @@ int getSensorIdFromFile(int camId)
             ALOGE("ERR(%s[%d]):failed to open sysfs entry", __FUNCTION__, __LINE__);
             goto err;
         }
-    } else if(camId == CAMERA_ID_BACK_1) {
-        fp = fopen(SENSOR_NAME_PATH_BACK_1, "r");
+#if defined(SENSOR_NAME_PATH_SECURE)
+    } else if (camId == CAMERA_ID_SECURE) {
+        fp = fopen(SENSOR_NAME_PATH_SECURE, "r");
         if (fp == NULL) {
             ALOGE("ERR(%s[%d]):failed to open sysfs entry", __FUNCTION__, __LINE__);
             goto err;
         }
+#endif
     } else {
         fp = fopen(SENSOR_NAME_PATH_FRONT, "r");
         if (fp == NULL) {
@@ -1814,12 +1812,6 @@ const char *getSensorFWFromFile(struct ExynosSensorInfoBase *info, int camId)
 
     if (camId == CAMERA_ID_BACK) {
         fp = fopen(SENSOR_FW_PATH_BACK, "r");
-        if (fp == NULL) {
-            ALOGE("ERR(%s[%d]):failed to open sysfs entry", __FUNCTION__, __LINE__);
-            goto err;
-        }
-    } else if (camId == CAMERA_ID_BACK_1) {
-        fp = fopen(SENSOR_FW_PATH_BACK_1, "r");
         if (fp == NULL) {
             ALOGE("ERR(%s[%d]):failed to open sysfs entry", __FUNCTION__, __LINE__);
             goto err;
@@ -2018,20 +2010,22 @@ status_t addBayerBufferByNeonPacked(struct ExynosCameraBuffer *srcBuf,
      *      */
 
     unsigned int alignByte = 12;
+    unsigned int alignShort = 6;
     unsigned int realCopySize = copySize / alignByte;
     unsigned int remainedCopySize = copySize % alignByte;
 
-    uint16x8_t src_u16x8_0 = {0, 0, 0, 0, 0, 0, 0, 0};
-    uint16x8_t dst_u16x8_0 = {0, 0, 0, 0, 0, 0, 0, 0};
+    uint16x8_t src_u16x8_0;
+    uint16x8_t dst_u16x8_0;
 
     unsigned int width_byte = dstRect->w * 12 / 8;
     width_byte = ALIGN_UP(width_byte, 16);
 
     ALOGD("DEBUG(%s[%d]):srcAddr(%p), dstAddr(%p), copySize(%d), sizeof(short)(%d),\
-        alignByte(%d), realCopySize(%d), remainedCopySize(%d), pixel width(%d), pixel height(%d),\
-        16 aligned byte width(%d)",
-        __FUNCTION__, __LINE__, srcAddr, dstAddr, copySize, (int)sizeof(short),
-        alignByte, realCopySize, remainedCopySize, dstRect->w, dstRect->h, width_byte);
+            alignByte(%d), realCopySize(%d), remainedCopySize(%d), pixel width(%d), pixel height(%d),\
+            16 aligned byte width(%d)",
+            __FUNCTION__, __LINE__, srcAddr, dstAddr, copySize, sizeof(short),
+            alignByte, realCopySize, remainedCopySize, dstRect->w, dstRect->h, width_byte);
+
 
     unsigned char dst_temp[16];
     unsigned short dstPix_0, dstPix_1, dstPix_2, dstPix_3, dstPix_4, dstPix_5, dstPix_6, dstPix_7;
@@ -2131,8 +2125,8 @@ status_t addBayerBufferByNeonPacked(struct ExynosCameraBuffer *srcBuf,
             dst_u16x8_0 =  vsetq_lane_u16(dstPix_6, dst_u16x8_0, 6);
             dst_u16x8_0 =  vsetq_lane_u16(dstPix_7, dst_u16x8_0, 7);
 
-            dst_u16x8_0 = vqaddq_u16(vshlq_n_u16(dst_u16x8_0, 6), vshlq_n_u16(src_u16x8_0, 6));
-            dst_u16x8_0 = vshrq_n_u16(dst_u16x8_0, 6);
+            dst_u16x8_0 = vqaddq_u16(vshlq_n_u16(dst_u16x8_0, 4), vshlq_n_u16(src_u16x8_0, 4));
+            dst_u16x8_0 = vshlq_n_u16(vshrq_n_u16(dst_u16x8_0, 6), 2);
 
             dstPix_0 = vgetq_lane_u16(dst_u16x8_0, 0);
             dstPix_1 = vgetq_lane_u16(dst_u16x8_0, 1);
@@ -2312,6 +2306,15 @@ int getFliteNodenum(int cameraId,
 {
     int fliteNodeNum = FIMC_IS_VIDEO_SS0_NUM;
 
+#ifdef SAMSUNG_COMPANION
+    if(flagUseCompanion == true) {
+        fliteNodeNum = FIMC_IS_VIDEO_SS0_NUM;
+#ifdef SAMSUNG_QUICK_SWITCH
+    } else if (flagQuickSwitchFlag == true) {
+        fliteNodeNum = (cameraId == CAMERA_ID_BACK) ? FIMC_IS_VIDEO_SS4_NUM : FIMC_IS_VIDEO_SS5_NUM;
+#endif
+    } else
+#endif
     {
         switch (cameraId) {
         case CAMERA_ID_BACK:
@@ -2320,12 +2323,16 @@ int getFliteNodenum(int cameraId,
         case CAMERA_ID_FRONT:
             fliteNodeNum = FRONT_CAMERA_FLITE_NUM;
             break;
+#ifdef MAIN_1_CAMERA_SENSOR_NAME
         case CAMERA_ID_BACK_1:
             fliteNodeNum = MAIN_1_CAMERA_FLITE_NUM;
             break;
+#endif
+#ifdef FRONT_1_CAMERA_SENSOR_NAME
         case CAMERA_ID_FRONT_1:
             fliteNodeNum = FRONT_1_CAMERA_FLITE_NUM;
             break;
+#endif
         default:
             android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Unexpected cameraId(%d), assert!!!!",
                 __FUNCTION__, __LINE__, cameraId);
@@ -2374,8 +2381,17 @@ int getDepthVcNodeNum(int cameraId,
 {
     int depthVcNodeNum = FIMC_IS_VIDEO_SS0VC1_NUM;
 
+#ifdef SAMSUNG_COMPANION
+    if (flagUseCompanion == true) {
+        depthVcNodeNum = FIMC_IS_VIDEO_SS0VC1_NUM;
+    } else
+#endif
     {
+#ifdef SAMSUNG_QUICK_SWITCH
+        depthVcNodeNum = (cameraId == CAMERA_ID_BACK) ? FIMC_IS_VIDEO_SS4VC1_NUM : FRONT_CAMERA_DEPTH_VC_NUM;
+#else
         depthVcNodeNum = (cameraId == CAMERA_ID_BACK) ? MAIN_CAMERA_DEPTH_VC_NUM : FRONT_CAMERA_DEPTH_VC_NUM;
+#endif
     }
 
     return depthVcNodeNum;

@@ -53,6 +53,9 @@ protected:
     virtual status_t        m_createFusion(void);
     virtual status_t        m_destroyFusion(void);
     virtual status_t        m_manageFusion(ExynosCameraFrameSP_sptr_t newFrame);
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    virtual void            m_checkFallbackCondition(uint32_t frameType);
+#endif
     virtual void            m_manageFusionDualRearZoom(ExynosCameraFrameSP_sptr_t newFrame, int i, int cameraId, int vraInputSizeWidth, int vraInputSizeHeight);
     virtual void            m_manageFusionDualPortrait(ExynosCameraFrameSP_sptr_t newFrame, int i, int cameraId, int vraInputSizeWidth, int vraInputSizeHeight);
 

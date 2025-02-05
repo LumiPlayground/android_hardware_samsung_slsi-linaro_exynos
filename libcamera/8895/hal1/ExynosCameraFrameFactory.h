@@ -24,8 +24,12 @@
 #include "ExynosCameraMCPipe.h"
 #include "ExynosCameraPipeFlite.h"
 #include "ExynosCameraPipeGSC.h"
-#include "ExynosCameraPipePP.h"
 #include "ExynosCameraPipeJpeg.h"
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#include "ExynosCameraPipeFusion.h"
+#include "ExynosCameraPipeSync.h"
+#include "ExynosCameraDualFrameSelector.h"
+#endif
 #include "ExynosCameraFrameManager.h"
 #include "ExynosCameraStreamMutex.h"
 
@@ -127,7 +131,7 @@ public:
 
     virtual enum NODE_TYPE  getNodeType(uint32_t pipeId);
 
-    virtual ExynosCameraFrameSP_sptr_t createNewFrameOnlyOnePipe(int pipeId, int frameCnt=-1, uint32_t frameType = 0, ExynosCameraFrameSP_sptr_t refFrame = NULL);
+    virtual ExynosCameraFrameSP_sptr_t createNewFrameOnlyOnePipe(int pipeId, int frameCnt=-1, uint32_t frameType = 0);
     virtual ExynosCameraFrameSP_sptr_t createNewFrameVideoOnly(void);
     virtual ExynosCameraFrameSP_sptr_t createNewFrame(ExynosCameraFrameSP_sptr_t refFrame = NULL) = 0;
 
@@ -210,10 +214,13 @@ protected:
     bool                        m_flagReprocessing;
     bool                        m_supportPureBayerReprocessing;
     bool                        m_supportSCC;
+    bool                        m_supportSingleChain;
 
-    uint32_t                    m_numOfHwChains;
-    uint32_t                    m_numOfMcscOutputPorts;
-
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    sync_type_t m_preSyncType;
+    int         m_preZoom;
+    uint32_t    m_transitionCount;
+#endif
 private:
     bool                        m_create;
     struct camera2_shot_ext     *m_shot_ext;

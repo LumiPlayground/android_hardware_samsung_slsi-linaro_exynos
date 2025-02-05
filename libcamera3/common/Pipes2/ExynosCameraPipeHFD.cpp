@@ -87,9 +87,7 @@ status_t ExynosCameraPipeHFD::start(void)
         return INVALID_OPERATION;
     }
 
-    TIME_LOGGER_UPDATE(m_cameraId, 0, m_pipeId, CUMULATIVE_CNT, HFD_CREATE_START, 0);
     m_hfdHandle = (*createHfdCnnLib)();
-    TIME_LOGGER_UPDATE(m_cameraId, 0, m_pipeId, CUMULATIVE_CNT, HFD_CREATE_END, 0);
 
     m_transitState(PIPE_STATE_INIT);
 
@@ -128,8 +126,6 @@ status_t ExynosCameraPipeHFD::m_destroy(void)
 {
     CLOGD("-IN-");
     ExynosCameraAutoTimer autoTimer(__FUNCTION__);
-
-    status_t ret = NO_ERROR;
 
     ExynosCameraSWPipe::m_destroy();
 
@@ -263,7 +259,7 @@ status_t ExynosCameraPipeHFD::m_run(void)
             struct FacesStr facesStr;
 
             facesStr.id = frameShotExt.shot.dm.stats.faceIds[index];
-            facesStr.score = (float)((int)frameShotExt.hfd.score[index]);
+            facesStr.score = (float)frameShotExt.shot.dm.stats.faceScores[index];
             facesStr.rect.x1 = frameShotExt.shot.dm.stats.faceRectangles[index][X1];
             facesStr.rect.y1 = frameShotExt.shot.dm.stats.faceRectangles[index][Y1];
             facesStr.rect.x2 = frameShotExt.shot.dm.stats.faceRectangles[index][X2];

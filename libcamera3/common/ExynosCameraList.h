@@ -246,6 +246,11 @@ public:
         if (m_waitProcessQ)
             m_processQCondition.signal();
 
+        if (m_processQ.size() > 0) {
+            ALOGD("DEBUG(%s):Remained item %zu will be deleted",
+                    __FUNCTION__, m_processQ.size());
+        }
+
         m_processQ.clear();
         m_processQMutex.unlock();
     };
@@ -253,7 +258,7 @@ public:
     void setWaitTime(uint64_t waitTime)
     {
         m_waitTime = waitTime;
-        ALOGV("DEBUG(%s):m_waitTime : %llu", __FUNCTION__, m_waitTime);
+        ALOGV("DEBUG(%s):m_waitTime : %llu", __FUNCTION__, (unsigned long long)m_waitTime);
     }
 
     bool isWaiting(void) {

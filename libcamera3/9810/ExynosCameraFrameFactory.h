@@ -24,7 +24,6 @@
 #include "ExynosCameraPipeJpeg.h"
 #include "ExynosCameraPipeVRA.h"
 #include "ExynosCameraPipeHFD.h"
-#include "ExynosCameraPipePlugIn.h"
 
 namespace android {
 

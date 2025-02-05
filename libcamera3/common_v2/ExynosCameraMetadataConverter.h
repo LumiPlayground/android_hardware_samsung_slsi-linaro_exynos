@@ -27,6 +27,10 @@
 #include "ExynosCameraSensorInfo.h"
 #include "fimc-is-metadata.h"
 
+#ifdef SAMSUNG_DUAL_PORTRAIT_SOLUTION
+#include "ExynosCameraBokehInclude.h"
+#endif
+
 #define FIMC_IS_METADATA(x) (x + 1)
 #define CAMERA_METADATA(x)  ((x < 1)? 0 : x - 1)
 
@@ -100,7 +104,8 @@ public:
                                     ExynosCameraParameters *parameters,
                                     ExynosCameraParameters *subParameters = NULL);
     ~ExynosCameraMetadataConverter();
-    static  status_t        constructStaticInfo(int cameraId, int scenario, camera_metadata_t **info);
+    static  status_t        constructStaticInfo(int serviceCameraId, int cameraId, int scenario,
+                                                camera_metadata_t **info, HAL_CameraInfo_t **HAL_CameraInfo);
     virtual status_t        constructDefaultRequestSettings(int type, camera_metadata_t **request);
 
     /* helper functions for android control and meta data */
@@ -166,7 +171,9 @@ public:
     void                    translateVendorLedControlData(CameraMetadata *settings, struct camera2_shot_ext *dst_ext);
 
     /* dynamic meta */
-    void                    translateVendorControlMetaData(CameraMetadata *settings, struct camera2_shot_ext *src_ext);
+    void                    translateVendorControlMetaData(CameraMetadata *settings,
+                                                           struct camera2_shot_ext *src_ext,
+                                                           ExynosCameraRequestSP_sprt_t request);
     void                    translateVendorJpegMetaData(CameraMetadata *settings);
     void                    translateVendorLensMetaData(CameraMetadata *settings, struct camera2_shot_ext *src_ext);
     void                    translateVendorSensorMetaData(CameraMetadata *settings, struct camera2_shot_ext *src_ext);
@@ -174,6 +181,9 @@ public:
     void                    translateVendorPartialControlMetaData(CameraMetadata *settings, struct camera2_shot_ext *src_ext);
     void                    translateVendorPartialMetaData(CameraMetadata *settings, struct camera2_shot_ext *src_ext, enum metadata_type metaType);
     void                    translateVendorScalerMetaData(struct camera2_shot_ext *src_ext);
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    void                    m_convertOTRectToActiveArrayRegion(CameraMetadata *settings, struct camera2_shot_ext *shot_ext, ExynosRect2 *region);
+#endif
 
     /* Other helper functions */
     virtual status_t        initShotData(struct camera2_shot_ext *shot_ext);
@@ -185,6 +195,9 @@ public:
     virtual status_t        checkRangeOfValid(int32_t tag, int32_t value);
     virtual status_t        getDefaultSetting(camera_metadata_tag_t tag, void *data);
     virtual void            updateFaceDetectionMetaData(ExynosCameraRequestSP_sprt_t request);
+    static int              getExynosCameraDeviceInfoSize();
+    static HAL_CameraInfo_t *getExynosCameraDeviceInfoByCamIndex(int camIndex);
+    void                    setSessionParams(const camera_metadata_t *);
 
 private:
     static status_t         m_createAvailableCapabilities(const struct ExynosCameraSensorInfoBase *sensorStaticInfo,
@@ -192,6 +205,8 @@ private:
     static status_t         m_createAvailableKeys(const struct ExynosCameraSensorInfoBase *sensorStaticInfo,
                                                  Vector<int32_t> *request, Vector<int32_t> *result, Vector<int32_t> *characteristics,
                                                  int cameraId);
+    static status_t        m_createAvailableSessionKeys(const struct ExynosCameraSensorInfoBase *sensorStaticInfo,
+                                                Vector<int32_t> *request, Vector<int32_t> *sessionKeys);
     static status_t         m_createControlAvailableHighSpeedVideoConfigurations(const struct ExynosCameraSensorInfoBase *sensorStaticInfo,
                                                                                  Vector<int32_t> *streamConfigs);
     static status_t         m_createScalerAvailableInputOutputFormatsMap(const struct ExynosCameraSensorInfoBase *sensorStaticInfo,
@@ -262,6 +277,9 @@ private:
                                                           struct camera2_shot_ext *shot_ext);
     void                    m_convertActiveArrayTo3AARegion(ExynosRect2 *region);
     void                    m_convert3AAToActiveArrayRegion(ExynosRect2 *region);
+#ifdef SAMSUNG_SSM
+    void                    m_convertActiveArrayToSSMRegion(ExynosRect2 *region);
+#endif
     static void             m_constructVendorStaticInfo(struct ExynosCameraSensorInfoBase *sensorStaticInfo,
                                                         CameraMetadata *info, int cameraId);
     void                    m_constructVendorDefaultRequestSettings(int type, CameraMetadata *settings);
@@ -283,6 +301,7 @@ private:
 
     CameraMetadata                  m_staticInfo;
     CameraMetadata                  m_defaultRequestSetting;
+    CameraMetadata                  m_sessionParams;
     CameraMetadata                  *m_prevMeta;
     struct ExynosCameraSensorInfoBase *m_sensorStaticInfo;
 
@@ -297,6 +316,9 @@ private:
     uint32_t                        m_afMode;
     uint32_t                        m_preAfMode;
     float                           m_focusDistance;
+#ifdef SUPPORT_MULTI_AF
+    bool                            m_flagMultiAf;
+#endif
     int                             m_sceneMode;
 };
 

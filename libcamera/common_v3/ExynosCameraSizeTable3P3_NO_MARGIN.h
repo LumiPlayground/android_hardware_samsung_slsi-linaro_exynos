@@ -568,6 +568,9 @@ static int S5K3P3_HIDDEN_PREVIEW_LIST[][SIZE_OF_RESOLUTION] =
 #endif
     { 3840, 2160, SIZE_RATIO_16_9},
     { 3264, 1836, SIZE_RATIO_16_9},
+#ifdef USE_BDS_WIDE_SELFIE
+    { 1920, 1440, SIZE_RATIO_4_3}, /* For WideSelfie Shot */
+#endif
     { 1600, 1200, SIZE_RATIO_4_3},
     { 1280,  960, SIZE_RATIO_4_3},
     { 1056,  864, SIZE_RATIO_11_9},
@@ -610,6 +613,9 @@ static int S5K3P3_HIDDEN_PICTURE_LIST[][SIZE_OF_RESOLUTION] =
     { 2560, 1920, SIZE_RATIO_4_3},
     { 2448, 2448, SIZE_RATIO_1_1},
     { 2048, 1536, SIZE_RATIO_4_3},
+#ifdef USE_BDS_WIDE_SELFIE
+    { 1920, 1440, SIZE_RATIO_4_3},  /* For WideSelfie Shot */
+#endif
 };
 
 static int S5K3P3_THUMBNAIL_LIST[][SIZE_OF_RESOLUTION] =

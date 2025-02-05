@@ -69,62 +69,88 @@ public:
         STATE_MAX,
     } state_t;
 
-    /* Selector ID */
-    typedef enum SELECTOR_ID {
-        SELECTOR_ID_BASE,
-        SELECTOR_ID_CAPTURE,
-        SELECTOR_ID_MAX,
-    } SELECTOR_ID_t;
-
     ExynosCameraFrameSelector (int cameraId,
                             ExynosCameraParameters *param,
                             ExynosCameraBufferSupplier *bufferSupplier,
                             ExynosCameraFrameManager *manager = NULL
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+                            , ExynosCameraBufferManager *DNGbufMgr = NULL
+#endif
                             );
     virtual ~ExynosCameraFrameSelector();
     virtual status_t release(void);
-    status_t manageFrameHoldListHAL3(ExynosCameraFrameSP_sptr_t frame);
+    status_t manageFrameHoldListHAL3(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos = 0);
     status_t manageFrameHoldListForDynamicBayer(ExynosCameraFrameSP_sptr_t frame);
-    ExynosCameraFrameSP_sptr_t selectDynamicFrames(int count, int tryCount);
-    ExynosCameraFrameSP_sptr_t selectCaptureFrames(int count, uint32_t frameCount, int tryCount);
-    virtual status_t clearList(void);
+    ExynosCameraFrameSP_sptr_t selectDynamicFrames(int count, int pipeID, bool isSrc, int tryCount, int32_t dstPos);
+    ExynosCameraFrameSP_sptr_t selectCaptureFrames(int count, uint32_t frameCount, int pipeID, bool isSrc, int tryCount, int32_t dstPos = 0);
+    virtual status_t clearList(int pipeID = -1 , bool isSrc = false, int32_t dstPos = 0);
     uint32_t getSizeOfHoldFrame(void);
     int getFrameHoldCount(void) { return m_frameHoldCount; };
     virtual status_t setFrameHoldCount(int32_t count);
     status_t wakeupQ(void);
     void setWaitTime(uint64_t waitTime);
-    void setId(SELECTOR_ID_t selectorId);
-    SELECTOR_ID_t getId(void);
+#ifdef OIS_CAPTURE
+    void setWaitTimeOISCapture(uint64_t waitTime);
+#endif
 
 protected:
     status_t m_manageNormalFrameHoldListHAL3(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
     status_t m_manageHdrFrameHoldList(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
-    status_t m_list_release(frame_queue_t *list);
+#ifdef RAWDUMP_CAPTURE
+    status_t m_manageRawFrameHoldList(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+    ExynosCameraFrameSP_sptr_t m_selectRawNormalFrame(int pipeID, bool isSrc, int tryCount);
+#endif
+    status_t m_list_release(frame_queue_t *list, int pipeID, bool isSrc, int32_t dstPos);
     int removeFlags;
 
-    ExynosCameraFrameSP_sptr_t m_selectNormalFrame(int tryCount);
-    ExynosCameraFrameSP_sptr_t m_selectFlashFrameV2(int tryCount);
-    ExynosCameraFrameSP_sptr_t m_selectCaptureFrame(uint32_t frameCount, int tryCount);
-    ExynosCameraFrameSP_sptr_t m_selectHdrFrame(int tryCount);
+    ExynosCameraFrameSP_sptr_t m_selectNormalFrame(int pipeID, bool isSrc, int tryCount, int32_t dstPos);
+    ExynosCameraFrameSP_sptr_t m_selectFlashFrameV2(int pipeID, bool isSrc, int tryCount, int32_t dstPos);
+    ExynosCameraFrameSP_sptr_t m_selectCaptureFrame(uint32_t frameCount, int pipeID, bool isSrc, int tryCount, int32_t dstPos);
+    ExynosCameraFrameSP_sptr_t m_selectHdrFrame(int pipeID, bool isSrc, int tryCount, int32_t dstPos);
+#ifdef OIS_CAPTURE
+    status_t m_manageOISFrameHoldList(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+    status_t m_manageOISFrameHoldListHAL3(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+    ExynosCameraFrameSP_sptr_t m_selectOISNormalFrameHAL3(int pipeID, bool isSrc, int tryCount, int32_t dstPos);	
+    status_t m_manageLongExposureFrameHoldList(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+#endif
+#ifdef SAMSUNG_LLS_DEBLUR
+    status_t m_manageLDFrameHoldList(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+#endif
+    status_t m_manageDynamicPickFrameHoldListHAL3(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+    ExynosCameraFrameSP_sptr_t m_selectDynamicPickFrameHAL3(int pipeID, bool isSrc, int tryCount, int32_t dstPos);
     status_t m_getBufferFromFrame(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, ExynosCameraBuffer *outBuffer, int32_t dstPos);
     status_t m_pushQ(frame_queue_t *list, ExynosCameraFrameSP_sptr_t inframe, bool lockflag);
     status_t m_popQ(frame_queue_t *list, ExynosCameraFrameSP_dptr_t outframe, bool unlockflag, int tryCount);
     status_t m_waitAndpopQ(frame_queue_t *list, ExynosCameraFrameSP_dptr_t outframe, bool unlockflag, int tryCount);
-    status_t m_frameComplete(ExynosCameraFrameSP_sptr_t frame, bool isForcelyDelete = false, bool flagReleaseBuf = false);
-    status_t m_LockedFrameComplete(ExynosCameraFrameSP_sptr_t frame);
-    status_t m_clearList(frame_queue_t *list);
+    status_t m_frameComplete(ExynosCameraFrameSP_sptr_t frame, bool isForcelyDelete = false,
+                                int pipeID = 0, bool isSrc = false, int32_t dstPos = 0, bool flagReleaseBuf = false);
+    status_t m_LockedFrameComplete(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+    status_t m_clearList(frame_queue_t *list, int pipeID, bool isSrc, int32_t dstPos);
     status_t m_release(frame_queue_t *list);
-    status_t m_releaseBuffer(ExynosCameraFrameSP_sptr_t frame);
+    status_t m_releaseBuffer(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
 
     bool m_isFrameMetaTypeShotExt(void);
 
 protected:
     frame_queue_t m_frameHoldList;
     frame_queue_t m_hdrFrameHoldList;
+    frame_queue_t m_OISFrameHoldList;
+#ifdef RAWDUMP_CAPTURE
+    frame_queue_t m_RawFrameHoldList;
+#endif
     ExynosCameraFrameManager *m_frameMgr;
     ExynosCameraParameters *m_parameters;
     ExynosCameraBufferSupplier *m_bufferSupplier;
     ExynosCameraActivityControl *m_activityControl;
+
+#ifdef SAMSUNG_DNG
+    unsigned int m_DNGFrameCount;
+    unsigned int m_preDNGFrameCount;
+    ExynosCameraFrameSP_sptr_t m_preDNGFrame;
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    ExynosCameraBufferManager *m_DNGbufMgr;
+#endif
+#endif
 
 #ifdef SUPPORT_DEPTH_MAP
     depth_callback_queue_t *m_depthCallbackQ;
@@ -141,7 +167,6 @@ protected:
     int  m_cameraId;
     char m_name[EXYNOS_CAMERA_NAME_STR_SIZE];
     state_t m_state;
-    SELECTOR_ID_t m_selectorId;
 };
 
 }

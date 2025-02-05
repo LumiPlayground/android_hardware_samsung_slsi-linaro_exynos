@@ -15,16 +15,13 @@
 ** limitations under the License.
 */
 
-#ifndef EXYNOS_CAMERA_3_FRAME_FACTORY_H
-#define EXYNOS_CAMERA_3_FRAME_FACTORY_H
+#ifndef EXYNOS_CAMERA_FRAME_FACTORY_H
+#define EXYNOS_CAMERA_FRAME_FACTORY_H
 
 #include "ExynosCameraFrame.h"
 
 #include "ExynosCameraPipe.h"
 #include "ExynosCameraMCPipe.h"
-#if defined(USE_SW_MCSC) && (USE_SW_MCSC == true)
-#include "ExynosCameraPipeSWMCSC.h"
-#endif
 #include "ExynosCameraPipeFlite.h"
 #include "ExynosCameraPipeGSC.h"
 #include "ExynosCameraPipeJpeg.h"
@@ -209,7 +206,6 @@ protected:
     uint32_t                    m_requestMCSC2;
     uint32_t                    m_requestMCSC3;
     uint32_t                    m_requestMCSC4;
-    uint32_t                    m_requestGSC_PICTURE;
     uint32_t                    m_requestJPEG;
     uint32_t                    m_requestThumbnail;
 
@@ -228,9 +224,7 @@ protected:
     bool                        m_flagReprocessing;
     bool                        m_supportPureBayerReprocessing;
     bool                        m_supportSCC;
-
-    uint32_t                    m_numOfHwChains;
-    uint32_t                    m_numOfMcscOutputPorts;
+    bool                        m_supportSingleChain;
 
     factory_handler_t           m_frameCreateHandler;
 

@@ -24,9 +24,9 @@
 #include <binder/MemoryHeapBase.h>
 #include <hardware/camera.h>
 #include <hardware/camera3.h>
-#include <hardware/gralloc.h>
-#include <camera/CameraParameters.h>
-#include <camera/CameraMetadata.h>
+#include <hardware/gralloc1.h>
+#include <CameraParameters.h>
+#include <CameraMetadata.h>
 #include <media/hardware/MetadataBufferType.h>
 #include <system/camera_metadata.h>
 
@@ -41,6 +41,16 @@
 #include "ExynosCameraActivityControl.h"
 #include "ExynosCameraFrameSelector.h"
 
+#ifdef USE_CAMERA_PREVIEW_FRAME_SCHEDULER
+#include "SecCameraPreviewFrameSchedulerSimple.h"
+#endif
+
+#include "SecCameraUtil.h"
+
+#ifdef SAMSUNG_DNG
+#include "SecCameraDngCreator.h"
+#endif
+
 namespace android {
 
 typedef ExynosCameraList<ExynosCameraFrameSP_sptr_t> frame_queue_t;
@@ -52,6 +62,10 @@ typedef ExynosCameraList<ExynosCameraBuffer> thumbnail_callback_queue_t;
 typedef ExynosCameraList<ExynosCameraFrameSP_sptr_t> capture_queue_t;
 #ifdef SUPPORT_DEPTH_MAP
 typedef ExynosCameraList<ExynosCameraBuffer> depth_callback_queue_t;
+#endif
+#ifdef SAMSUNG_DNG
+typedef ExynosCameraList<ExynosCameraBuffer> dng_capture_queue_t;
+typedef ExynosCameraList<ExynosCameraBuffer> bayer_release_queue_t;
 #endif
 
 typedef sp<ExynosCameraFrame>  ExynosCameraFrameSP_t;
@@ -97,8 +111,7 @@ enum EXYNOS_CAMERA_STREAM_CHARACTERISTICS_ID {
     HAL_STREAM_ID_DEPTHMAP            = 9,
     HAL_STREAM_ID_DEPTHMAP_STALL      = 10,
     HAL_STREAM_ID_VISION              = 11,
-    HAL_STREAM_ID_PREVIEW_VIDEO       = 12,
-    HAL_STREAM_ID_MAX                 = 13,
+    HAL_STREAM_ID_MAX                 = 12,
 };
 
 enum Request_Sync_Type {

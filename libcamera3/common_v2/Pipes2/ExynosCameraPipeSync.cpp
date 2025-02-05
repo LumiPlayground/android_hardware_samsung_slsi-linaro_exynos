@@ -143,7 +143,6 @@ status_t ExynosCameraPipeSync::m_run(void)
 
     uint64_t curMs = 0;
     int cameraId = -1;
-    uint64_t currentTimestamp = 0;
     static int internalLogCount[CAMERA_ID_MAX];
     ExynosCameraFrameSP_sptr_t newFrame = NULL;
     ExynosCameraFrameSP_sptr_t syncFrame = NULL;
@@ -193,11 +192,13 @@ status_t ExynosCameraPipeSync::m_run(void)
     curMs = (uint64_t)ns2ms(newFrame->getTimeStampBoot());
     if (m_syncType == SYNC_TYPE_TIMESTAMP &&
             m_configurations->getDualHwSyncOn() == false) {
+        bool needMaxCalbTime = false;
         uint64_t lastMs = m_syncLastTimeStamp[cameraId];
         int64_t diffMs = curMs - lastMs;
+
+        /* for abs */
         if (diffMs < 0)
             diffMs = -diffMs;
-        bool needMaxCalbTime = false;
 
         if (diffMs > m_syncCalbTimeThreshold)
             needMaxCalbTime = true;
@@ -298,8 +299,25 @@ status_t ExynosCameraPipeSync::m_run(void)
 
 p_exit:
     /* If frameQ have frame over expected count, clean Q */
-    m_cleanFrameByMinCount(m_slaveFrameQ, SYNC_WAITING_COUNT);
-    m_cleanFrameByMinCount(m_masterFrameQ, SYNC_WAITING_COUNT);
+#ifdef SAMSUNG_DUAL_PORTRAIT_LLS_CAPTURE
+    if ((m_configurations->getScenario() == SCENARIO_DUAL_REAR_PORTRAIT
+        || m_configurations->getScenario() == SCENARIO_DUAL_FRONT_PORTRAIT)
+            && m_reprocessing == true) {
+        int LDCaptureTotalCount = m_configurations->getModeValue(CONFIGURATION_LD_CAPTURE_COUNT);
+
+        if (LDCaptureTotalCount > 0) {
+            m_cleanFrameByMinCount(m_slaveFrameQ, LDCaptureTotalCount + 1);
+            m_cleanFrameByMinCount(m_masterFrameQ, LDCaptureTotalCount + 1);
+        } else {
+            m_cleanFrameByMinCount(m_slaveFrameQ, SYNC_WAITING_COUNT);
+            m_cleanFrameByMinCount(m_masterFrameQ, SYNC_WAITING_COUNT);
+        }
+    } else
+#endif
+    {
+        m_cleanFrameByMinCount(m_slaveFrameQ, SYNC_WAITING_COUNT);
+        m_cleanFrameByMinCount(m_masterFrameQ, SYNC_WAITING_COUNT);
+    }
 
     /*
      * Clean old frame in both FrameQ.
@@ -327,6 +345,7 @@ void ExynosCameraPipeSync::m_init(void)
     m_masterFrameQ = NULL;
     m_slaveFrameQ = NULL;
     m_syncType = SYNC_TYPE_INIT;
+    m_syncCalbTimeThreshold = SYNC_TIMESTAMP_CALB_TIME_DEFAULT;
 }
 
 void ExynosCameraPipeSync::m_pushFrameToOutputQ(ExynosCameraFrameSP_sptr_t frame)
@@ -602,15 +621,14 @@ status_t ExynosCameraPipeSync::m_cleanFrameByTimeStamp(frame_queue_t *frameQ, ui
 status_t ExynosCameraPipeSync::m_syncFrame(ExynosCameraFrameSP_sptr_t newFrame, sync_type_t syncType,
                                            ExynosCameraFrameSP_dptr_t finalFrame)
 {
-    status_t ret;
     bool iamFound = false;
     bool iamMasterFrame = false;
     uint64_t myTime, pairTime;
     int64_t diffTimeMs;
     int64_t syncCalbTime;
 
-    frame_queue_t *myFrameQ;
-    frame_queue_t *pairFrameQ;
+    frame_queue_t *myFrameQ = NULL;
+    frame_queue_t *pairFrameQ = NULL;
     ExynosCameraFrameSP_sptr_t pairFrame = NULL;
 
     switch (newFrame->getFrameType()) {
@@ -650,7 +668,7 @@ status_t ExynosCameraPipeSync::m_syncFrame(ExynosCameraFrameSP_sptr_t newFrame, 
             pairTime = (uint64_t)ns2ms(pairFrame->getTimeStampBoot());
 
             diffTimeMs = myTime - pairTime;
-            /*for abs */
+            /* for abs */
             if (diffTimeMs < 0) {
                 diffTimeMs = -diffTimeMs;
             }

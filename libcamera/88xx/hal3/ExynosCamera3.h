@@ -205,10 +205,12 @@ private:
 
     status_t    m_removeInternalFrames(List<ExynosCameraFrame *> *list, Mutex *listLock);
     status_t    m_releaseInternalFrame(ExynosCameraFrame *frame);
-    status_t    m_generateDuplicateBuffers(ExynosCameraFrame *frame, int pipeIdSrc);
     status_t    m_resultCallback(ExynosCameraBuffer *frame, uint32_t frameCount, int streamId);
     status_t    m_forceResultCallback(uint32_t frameCount);
     status_t    m_updateTimestamp(ExynosCameraFrame *frame, ExynosCameraBuffer *timestampBuffer);
+#ifdef CORRECT_TIMESTAMP_FOR_SENSORFUSION
+    status_t    m_adjustTimestamp(ExynosCameraBuffer *timestampBuffer);
+#endif
     status_t    m_handlePreviewFrame(ExynosCameraFrame *frame, int pipeId);
     status_t    m_handleInternalFrame(ExynosCameraFrame *frame);
     status_t    m_handleYuvCaptureFrame(ExynosCameraFrame *frame);
@@ -259,11 +261,15 @@ private:
     ExynosCameraBufferManager               *m_3aaBufferMgr;
     ExynosCameraBufferManager               *m_ispBufferMgr;
     ExynosCameraBufferManager               *m_mcscBufferMgr;
+#ifdef SUPPORT_DEPTH_MAP
+    ExynosCameraBufferManager               *m_depthMapBufferMgr;
+#endif
 
     /* internal reprocessing buffer managers */
     ExynosCameraBufferManager               *m_ispReprocessingBufferMgr;
     ExynosCameraBufferManager               *m_yuvCaptureBufferMgr;
     ExynosCameraBufferManager               *m_thumbnailBufferMgr;
+    ExynosCameraBufferManager               *m_internalScpBufferMgr;
 
     /* service buffer managers */
     ExynosCameraBufferManager               *m_bayerBufferMgr;
@@ -279,6 +285,9 @@ private:
     mutable Mutex                   m_resultLock;
     mutable Condition               m_captureResultDoneCondition;
     mutable Mutex                   m_captureResultDoneLock;
+#if defined(SAMSUNG_COMPANION) || defined(SAMSUNG_EEPROM)
+    bool                            m_use_companion;
+#endif
     uint64_t                        m_lastFrametime;
 
     /* HACK : check capture stream */
@@ -297,6 +306,7 @@ private:
 
     bool                            m_flushWaitEnable;
     bool                            m_flushFlag;
+    bool                            m_flagRunFastAE;
 #ifdef MONITOR_LOG_SYNC
     static uint32_t                 cameraSyncLogId;
     int                             m_syncLogDuration;
@@ -311,6 +321,7 @@ private:
 
     /* capture Queue */
     frame_queue_t                   *m_selectBayerQ;
+    frame_queue_t                   *m_duplicateBufferDoneQ;
     frame_queue_t                   *m_captureQ;
     frame_queue_t                   *m_yuvCaptureDoneQ;
     frame_queue_t                   *m_reprocessingDoneQ;
@@ -384,9 +395,33 @@ private:
 
     status_t                        m_setReprocessingBuffer(void);
 
+#ifdef SAMSUNG_COMPANION
+    int                             m_getSensorId(int m_cameraId);
+    sp<mainCameraThread>            m_companionThread;
+    bool                            m_companionThreadFunc(void);
+    ExynosCameraNode                *m_companionNode;
+#endif
+#ifdef SAMSUNG_EEPROM
+    sp<mainCameraThread>            m_eepromThread;
+    bool                            m_eepromThreadFunc(void);
+#endif
+
     status_t                        m_startCompanion(void);
     status_t                        m_stopCompanion(void);
     status_t                        m_waitCompanionThreadEnd(void);
+    status_t                        m_setInternalScpBuffer(void);
+
+    /* Functions for reprocessing YUV ouptput generation with external scaler */
+    status_t                        m_generateDuplicateBuffers(ExynosCameraFrame *frame, int pipeIdSrc);
+    sp<mainCameraThread>            m_duplicateBufferThread;
+    bool                            m_duplicateBufferThreadFunc(void);
+    status_t                        m_doDestCSC(bool enableCSC, ExynosCameraFrame *frame, int pipeIdSrc, int halStreamId, int pipeExtScalerId);
+
+    status_t                        m_fastenAeStable(ExynosCamera3FrameFactory *factory);
+
+    /* HACK : To prevent newly added member variable corruption
+       (May caused by compiler bug??) */
+    int                             padding[16];
 };
 
 }; /* namespace android */

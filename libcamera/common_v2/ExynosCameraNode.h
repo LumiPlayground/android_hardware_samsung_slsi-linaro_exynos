@@ -225,6 +225,7 @@ public:
 
     /* set size */
     virtual status_t setQuality(int quality);
+    virtual status_t setQuality(const unsigned char qtable[]);
 
     /* set size */
     virtual status_t setSize(int w, int h);
@@ -257,6 +258,8 @@ public:
     /* set id */
     virtual status_t setControl(unsigned int id, int value);
     virtual status_t getControl(unsigned int id, int *value);
+
+    virtual status_t setExtControl(struct v4l2_ext_controls *ctrl);
 
     /* polling */
     virtual status_t polling(void);
@@ -339,6 +342,8 @@ protected:
     int m_setControl(unsigned int id, int value);
     /* get contorl */
     int m_getControl(unsigned int id, int *value);
+    /* set ext control */
+    int m_setExtControl(struct v4l2_ext_controls *ctrl);
 
     /* qbuf from src, with metaBuf */
     int m_qBuf(ExynosCameraBuffer *buf);

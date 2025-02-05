@@ -179,9 +179,12 @@ void ExynosCameraPipeFusion::m_init(void)
 status_t ExynosCameraPipeFusion::m_createFusion(void)
 {
     status_t ret = NO_ERROR;
-
+#ifndef SAMSUNG_DUAL_ZOOM_PREVIEW
     m_fusionWrapper = ExynosCameraSingleton<ExynosCameraFusionZoomPreviewWrapper>::getInstance();
+#endif
+#ifndef SAMSUNG_DUAL_PORTRAIT_SOLUTION
     m_bokehWrapper = ExynosCameraSingleton<ExynosCameraBokehPreviewWrapper>::getInstance();
+#endif
 
     if (m_configurations->getScenario() == SCENARIO_DUAL_REAR_ZOOM) {
         if (m_fusionWrapper != NULL && m_fusionWrapper->flagCreate(m_cameraId) == false ) {
@@ -301,6 +304,19 @@ status_t ExynosCameraPipeFusion::m_manageFusion(ExynosCameraFrameSP_sptr_t newFr
     int sizeW = 0, sizeH = 0;
     int vraInputSizeWidth = 0, vraInputSizeHeight = 0;
     int32_t format = 0;
+    
+#ifdef SAMSUNG_DUAL_PORTRAIT_LLS_CAPTURE
+    int multiShotCount = 0;
+    int LDCaptureLastStep = 0;
+    int LDCaptureTotalCount = 0;
+
+    if (m_configurations->getScenario() == SCENARIO_DUAL_REAR_PORTRAIT
+        || m_configurations->getScenario() == SCENARIO_DUAL_FRONT_PORTRAIT) {
+        multiShotCount = newFrame->getFrameSpecialCaptureStep();
+        LDCaptureLastStep = SCAPTURE_STEP_COUNT_1 + m_configurations->getModeValue(CONFIGURATION_LD_CAPTURE_COUNT) - 1;
+        LDCaptureTotalCount = m_configurations->getModeValue(CONFIGURATION_LD_CAPTURE_COUNT);
+    }
+#endif
 
     /* dst */
     ret = newFrame->getDstBuffer(getPipeId(), &dstBuffer);
@@ -467,6 +483,19 @@ status_t ExynosCameraPipeFusion::m_manageFusion(ExynosCameraFrameSP_sptr_t newFr
 #endif
     }
 
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    if (newFrame->getFrameType() == FRAME_TYPE_PREVIEW
+        || newFrame->getFrameType() == FRAME_TYPE_PREVIEW_SLAVE) {
+        memcpy(dst_shot_ext, &src_shot_ext[OUTPUT_NODE_1], sizeof(struct camera2_shot_ext));
+    } else {
+        if (m_configurations->getDualSelectedCam() == UNI_PLUGIN_CAMERA_TYPE_WIDE) {
+            memcpy(dst_shot_ext, &src_shot_ext[OUTPUT_NODE_1], sizeof(struct camera2_shot_ext));
+        } else {
+            memcpy(dst_shot_ext, &src_shot_ext[OUTPUT_NODE_2], sizeof(struct camera2_shot_ext));
+        }
+    }
+#endif
+
     dst_shot_stream->output_crop_region[0] = 0;
     dst_shot_stream->output_crop_region[1] = 0;
     dst_shot_stream->output_crop_region[2] = dstImageRect.fullW;
@@ -492,30 +521,160 @@ status_t ExynosCameraPipeFusion::m_manageFusion(ExynosCameraFrameSP_sptr_t newFr
                     newFrame->getFrameCount(), getPipeId(), ret);
             return ret;
         }
-    } else if (m_configurations->getScenario() == SCENARIO_DUAL_REAR_PORTRAIT) {
+    } else if (m_configurations->getScenario() == SCENARIO_DUAL_REAR_PORTRAIT
+                || m_configurations->getScenario() == SCENARIO_DUAL_FRONT_PORTRAIT) {
         /* do fusion */
         ret = m_bokehWrapper->execute(m_cameraId,
                 src_shot_ext,
                 srcBuffer, srcImageRect, srcBufferManager,
-                dstBuffer, dstImageRect, dstBufferManager);
+                dstBuffer, dstImageRect, dstBufferManager
+#ifdef SAMSUNG_DUAL_PORTRAIT_LLS_CAPTURE
+                , multiShotCount, LDCaptureTotalCount
+#endif
+                );
         if (ret != NO_ERROR) {
             CLOGE("frame[%d] pipe(%d) fusionWrapper->excute(%d) fail",
                     newFrame->getFrameCount(), getPipeId(), ret);
         }
 
+#ifdef SAMSUNG_DUAL_PORTRAIT_SOLUTION
+        if (newFrame->getFrameType() == FRAME_TYPE_PREVIEW_DUAL_MASTER
+            || newFrame->getFrameType() == FRAME_TYPE_PREVIEW) {
+            m_configurations->setBokehPreviewState(m_bokehWrapper->m_getBokehPreviewResultValue());
+            m_configurations->setBokehProcessResult(m_bokehWrapper->m_getBokehPreviewProcessResult());
+
+#ifdef SAMSUNG_DUAL_PORTRAIT_LLS_CAPTURE
+            m_configurations->setDualCaptureFlag(m_bokehWrapper->m_getDualCaptureFlag());
+#endif
+        } else if (newFrame->getFrameType() == FRAME_TYPE_REPROCESSING_DUAL_MASTER
+            || newFrame->getFrameType() == FRAME_TYPE_REPROCESSING) {
+            m_configurations->setBokehCaptureState(m_bokehWrapper->m_getBokehCaptureResultValue());
+        }
+#endif
     }
 
 func_exit:
     return ret;
 }
 
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+void ExynosCameraPipeFusion::m_checkFallbackCondition(uint32_t frameType)
+{
+    /*
+       (FALLBACK Scenario)
+       LLS Lux: T->W = 4.3 * 256
+                W->T = 5.3 * 256
+       objectDistance: T->W = TBD
+                       W->T = TBD
+     */
+    int fallbackState = m_configurations->getStaticValue(CONFIGURATION_DUAL_DISP_FALLBACK_RESULT);
+
+    if (fallbackState) {
+        if (m_fusionWrapper->m_getFallbackMode() == false) {
+            /* forcely set to wide : enable FALLBACK flag(0x100)*/
+            if (frameType != FRAME_TYPE_PREVIEW_SLAVE) {
+                m_fusionWrapper->m_setFallbackMode(true);
+                CLOGD("[Fallback] fallback = %d", m_fusionWrapper->m_getFallbackMode());
+            }
+        }
+    } else {
+        if (m_fusionWrapper->m_getFallbackMode() == true) {
+            /* get back to normal mode : disable FALLBACK flag */
+            if (frameType != FRAME_TYPE_PREVIEW) {
+                m_fusionWrapper->m_setFallbackMode(false);
+                CLOGD("[Fallback] fallback = %d", m_fusionWrapper->m_getFallbackMode());
+            }
+        }
+    }
+}
+#endif
+
+
 void ExynosCameraPipeFusion::m_manageFusionDualRearZoom(ExynosCameraFrameSP_sptr_t newFrame, int i, int cameraId, int vraInputSizeWidth, int vraInputSizeHeight)
 {
+#ifdef SAMSUNG_DUAL_ZOOM_PREVIEW
+    if (m_fusionWrapper->m_getWhichWrapper() == FUSION_PREVIEW_WRAPPER) {
+        ExynosRect activeZoomRect, zoomRect;
+        int activeZoomMargin = newFrame->getActiveZoomMargin(i);
+
+        newFrame->getZoomRect(&zoomRect, i);
+        newFrame->getActiveZoomRect(&activeZoomRect, i);
+
+        /* set viewZoom Rect */
+        m_fusionWrapper->m_setCurViewRect(cameraId, zoomRect);
+        /* set ActiveZoom Rect */
+        m_fusionWrapper->m_setCurZoomRect(cameraId, activeZoomRect);
+        /* set ActiveZoom Margin */
+        m_fusionWrapper->m_setCurZoomMargin(cameraId, activeZoomMargin);
+        /* set Frame Type */
+        m_fusionWrapper->m_setFrameType(newFrame->getFrameType());
+    }
+
+    m_checkFallbackCondition(newFrame->getFrameType());
+    m_fusionWrapper->m_setFallback();
+    m_fusionWrapper->m_setVRAInputSize(vraInputSizeWidth, vraInputSizeHeight);
+
+    if (newFrame->getFrameType() == FRAME_TYPE_PREVIEW) {
+        m_fusionWrapper->m_setDualSelectedCam(UNI_PLUGIN_CAMERA_TYPE_WIDE);
+    } else if (newFrame->getFrameType() == FRAME_TYPE_PREVIEW_SLAVE) {
+        m_fusionWrapper->m_setDualSelectedCam(UNI_PLUGIN_CAMERA_TYPE_TELE);
+    } else {
+        m_fusionWrapper->m_setDualSelectedCam(m_configurations->getDualSelectedCam());
+    }
+
+    m_fusionWrapper->m_setOrientation(m_configurations->getModeValue(CONFIGURATION_DEVICE_ORIENTATION));
+#endif
+#ifdef SAMSUNG_DUAL_ZOOM_CAPTURE
+    if (m_fusionWrapper->m_getWhichWrapper() == FUSION_CAPTURE_WRAPPER) {
+        int bCropX, bCropY, bCropW, bCropH;
+        m_parameters->getHwBayerCropRegion(&bCropW, &bCropH, &bCropX, &bCropY);
+        m_fusionWrapper->m_setBcropROI(cameraId, bCropX , bCropY);
+    }
+#endif
+
     return;
 }
 
 void ExynosCameraPipeFusion::m_manageFusionDualPortrait(ExynosCameraFrameSP_sptr_t newFrame, int i, int cameraId, int vraInputSizeWidth, int vraInputSizeHeight)
 {
+#ifdef SAMSUNG_DUAL_PORTRAIT_SOLUTION
+            int bokehBlurStrength = 0;
+#ifdef SAMSUNG_DUAL_PORTRAIT_BEAUTY
+            int beautyFaceRetouchLevel = 0;
+            int beautyFaceSkinColorLevel = 0;
+#endif
+            ExynosRect hwSensorSize;
+            ExynosRect hwBcropSize;
+
+            bokehBlurStrength = m_configurations->getBokehBlurStrength();
+
+#ifdef SAMSUNG_DUAL_PORTRAIT_BEAUTY
+            beautyFaceRetouchLevel = m_configurations->getModeValue(CONFIGURATION_BEAUTY_RETOUCH_LEVEL);
+            m_bokehWrapper->m_setBeautyFaceRetouchLevel(beautyFaceRetouchLevel);
+
+            beautyFaceSkinColorLevel = m_configurations->getModeValue(CONFIGURATION_BEAUTY_FACE_SKIN_COLOR_LEVEL);
+            m_bokehWrapper->m_setBeautyFaceSkinColorLevel(beautyFaceSkinColorLevel);
+#endif
+
+            if (newFrame->getFrameType() == FRAME_TYPE_REPROCESSING_DUAL_MASTER && i == OUTPUT_NODE_1) {
+                int curBokehPreviewResult = m_configurations->getModeValue(CONFIGURATION_CURRENT_BOKEH_PREVIEW_RESULT);
+                CLOGD("[BokehCapture] i:%d cameraId: %d, frameType : %d currentBokehResult : %d",
+                    i, cameraId, newFrame->getFrameType(),
+                    curBokehPreviewResult);
+                m_bokehWrapper->m_setCurrentBokehPreviewResult(curBokehPreviewResult);
+            }
+
+            m_parameters->getPreviewBayerCropSize(&hwSensorSize, &hwBcropSize, false);
+
+            m_bokehWrapper->m_setVRAInputSize(vraInputSizeWidth, vraInputSizeHeight);
+            m_bokehWrapper->m_setBokehBlurStrength(bokehBlurStrength);
+            m_bokehWrapper->m_setOrientation(m_configurations->getModeValue(CONFIGURATION_DEVICE_ORIENTATION));
+            m_bokehWrapper->m_setHwBcropSize(hwBcropSize.w, hwBcropSize.h);
+            m_bokehWrapper->m_setFrameType(newFrame->getFrameType());
+            CLOGV("[Bokeh] i:%d cameraId: %d, zoomRatio: %f, viewRatio: %f frameType : %d", i, cameraId,
+                        newFrame->getActiveZoomRatio(i), newFrame->getZoomRatio(i), newFrame->getFrameType());
+#endif
+
     return;
 }
 

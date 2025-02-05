@@ -36,12 +36,31 @@ struct RectStr {
 	int32_t     y2;
 };
 
+
+/*! \brief Type of poses Yaw angles. */
+typedef enum
+{
+	VRA_YAW_FRONT = 0,				/*!< No YAW */
+	VRA_YAW_RIGHT_PROFILE = 1,	/*!< for right profile => Yaw Angle = 90. 270 stands for left profile */
+#ifdef VRA_OLD_POSES
+	VRA_YAW_All = 2
+#else
+	VRA_YAW_RIGHT_SEMI_PROFILE = 2,	/*!< for right semi profile => Yaw Angle = 45. 315 stands for left semi profile */
+	VRA_YAW_All = 3
+#endif
+}VRA_YawType;
+
+
 struct FacesStr {
 	uint32_t        id;
 	float           score;
 	struct RectStr  rect;
 	bool            isRot;
+#ifdef VRA_OLD_POSES
 	bool            isYaw;
+#else
+    VRA_YawType     YawType;
+#endif
 	int32_t         rot;
 	bool            mirrorX;
 	int32_t         hwRotAndMirror;

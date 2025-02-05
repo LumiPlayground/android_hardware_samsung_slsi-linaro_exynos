@@ -87,10 +87,6 @@ status_t ExynosCameraBufferManager::create(const char *name, void *defaultAlloca
     return create(name, 0, defaultAllocator);
 }
 
-char *ExynosCameraBufferManager::getName(void) {
-    return m_name;
-}
-
 void ExynosCameraBufferManager::init(void)
 {
     EXYNOS_CAMERA_BUFFER_IN();
@@ -107,8 +103,6 @@ void ExynosCameraBufferManager::init(void)
         for (int planeIndex = 0; planeIndex < EXYNOS_CAMERA_BUFFER_MAX_PLANES; planeIndex++) {
             m_buffer[bufIndex].fd[planeIndex] = -1;
         }
-
-        m_buffer[bufIndex].manager = (void *)this;
     }
     m_hasMetaPlane = false;
     memset(m_name, 0x00, sizeof(m_name));
@@ -1022,7 +1016,7 @@ bool ExynosCameraBufferManager::isAvaliable(int bufIndex)
     if (bufIndex < 0) {
         CLOGE("invalid bufIndex(%d)", bufIndex);
         dump();
-        return false;
+	return false;
     }
 
     switch (m_buffer[bufIndex].status.permission) {
@@ -1117,7 +1111,7 @@ status_t ExynosCameraBufferManager::m_defaultAlloc(int bIndex, int eIndex, bool 
                 break;
             case EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE:
                 mask  = EXYNOS_CAMERA_BUFFER_ION_MASK_CACHED;
-                flags = EXYNOS_CAMERA_BUFFER_ION_FLAG_CACHED_SYNC_FORCE;
+                flags = EXYNOS_CAMERA_BUFFER_ION_FLAG_CACHED;
                 estimatedBase = EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_CACHED;
                 break;
             case EXYNOS_CAMERA_BUFFER_ION_RESERVED_TYPE:
@@ -1170,6 +1164,50 @@ status_t ExynosCameraBufferManager::m_defaultAlloc(int bIndex, int eIndex, bool 
                 mask  = EXYNOS_CAMERA_BUFFER_ION_MASK_CACHED;
                 flags = EXYNOS_CAMERA_BUFFER_ION_FLAG_CACHED_SYNC_FORCE;
                 estimatedBase = EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_CACHED;
+                break;
+            case EXYNOS_CAMERA_BUFFER_ION_RESERVED_SECURE_TYPE:
+#ifdef RESERVED_MEMORY_ENABLE
+                reservedMaxCount = (m_reservedMemoryCount > 0 ? m_reservedMemoryCount : RESERVED_BUFFER_COUNT_MAX);
+#else
+                reservedMaxCount = 0;
+#endif
+                if (bufIndex < reservedMaxCount) {
+                    CLOGI("bufIndex(%d) < reservedMaxCount(%d) , m_reservedMemoryCount(%d), non-cached",
+                        bufIndex, reservedMaxCount, m_reservedMemoryCount);
+                    mask  = EXYNOS_CAMERA_BUFFER_ION_MASK_SECURE;
+                    flags = EXYNOS_CAMERA_BUFFER_ION_FLAG_SECURE;
+                    estimatedBase = EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_RESERVED;
+                } else {
+                    CLOGI("bufIndex(%d) >= reservedMaxCount(%d) , m_reservedMemoryCount(%d),"
+                        "non-cached. so, alloc ion memory instead of reserved memory",
+                        bufIndex, reservedMaxCount, m_reservedMemoryCount);
+                    mask  = EXYNOS_CAMERA_BUFFER_ION_MASK_NONCACHED;
+                    flags = EXYNOS_CAMERA_BUFFER_ION_MASK_NONCACHED;
+                    estimatedBase = EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_NONCACHED;
+                }
+                break;
+            case EXYNOS_CAMERA_BUFFER_ION_CACHED_RESERVED_SECURE_TYPE:
+#ifdef RESERVED_MEMORY_ENABLE
+                reservedMaxCount = (m_reservedMemoryCount > 0 ? m_reservedMemoryCount : RESERVED_BUFFER_COUNT_MAX);
+#else
+                reservedMaxCount = 0;
+#endif
+                if (bufIndex < reservedMaxCount) {
+                    CLOGI("bufIndex(%d) < reservedMaxCount(%d) , m_reservedMemoryCount(%d), cached",
+                        bufIndex, reservedMaxCount, m_reservedMemoryCount);
+
+                    mask  = EXYNOS_CAMERA_BUFFER_ION_MASK_SECURE;
+                    flags = EXYNOS_CAMERA_BUFFER_ION_FLAG_SECURE | EXYNOS_CAMERA_BUFFER_ION_FLAG_CACHED;
+                    estimatedBase = EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_RESERVED;
+                } else {
+                    CLOGI("bufIndex(%d) >= reservedMaxCount(%d) , m_reservedMemoryCount(%d),"
+                        "cached. so, alloc ion memory instead of reserved memory",
+                        bufIndex, reservedMaxCount, m_reservedMemoryCount);
+
+                    mask  = EXYNOS_CAMERA_BUFFER_ION_MASK_CACHED;
+                    flags = EXYNOS_CAMERA_BUFFER_ION_FLAG_CACHED;
+                    estimatedBase = EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_CACHED;
+                }
                 break;
             case EXYNOS_CAMERA_BUFFER_INVALID_TYPE:
             default:
@@ -3583,6 +3621,11 @@ ServiceExynosCameraBufferManager::ServiceExynosCameraBufferManager()
 
 ServiceExynosCameraBufferManager::~ServiceExynosCameraBufferManager()
 {
+    if (m_allocator != NULL) {
+        delete m_allocator;
+        m_allocator = NULL;
+    }
+
     ExynosCameraBufferManager::deinit();
 }
 

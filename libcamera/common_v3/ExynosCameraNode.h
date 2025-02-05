@@ -129,53 +129,6 @@ enum EXYNOS_CAMERA_NODE_JPEG_HAL_LOCATION{
     NODE_LOCATION_DST
 };
 
-enum NODE_TYPE {
-    INVALID_NODE        = -1,
-    OUTPUT_NODE         = 0,    /* Node for output  device */
-    OUTPUT_NODE_1       = OUTPUT_NODE,    /* Node for output  device */
-    OUTPUT_NODE_2,
-    OUTPUT_NODE_3,
-    OUTPUT_NODE_4,
-    OUTPUT_NODE_5,
-    MAX_OUTPUT_NODE,
-    CAPTURE_NODE,               /* deprecated enum */
-    SUB_NODE,                   /* deprecated enum */
-
-    /* MCPipe CAPTURE NODE */
-    CAPTURE_NODE_1 = CAPTURE_NODE, /* MCPipe use CAPTURE_NODE_X. so, this start from OUTPUT_NODE + 1 */
-    CAPTURE_NODE_2,
-    CAPTURE_NODE_3,
-    CAPTURE_NODE_4,
-    CAPTURE_NODE_5,
-    CAPTURE_NODE_6,
-    CAPTURE_NODE_7,
-    CAPTURE_NODE_8,
-    CAPTURE_NODE_9,
-    CAPTURE_NODE_10,
-    CAPTURE_NODE_11,
-    CAPTURE_NODE_12,
-    CAPTURE_NODE_13,
-    CAPTURE_NODE_14,
-    CAPTURE_NODE_15,
-    CAPTURE_NODE_16,
-    CAPTURE_NODE_17,
-    CAPTURE_NODE_18,
-    MAX_CAPTURE_NODE,
-
-    /* OTF NODE */
-    OTF_NODE_BASE,
-    OTF_NODE_1,
-    OTF_NODE_2,
-    OTF_NODE_3,
-    OTF_NODE_4,
-    OTF_NODE_5,
-    OTF_NODE_6,
-    OTF_NODE_7,
-    MAX_OTF_NODE,
-
-    MAX_NODE
-};
-
 class ExynosCameraNodeRequest {
 public:
     /* Constructor */
@@ -256,8 +209,6 @@ public:
     virtual status_t open(int videoNodeNum, bool useThumbnailHWFC);
     /* close Node */
     virtual status_t close(void);
-    /* check Node Opened*/
-    virtual bool     flagOpened(void);
     /* get file descriptor */
     virtual status_t getFd(int *fd);
     /* get Jpeg Encoder */
@@ -411,14 +362,6 @@ protected:
     int  m_YUV_RANGE_2_V4L2_COLOR_RANGE(enum YUV_RANGE yuvRange);
     enum YUV_RANGE m_V4L2_COLOR_RANGE_2_YUV_RANGE(int v4l2ColorRange);
 
-    status_t m_drawColor(ExynosCameraBuffer *buf, int v4l2Format);
-    status_t m_drawNV12(ExynosCameraBuffer *buf, char color[]);
-    status_t m_drawNV12M(ExynosCameraBuffer *buf, char color[]);
-    status_t m_drawNV21(ExynosCameraBuffer *buf, char color[]);
-    status_t m_drawNV21M(ExynosCameraBuffer *buf, char color[]);
-    status_t m_drawYV12(ExynosCameraBuffer *buf, char color[]);
-    status_t m_drawYUYV(ExynosCameraBuffer *buf, char color[]);
-
     /*
      * thoes member value should be declare in private
      * but we declare in publuc to support backward compatibility
@@ -437,7 +380,6 @@ protected:
     int                 m_cameraId;
     int                 m_sensorId;
     int                 m_fd;
-    bool                m_flagCopyedFd;
     int                 m_videoNodeNum;
     struct v4l2_format  m_v4l2Format;
     struct v4l2_requestbuffers m_v4l2ReqBufs;
@@ -463,7 +405,6 @@ protected:
 
     enum EXYNOS_CAMERA_NODE_TYPE m_nodeType;
     List<int>           m_dummyIndexQ;
-    int                 m_dummyColorIndex;
 
 #ifdef EXYNOS_CAMERA_NODE_TRACE_Q_DURATION
     ExynosCameraDurationTimer m_qTimer;

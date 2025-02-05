@@ -36,8 +36,9 @@
 #include <videodev2_exynos_camera.h>
 #include <ion/ion.h>
 #include <ui/GraphicBuffer.h>
+#include <GrallocWrapper.h>
 
-#include "gralloc_priv.h"
+#include "gralloc1_priv.h"
 #include "exynos_format.h"
 
 #include "ExynosCameraConfig.h"
@@ -46,6 +47,10 @@
 #include "ExynosCameraAutoTimer.h"
 
 namespace android {
+namespace GrallocWrapper {
+    class Mapper;
+    class Allocator;
+}
 
 /* #define EXYNOS_CAMERA_MEMORY_TRACE */
 
@@ -205,7 +210,7 @@ public:
 
 private:
     preview_stream_ops              *m_allocator;
-    static gralloc_module_t const   *m_grallocHal;
+    GrallocWrapper::Mapper          *m_grallocMapper;
     int32_t                          m_minUndequeueBufferMargin;
 
     int                              m_halPixelFormat;
@@ -229,7 +234,7 @@ public:
 
 private:
     camera3_stream_t                *m_allocator;
-    static gralloc_module_t const   *m_grallocHal;
+    GrallocWrapper::Mapper          *m_grallocMapper;
 };
 }
 #endif

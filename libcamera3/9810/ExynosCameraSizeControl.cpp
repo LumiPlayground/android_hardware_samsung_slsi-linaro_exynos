@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraSizeControl"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraSizeControl.h"
 
@@ -30,6 +30,7 @@ namespace android {
    In this case(If this function returns true), 1/2 downscaling
    will be happend in MCSC output
 */
+#if 0
 static bool checkNeed16Downscaling(const ExynosRect* srcRect, const ExynosCameraParameters *params) {
     int minYuvW, minYuvH;
 
@@ -58,12 +59,12 @@ static bool checkNeed16Downscaling(const ExynosRect* srcRect, const ExynosCamera
         return false;
     }
 }
+#endif
 
 void updateNodeGroupInfo(
         int pipeId,
         ExynosCameraParameters *params,
-        camera2_node_group *node_group_info,
-        enum FRAME_FACTORY_TYPE factoryType)
+        camera2_node_group *node_group_info)
 {
     status_t ret = NO_ERROR;
     uint32_t perframePosition = 0;
@@ -74,9 +75,6 @@ void updateNodeGroupInfo(
 #ifdef SUPPORT_DEPTH_MAP
     ExynosRect depthMapSize;
 #endif // SUPPORT_DEPTH_MAP
-#ifdef SUPPORT_ME
-    ExynosRect meSize;
-#endif
     ExynosRect bnsSize;
     ExynosRect bayerCropSize;
     ExynosRect bdsSize;
@@ -87,8 +85,6 @@ void updateNodeGroupInfo(
     ExynosRect ratioCropSize;
     ExynosRect dsInputSize;
     ExynosRect mcscSize[6];
-    int mcscSizeIndex;
-    int mcscRefIndex;
 
     if (isReprocessing == false) {
         params->getHwSensorSize(&sensorSize.w,
@@ -97,9 +93,7 @@ void updateNodeGroupInfo(
         params->getDepthMapSize(&depthMapSize.w,
                             &depthMapSize.h);
 #endif // SUPPORT_DEPTH_MAP
-#ifdef SUPPORT_ME
-        params->getMeSize(&meSize.w, &meSize.h);
-#endif
+
         params->getPreviewBayerCropSize(&bnsSize, &bayerCropSize);
         params->getPreviewBdsSize(&bdsSize);
 
@@ -156,6 +150,7 @@ void updateNodeGroupInfo(
         for (int i = ExynosCameraParameters::YUV_STALL_0;
              i < ExynosCameraParameters::YUV_STALL_MAX; i++) {
             int yuvIndex = i % ExynosCameraParameters::YUV_MAX;
+
             params->getYuvVendorSize(&mcscSize[yuvIndex].w, &mcscSize[yuvIndex].h, i, ispSize);
         }
 
@@ -304,6 +299,16 @@ void updateNodeGroupInfo(
         case FIMC_IS_VIDEO_SS3VC1_NUM:
         case FIMC_IS_VIDEO_SS3VC2_NUM:
         case FIMC_IS_VIDEO_SS3VC3_NUM:
+#ifdef SAMSUNG_QUICK_SWITCH
+        case FIMC_IS_VIDEO_SS4VC0_NUM:
+        case FIMC_IS_VIDEO_SS4VC1_NUM:
+        case FIMC_IS_VIDEO_SS4VC2_NUM:
+        case FIMC_IS_VIDEO_SS4VC3_NUM:
+        case FIMC_IS_VIDEO_SS5VC0_NUM:
+        case FIMC_IS_VIDEO_SS5VC1_NUM:
+        case FIMC_IS_VIDEO_SS5VC2_NUM:
+        case FIMC_IS_VIDEO_SS5VC3_NUM:
+#endif
             /* SENSOR : [X] : SENSOR output size for zsl bayer */
             setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, sensorSize.w, sensorSize.h);
             perframePosition++;
@@ -323,23 +328,67 @@ void updateNodeGroupInfo(
             break;
         case FIMC_IS_VIDEO_31C_NUM:
             /* 3AC Reprocessing : [X] : 3AX Reprocessing input size */
-#ifdef USE_DUAL_CAMERA
-            setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, bayerCropSize.w, bayerCropSize.h);
-#else
-            if (isReprocessing)
+#ifdef USE_3AA_CROP_AFTER_BDS
+            if (isReprocessing == true)
                 setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, sensorSize.w, sensorSize.h);
             else
-                setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, bayerCropSize.w, bayerCropSize.h);
 #endif
+                setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, bayerCropSize.w, bayerCropSize.h);
+
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_30P_NUM:
         case FIMC_IS_VIDEO_31P_NUM:
-            /* 3AP : [down-scale] : BDS */
-            setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
-                                                    0, 0, bayerCropSize.w, bayerCropSize.h,
-                                                    0, 0, bdsSize.w, bdsSize.h);
-            perframePosition++;
+            {
+                ExynosRect inputSize;
+                ExynosRect outputSize;
+                enum HW_CONNECTION_MODE mode;
+
+#ifdef USE_3AA_CROP_AFTER_BDS
+                /* find 3AA input connection mode */
+                if (isReprocessing == true) {
+                    if (params->getUsePureBayerReprocessing() == true)
+                        mode = HW_CONNECTION_MODE_M2M;
+                    else
+                        mode = HW_CONNECTION_MODE_NONE;
+                } else {
+                    mode = params->getHwConnectionMode(PIPE_FLITE, PIPE_3AA);
+                }
+#endif
+
+                switch (mode) {
+#ifdef USE_3AA_CROP_AFTER_BDS
+                /* M2M Case */
+                case HW_CONNECTION_MODE_M2M:
+                    /* use Output BCrop */
+                    inputSize.x = 0;
+                    inputSize.y = 0;
+                    inputSize.w = sensorSize.w;
+                    inputSize.h = sensorSize.h;
+                    outputSize.x = bayerCropSize.x;
+                    outputSize.y = bayerCropSize.y;
+                    outputSize.w = bayerCropSize.w;
+                    outputSize.h = bayerCropSize.h;
+                    break;
+#endif
+                /* Other Case */
+                default:
+                    inputSize.x = 0;
+                    inputSize.y = 0;
+                    inputSize.w = bayerCropSize.w;
+                    inputSize.h = bayerCropSize.h;
+                    outputSize.x = 0;
+                    outputSize.y = 0;
+                    outputSize.w = bdsSize.w;
+                    outputSize.h = bdsSize.h;
+                    break;
+                }
+                /* 3AP : [down-scale] : BDS */
+                setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
+                        inputSize.x, inputSize.y, inputSize.w, inputSize.h,
+                        outputSize.x, outputSize.y, outputSize.w, outputSize.h);
+                perframePosition++;
+            }
             break;
         case FIMC_IS_VIDEO_I0C_NUM:
         case FIMC_IS_VIDEO_I1C_NUM:
@@ -353,13 +402,6 @@ void updateNodeGroupInfo(
             setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, ispSize.w, ispSize.h);
             perframePosition++;
             break;
-#ifdef SUPPORT_ME
-        case FIMC_IS_VIDEO_ME0C_NUM:
-            /* ME0C : [X] : fixed size */
-            setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, meSize.w, meSize.h);
-            perframePosition++;
-            break;
-#endif
 #ifdef USE_DUAL_CAMERA
         case FIMC_IS_VIDEO_DCP0S_NUM:
             /* DCP1S : [X] : DCP0 input size */
@@ -429,27 +471,19 @@ void updateNodeGroupInfo(
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_M1P_NUM:
-            mcscSizeIndex = 1;
-
-            /* depending on using jpeg reprocessing factory */
-            if (factoryType == FRAME_FACTORY_TYPE_JPEG_REPROCESSING &&
-                    params->getNumOfMcscOutputPorts() <= 3)
-                mcscSizeIndex = 3;
-
             /* MCSC 1 : [crop/scale] : Preview Callback */
-            if (mcscSize[mcscSizeIndex].w == 0 || mcscSize[mcscSizeIndex].h == 0) {
-                CLOGV2("MCSC[%d] width or height values is 0, (%dx%d)",
-                        mcscSizeIndex,
-                        mcscSize[mcscSizeIndex].w, mcscSize[mcscSizeIndex].h);
-                ratioCropSize = mcscSize[mcscSizeIndex];
+            if (mcscSize[1].w == 0 || mcscSize[1].h == 0) {
+                CLOGV2("MCSC width or height values is 0, (%dx%d)",
+                        mcscSize[1].w, mcscSize[1].h);
+                ratioCropSize = mcscSize[1];
             } else {
                 ret = getCropRectAlign(
-                        mcscInputSize.w, mcscInputSize.h, mcscSize[mcscSizeIndex].w, mcscSize[mcscSizeIndex].h,
+                        mcscInputSize.w, mcscInputSize.h, mcscSize[1].w, mcscSize[1].h,
                         &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
                         CAMERA_MCSC_ALIGN, 2, 1.0f);
                 if (ret != NO_ERROR) {
                     CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC1 out_size %dx%d",
-                             mcscInputSize.w, mcscInputSize.h, mcscSize[mcscSizeIndex].w, mcscSize[mcscSizeIndex].h);
+                             mcscInputSize.w, mcscInputSize.h, mcscSize[1].w, mcscSize[1].h);
 
                     ratioCropSize.x = 0;
                     ratioCropSize.y = 0;
@@ -462,31 +496,23 @@ void updateNodeGroupInfo(
                                                     ratioCropSize.x, ratioCropSize.y,
                                                     ratioCropSize.w, ratioCropSize.h,
                                                     0, 0,
-                                                    mcscSize[mcscSizeIndex].w, mcscSize[mcscSizeIndex].h);
+                                                    mcscSize[1].w, mcscSize[1].h);
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_M2P_NUM:
-            mcscSizeIndex = 2;
-
-            /* depending on using jpeg reprocessing factory */
-            if (factoryType == FRAME_FACTORY_TYPE_JPEG_REPROCESSING &&
-                    params->getNumOfMcscOutputPorts() <= 3)
-                mcscSizeIndex = 4;
-
             /* MCSC 2 : [crop/scale] : Recording */
-            if (mcscSize[mcscSizeIndex].w == 0 || mcscSize[mcscSizeIndex].h == 0) {
-                CLOGV2("MCSC[%d] width or height values is 0, (%dx%d)",
-                        mcscSizeIndex,
-                        mcscSize[mcscSizeIndex].w, mcscSize[mcscSizeIndex].h);
-                ratioCropSize = mcscSize[mcscSizeIndex];
+            if (mcscSize[2].w == 0 || mcscSize[2].h == 0) {
+                CLOGV2("MCSC width or height values is 0, (%dx%d)",
+                        mcscSize[2].w, mcscSize[2].h);
+                ratioCropSize = mcscSize[2];
             } else {
                 ret = getCropRectAlign(
-                        mcscInputSize.w, mcscInputSize.h, mcscSize[mcscSizeIndex].w, mcscSize[mcscSizeIndex].h,
+                        mcscInputSize.w, mcscInputSize.h, mcscSize[2].w, mcscSize[2].h,
                         &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
                         CAMERA_MCSC_ALIGN, 2, 1.0f);
                 if (ret != NO_ERROR) {
                     CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC2 out_size %dx%d",
-                             mcscInputSize.w, mcscInputSize.h, mcscSize[mcscSizeIndex].w, mcscSize[mcscSizeIndex].h);
+                             mcscInputSize.w, mcscInputSize.h, mcscSize[2].w, mcscSize[2].h);
 
                     ratioCropSize.x = 0;
                     ratioCropSize.y = 0;
@@ -499,42 +525,28 @@ void updateNodeGroupInfo(
                                                     ratioCropSize.x, ratioCropSize.y,
                                                     ratioCropSize.w, ratioCropSize.h,
                                                     0, 0,
-                                                    mcscSize[mcscSizeIndex].w, mcscSize[mcscSizeIndex].h);
+                                                    mcscSize[2].w, mcscSize[2].h);
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_M3P_NUM:
-            /*
-             * change the reference size depending on MCSC output ports.
-             * If mcsc output ports was 3, Ds port should be M3P.
-             */
-            if (params->getNumOfMcscOutputPorts() <= 3)
-                mcscRefIndex = 5;
-            else
-                mcscRefIndex = 3;
-
             /* MCSC 3 : [crop/scale] */
-            if (mcscSize[mcscRefIndex].w == 0 || mcscSize[mcscRefIndex].h == 0) {
+            if (mcscSize[3].w == 0 || mcscSize[3].h == 0) {
                 CLOGV2("MCSC width or height values is 0, (%dx%d)",
-                        mcscSize[mcscRefIndex].w, mcscSize[mcscRefIndex].h);
-                ratioCropSize = mcscSize[mcscRefIndex];
+                        mcscSize[3].w, mcscSize[3].h);
+                ratioCropSize = mcscSize[3];
             } else {
                 ret = getCropRectAlign(
-                        mcscInputSize.w, mcscInputSize.h, mcscSize[mcscRefIndex].w, mcscSize[mcscRefIndex].h,
+                        mcscInputSize.w, mcscInputSize.h, mcscSize[3].w, mcscSize[3].h,
                         &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
                         CAMERA_MCSC_ALIGN, 2, 1.0f);
                 if (ret != NO_ERROR) {
-                    CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC[3] out_size %dx%d",
-                               mcscInputSize.w, mcscInputSize.h, mcscSize[mcscRefIndex].w, mcscSize[mcscRefIndex].h);
+                    CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC3 out_size %dx%d",
+                               mcscInputSize.w, mcscInputSize.h, mcscSize[3].w, mcscSize[3].h);
 
                     ratioCropSize.x = 0;
                     ratioCropSize.y = 0;
-                    if (params->getNumOfMcscOutputPorts() <= 3) {
-                        ratioCropSize.w = dsInputSize.w;
-                        ratioCropSize.h = dsInputSize.h;
-                    } else {
-                        ratioCropSize.w = mcscInputSize.w;
-                        ratioCropSize.h = mcscInputSize.h;
-                    }
+                    ratioCropSize.w = mcscInputSize.w;
+                    ratioCropSize.h = mcscInputSize.h;
                 }
             }
 
@@ -542,7 +554,7 @@ void updateNodeGroupInfo(
                                                     ratioCropSize.x, ratioCropSize.y,
                                                     ratioCropSize.w, ratioCropSize.h,
                                                     0, 0,
-                                                    mcscSize[mcscRefIndex].w, mcscSize[mcscRefIndex].h);
+                                                    mcscSize[3].w, mcscSize[3].h);
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_M4P_NUM:

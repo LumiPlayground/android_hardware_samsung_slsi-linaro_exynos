@@ -63,8 +63,8 @@ public:
     virtual status_t          getStream(camera3_stream_t **stream);
     virtual status_t          setID(int id);
     virtual status_t          getID(int *id);
-    virtual status_t          setFormat(int format);
-    virtual status_t          getFormat(int *format);
+    virtual status_t          setFormat(int format, camera_pixel_size pixelSize = CAMERA_PIXEL_SIZE_8BIT);
+    virtual status_t          getFormat(int *format, camera_pixel_size *pixelSize);
     virtual status_t          setPlaneCount(int planes);
     virtual status_t          getPlaneCount(int *planes);
     virtual status_t          setOutputPortId(int id);
@@ -84,6 +84,7 @@ private:
     camera3_stream_t            *m_stream;
     int                         m_id;
     int                         m_actualFormat;
+    camera_pixel_size           m_actualPixelSize;
     int                         m_planeCount;
     int                         m_outputPortId;
     EXYNOS_STREAM::STATE        m_registerStream;

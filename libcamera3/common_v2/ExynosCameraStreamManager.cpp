@@ -38,6 +38,7 @@ status_t ExynosCameraStream::m_init()
     m_stream = NULL;
     m_id = -1;
     m_actualFormat = -1;
+    m_actualPixelSize = CAMERA_PIXEL_SIZE_8BIT;
     m_planeCount = -1;
     m_outputPortId = -1;
     m_registerStream = EXYNOS_STREAM::HAL_STREAM_STS_INIT;
@@ -52,6 +53,7 @@ status_t ExynosCameraStream::m_deinit()
     m_stream = NULL;
     m_id = -2;
     m_actualFormat = -2;
+    m_actualPixelSize = CAMERA_PIXEL_SIZE_8BIT;
     m_planeCount = -2;
     m_outputPortId = -2;
     m_registerStream = EXYNOS_STREAM::HAL_STREAM_STS_INIT;
@@ -114,28 +116,30 @@ status_t ExynosCameraStream::getID(int *id)
     return ret;
 }
 
-status_t ExynosCameraStream::setFormat(int format)
+status_t ExynosCameraStream::setFormat(int format, camera_pixel_size pixelSize)
 {
     status_t ret = NO_ERROR;
 
     if (format < 0) {
-        ALOGE("ERR(%s[%d]):setFormat invalid value(%d)", __FUNCTION__, __LINE__, format);
+        ALOGE("ERR(%s[%d]):setFormat invalid value (%d)(%d)", __FUNCTION__, __LINE__, format, pixelSize);
         ret = INVALID_OPERATION;
     } else {
         m_actualFormat = format;
+        m_actualPixelSize = pixelSize;
     }
     return ret;
 }
 
-status_t ExynosCameraStream::getFormat(int *format)
+status_t ExynosCameraStream::getFormat(int *format, camera_pixel_size *pixelSize)
 {
     status_t ret = NO_ERROR;
 
     if (m_actualFormat < 0) {
-        ALOGE("ERR(%s[%d]):getFormat invalid value(%d)", __FUNCTION__, __LINE__, m_actualFormat);
+        ALOGE("ERR(%s[%d]):getFormat invalid value(%d)(%d)", __FUNCTION__, __LINE__, m_actualFormat, m_actualPixelSize);
         ret = INVALID_OPERATION;
     } else {
         *format = m_actualFormat;
+        *pixelSize = m_actualPixelSize;
     }
     return ret;
 }

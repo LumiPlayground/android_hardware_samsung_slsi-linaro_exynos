@@ -88,18 +88,18 @@ public:
         init();
     }
 
-    ExynosCameraPlugIn(int cameraId, int pipeId, int scenario)
+    ExynosCameraPlugIn(int cameraId, int pipeId, int mode)
     {
         m_cameraId = cameraId;
         m_pipeId  = pipeId;
-        m_sceanrio = scenario;
+        m_mode = (PLUGIN::MODE)mode;
 
         init();
     }
 
     ExynosCameraPlugIn(int cameraId, int pipeId)
     {
-        ExynosCameraPlugIn(cameraId, pipeId, 0);
+        ExynosCameraPlugIn(cameraId, pipeId, PLUGIN::MODE::BASE);
     }
 
     virtual ~ExynosCameraPlugIn();
@@ -122,7 +122,6 @@ public:
     virtual status_t query(Map_t *map) final;
 
     virtual int        getPipeId(void) final { return m_pipeId; };
-    virtual int        getLibInfo(void) final { return m_sceanrio; };
     virtual enum state getState(void) final { return m_state; };
 
 protected:
@@ -156,7 +155,7 @@ protected:
     int     m_pipeId;
     char    m_name[PLUGIN_NAME_STR_SIZE];
     enum state m_state;
-    int     m_sceanrio;
+    PLUGIN::MODE m_mode;
 };
 }
 #endif //EXYNOS_CAMERA_PLUGIN_H

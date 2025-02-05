@@ -264,7 +264,7 @@ public:
     virtual status_t        setupPipe(camera_pipe_info_t *pipeInfos, int32_t *sensorIds = NULL);
     virtual status_t        setupPipe(camera_pipe_info_t *pipeInfos, int32_t *sensorIds, int32_t *ispSensorIds);
 #ifdef USE_SLSI_PLUGIN
-    virtual status_t        setupPipe(Map_t *map) {
+    virtual status_t        setupPipe(__unused Map_t *map) {
         android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Not supported API. use PlugInPipe, assert!!!!", __FUNCTION__, __LINE__);
         return NO_ERROR;
     };
@@ -297,6 +297,7 @@ public:
     virtual status_t        setControl(int cid, int value);
     virtual status_t        setControl(int cid, int value, enum NODE_TYPE nodeType);
     virtual status_t        getControl(int cid, int *value);
+    virtual status_t        getControl(int cid, int *value, enum NODE_TYPE nodeType);
     virtual status_t        setExtControl(struct v4l2_ext_controls *ctrl);
     virtual status_t        setParam(struct v4l2_streamparm streamParam);
 
@@ -311,6 +312,11 @@ public:
     virtual uint32_t        getPipeId(void);
     virtual status_t        setPipeId(enum NODE_TYPE nodeType, uint32_t id);
     virtual int             getPipeId(enum NODE_TYPE nodeType);
+    virtual status_t        setPipeStreamLeader(bool);
+    virtual status_t        setPrevPipeID(int);
+    virtual bool            getPipeStreamLeader(void);
+    virtual int             getPrevPipeID(void);
+
 
     virtual status_t        setPipeName(const char *pipeName);
     virtual char           *getPipeName(void);
@@ -368,6 +374,7 @@ public:
 #endif
 
     virtual status_t        setDeviceInfo(__unused camera_device_info_t *deviceInfo) { return NO_ERROR; }
+    virtual status_t        setUseLatestFrame(__unused bool flag) { return NO_ERROR; }
 
 protected:
     virtual bool            m_mainThreadFunc(void);
@@ -471,6 +478,9 @@ protected:
     int                         m_lastDstFrameCount;
 
     int                         m_timeLogCount;
+    int                         m_prevPipeId;
+    bool                        m_flagStreamLeader;
+
 
 protected:
     typedef enum pipe_state {

@@ -59,6 +59,53 @@ enum PIPE_POSITION {
     DST_PIPE
 };
 
+enum NODE_TYPE {
+    INVALID_NODE        = -1,
+    OUTPUT_NODE         = 0,    /* Node for output  device */
+    OUTPUT_NODE_1       = OUTPUT_NODE,    /* Node for output  device */
+    OUTPUT_NODE_2,
+    OUTPUT_NODE_3,
+    OUTPUT_NODE_4,
+    OUTPUT_NODE_5,
+    MAX_OUTPUT_NODE,
+    CAPTURE_NODE,               /* deprecated enum */
+    SUB_NODE,                   /* deprecated enum */
+
+    /* MCPipe CAPTURE NODE */
+    CAPTURE_NODE_1 = CAPTURE_NODE, /* MCPipe use CAPTURE_NODE_X. so, this start from OUTPUT_NODE + 1 */
+    CAPTURE_NODE_2,
+    CAPTURE_NODE_3,
+    CAPTURE_NODE_4,
+    CAPTURE_NODE_5,
+    CAPTURE_NODE_6,
+    CAPTURE_NODE_7,
+    CAPTURE_NODE_8,
+    CAPTURE_NODE_9,
+    CAPTURE_NODE_10,
+    CAPTURE_NODE_11,
+    CAPTURE_NODE_12,
+    CAPTURE_NODE_13,
+    CAPTURE_NODE_14,
+    CAPTURE_NODE_15,
+    CAPTURE_NODE_16,
+    CAPTURE_NODE_17,
+    CAPTURE_NODE_18,
+    MAX_CAPTURE_NODE,
+
+    /* OTF NODE */
+    OTF_NODE_BASE,
+    OTF_NODE_1,
+    OTF_NODE_2,
+    OTF_NODE_3,
+    OTF_NODE_4,
+    OTF_NODE_5,
+    OTF_NODE_6,
+    OTF_NODE_7,
+    MAX_OTF_NODE,
+
+    MAX_NODE
+};
+
 typedef enum perframe_node_type {
     PERFRAME_NODE_TYPE_NONE        = 0,
     PERFRAME_NODE_TYPE_LEADER      = 1,
@@ -212,7 +259,7 @@ public:
         m_init();
 
         m_cameraId = cameraId;
-        m_reprocessing = isReprocessing;
+        m_reprocessing = isReprocessing ? 1 : 0;
         m_oneShotMode = isReprocessing;
 
         if (nodeNums) {
@@ -365,6 +412,7 @@ protected:
             bool            m_checkValidFrameCount(struct camera2_stream *stream);
     virtual status_t        m_handleInvalidFrame(int index, ExynosCameraFrameSP_sptr_t newFrame, ExynosCameraBuffer *buffer);
     virtual bool            m_checkLeaderNode(int sensorId);
+    virtual bool            m_isReprocessing(void);
     virtual bool            m_checkThreadLoop(void);
 
 private:
@@ -404,7 +452,7 @@ protected:
     /* Node for capture Interface : destination port */
     int                         m_numCaptureBuf;
 
-    bool                        m_reprocessing;
+    uint32_t                    m_reprocessing;
     bool                        m_oneShotMode;
     bool                        m_flagStartPipe;
     bool                        m_flagTryStop;

@@ -24,7 +24,7 @@
 
 namespace android {
 
-#define MAX_NUM_OF_CAMERA (5)
+#define MAX_NUM_OF_CAMERA (4)
 
 /*
  * callback hooking class

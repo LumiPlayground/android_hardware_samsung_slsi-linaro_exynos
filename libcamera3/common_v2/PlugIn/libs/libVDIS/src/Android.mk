@@ -3,11 +3,8 @@
 LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
-LOCAL_PRELINK_MODULE := false
-LOCAL_PROPRIETARY_MODULE := true
-
 LOCAL_SRC_FILES := libvdis.cpp
-LOCAL_SHARED_LIBRARIES := libutils libcutils liblog libexynosutils
+LOCAL_SHARED_LIBRARIES := libutils libcutils liblog libexynosutils libexynoscamera_plugin_utils
 
 LOCAL_MODULE := libvdis
 

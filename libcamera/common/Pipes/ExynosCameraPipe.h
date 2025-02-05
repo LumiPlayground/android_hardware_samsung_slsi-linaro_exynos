@@ -90,6 +90,10 @@ public:
 
     virtual status_t        create(int32_t *sensorIds);
     virtual status_t        destroy(void);
+#ifdef SAMSUNG_COMPANION
+    virtual status_t        precreate(int32_t *sensorIds);
+    virtual status_t        postcreate(int32_t *sensorIds);
+#endif
 
     virtual status_t        setupPipe(camera_pipe_info_t *pipeInfos);
     virtual status_t        prepare(void);

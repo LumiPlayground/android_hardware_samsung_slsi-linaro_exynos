@@ -71,7 +71,7 @@ public:
     virtual status_t        setExtControl(struct v4l2_ext_controls *ctrl);
     virtual status_t        setParam(struct v4l2_streamparm streamParam);
 
-    virtual status_t        pushFrame(ExynosCameraFrameSP_sptr_t newFrame);
+    virtual status_t        pushFrame(ExynosCameraFrameSP_dptr_t newFrame);
 
     virtual status_t        instantOn(int32_t numFrames);
     virtual status_t        instantOff(void);
@@ -201,12 +201,6 @@ protected:
 
     status_t                m_checkPolling(ExynosCameraNode *node);
 
-#ifdef USE_DUAL_CAMERA
-    virtual void            m_setMaster3a(ExynosCameraFrameSP_sptr_t frame, struct camera2_shot_ext *shot_ext);
-    virtual enum DUAL_OPERATION_MODE  m_getMaster3a(struct camera2_shot_ext *shot_ext, ExynosCameraFrameSP_sptr_t frame);
-    virtual void            m_checkMaster3a(ExynosCameraFrameSP_sptr_t frame, struct camera2_shot_ext *shot_ext);
-#endif
-
 private:
     void                    m_init(camera_device_info_t *deviceInfo);
 
@@ -248,6 +242,9 @@ protected:
     void                        m_lockSerializeOperation(enum pipeline pipeId);
     void                        m_unlockSerializeOperation(enum pipeline pipeId);
 #endif
+#ifdef SAMSUNG_JQ
+    unsigned char               m_qtable[128];
+#endif
 
     int                         m_sensorNodeIndex;
 #ifdef SUPPORT_DEPTH_MAP
@@ -260,12 +257,6 @@ protected:
 
     int                         m_lastFrameCount;
     int                         m_lastMetaFrameCount;
-
-    enum aa_cameraMode          m_oldCameraMode2Meta;
-    enum aa_sensorPlace         m_oldSensorPlace2Meta;
-
-    enum aa_cameraMode          m_oldMeta2CameraMode;
-    enum aa_sensorPlace         m_oldMeta2SensorPlace;
 };
 
 }; /* namespace android */

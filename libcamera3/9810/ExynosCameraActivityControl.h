@@ -18,7 +18,7 @@
 #ifndef EXYNOS_CAMERA_ACTIVITY_CONTROL_H
 #define EXYNOS_CAMERA_ACTIVITY_CONTROL_H
 
-#include <cutils/log.h>
+#include <log/log.h>
 #include <utils/threads.h>
 #include <utils/RefBase.h>
 #include <utils/String8.h>
@@ -51,6 +51,11 @@ public:
     bool            destroy(void);
     /* Check if the instance was created */
     bool            flagCreate(void);
+
+#ifdef OIS_CAPTURE
+    /* Sets OIS mode */
+    void            setOISCaptureMode(bool oisMode);
+#endif
 
     void            activityBeforeExecFunc(int pipeId, void *args);
     void            activityAfterExecFunc(int pipeId, void *args);

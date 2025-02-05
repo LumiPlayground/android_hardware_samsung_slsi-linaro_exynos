@@ -83,6 +83,77 @@ status_t ExynosCameraPipe::create(int32_t *sensorIds)
     return NO_ERROR;
 }
 
+#ifdef SAMSUNG_COMPANION
+status_t ExynosCameraPipe::precreate(int32_t *sensorIds)
+{
+    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+    int ret = 0;
+
+    for (int i = 0; i < MAX_NODE; i++) {
+        if (sensorIds) {
+            CLOGD("DEBUG(%s[%d]):set new sensorIds[%d] : %d", __FUNCTION__, __LINE__, i, sensorIds[i]);
+            m_sensorIds[i] = sensorIds[i];
+        } else {
+            m_sensorIds[i] = -1;
+        }
+    }
+
+    if (m_flagValidInt(m_nodeNum[OUTPUT_NODE]) == true) {
+        m_node[OUTPUT_NODE] = new ExynosCameraNode();
+        ret = m_node[OUTPUT_NODE]->create("main", m_cameraId);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]): OUTPUT_NODE create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            return ret;
+        }
+
+        ret = m_node[OUTPUT_NODE]->open(FIMC_IS_VIDEO_SS0_NUM);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]): OUTPUT_NODE open fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            return ret;
+        }
+        CLOGD("DEBUG(%s):Node(%d) opened", __FUNCTION__, FIMC_IS_VIDEO_SS0_NUM);
+    }
+
+    /* mainNode is OUTPUT_NODE */
+    m_mainNodeNum = OUTPUT_NODE;
+    m_mainNode = m_node[m_mainNodeNum];
+
+    CLOGI("INFO(%s[%d]):precreate() is succeed (%d) prepare (%d)", __FUNCTION__, __LINE__, getPipeId(), m_prepareBufferCount);
+
+    return NO_ERROR;
+}
+
+status_t ExynosCameraPipe::postcreate(int32_t *sensorIds)
+{
+    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+    int ret = 0;
+
+    for (int i = 0; i < MAX_NODE; i++) {
+        if (sensorIds) {
+            CLOGD("DEBUG(%s[%d]):set new sensorIds[%d] : %d", __FUNCTION__, __LINE__, i, sensorIds[i]);
+            m_sensorIds[i] = sensorIds[i];
+        } else {
+            m_sensorIds[i] = -1;
+        }
+    }
+
+    ret = m_setInput(m_node, m_nodeNum, m_sensorIds);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]): m_setInput fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+
+    m_mainThread = ExynosCameraThreadFactory::createThread(this, &ExynosCameraPipe::m_mainThreadFunc, "mainThread");
+
+    m_inputFrameQ = new frame_queue_t;
+
+    m_prepareBufferCount = 0;
+    CLOGI("INFO(%s[%d]):postcreate() is succeed (%d) prepare (%d)", __FUNCTION__, __LINE__, getPipeId(), m_prepareBufferCount);
+
+    return NO_ERROR;
+}
+#endif
+
 status_t ExynosCameraPipe::destroy(void)
 {
     CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
@@ -1465,6 +1536,20 @@ status_t ExynosCameraPipe::m_setNodeInfo(ExynosCameraNode *node, camera_pipe_inf
         node->setBufferType(pipeInfos->bufInfo.count, (enum v4l2_buf_type)pipeInfos->bufInfo.type, (enum v4l2_memory)pipeInfos->bufInfo.memory);
 
         if (flagValidSetFormatInfo == true) {
+#ifdef SAMSUNG_DNG
+            if (m_parameters->getDNGCaptureModeOn() && getPipeId() == PIPE_FLITE) {
+                CLOGV("DEBUG(%s[%d]): DNG flite node->setFormat() getPipeId()(%d)", __FUNCTION__, __LINE__,getPipeId());
+                if (node->setFormat() != NO_ERROR) {
+                    CLOGE("ERR(%s[%d]): node->setFormat() fail", __FUNCTION__, __LINE__);
+                    return INVALID_OPERATION;
+                }
+            } else {
+                if (node->setFormat(pipeInfos->bytesPerPlane) != NO_ERROR) {
+                    CLOGE("ERR(%s[%d]): node->setFormat() fail", __FUNCTION__, __LINE__);
+                    return INVALID_OPERATION;
+                }
+            }
+#else
 #ifdef DEBUG_RAWDUMP
             if (m_parameters->checkBayerDumpEnable() && flagBayer == true) {
                 //bytesPerLine[0] = (maxW + 16) * 2;
@@ -1480,6 +1565,7 @@ status_t ExynosCameraPipe::m_setNodeInfo(ExynosCameraNode *node, camera_pipe_inf
                     return INVALID_OPERATION;
                 }
             }
+#endif
         }
 
         node->getBufferType(&currentBufferCount, &currentBufType, &currentMemType);

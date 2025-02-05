@@ -78,6 +78,8 @@ int getSensorId(int camId)
     else if (camId == CAMERA_ID_BACK_1)
         curSensorId = &g_rear2SensorId;
 #endif
+    else if (camId == CAMERA_ID_SECURE)
+        curSensorId = &g_secureSensorId;
     else
         curSensorId = &g_frontSensorId;
 
@@ -104,6 +106,8 @@ int getSensorId(int camId)
         sensorId = FRONT_1_CAMERA_SENSOR_NAME;
 #endif
 #endif
+    } else if (camId == CAMERA_ID_SECURE) {
+        sensorId = SECURE_CAMERA_SENSOR_NAME;
     } else {
         ALOGE("ERR(%s):Unknown camera ID(%d)", __FUNCTION__, camId);
     }
@@ -247,6 +251,7 @@ ExynosCameraSensorInfoBase::ExynosCameraSensorInfoBase()
     videoSizeLutHighSpeed60Max  = 0;
     videoSizeLutHighSpeed120Max = 0;
     videoSizeLutHighSpeed240Max = 0;
+    videoSizeLutHighSpeed480Max = 0;
     vtcallSizeLutMax            = 0;
     fastAeStableLutMax          = 0;
     depthMapSizeLutMax          = 0;
@@ -260,11 +265,17 @@ ExynosCameraSensorInfoBase::ExynosCameraSensorInfoBase()
     videoSizeLutHighSpeed60     = NULL;
     videoSizeLutHighSpeed120    = NULL;
     videoSizeLutHighSpeed240    = NULL;
+    videoSizeLutHighSpeed480    = NULL;
     vtcallSizeLut               = NULL;
     fastAeStableLut             = NULL;
     depthMapSizeLut             = NULL;
 
     sizeTableSupport      = false;
+
+#ifdef SAMSUNG_SSM
+    videoSizeLutSSMMax         = 0;
+    videoSizeLutSSM            = NULL;
+#endif
 
     /*
     ** Camera HAL 3.2 Static Metadatas
@@ -355,9 +366,11 @@ ExynosCameraSensorInfoBase::ExynosCameraSensorInfoBase()
     requestKeys = NULL;
     resultKeys = NULL;
     characteristicsKeys = NULL;
+    sessionKeys = NULL;
     requestKeysLength = 0;
     resultKeysLength = 0;
     characteristicsKeysLength = 0;
+    sessionKeysLength = 0;
 
     /* Android Scaler Static Metadata */
     zoomSupport = false;
@@ -474,6 +487,23 @@ ExynosCameraSensorInfoBase::ExynosCameraSensorInfoBase()
 
     /* Samsung Vendor Feature */
     /* Samsung Vendor Control Metadata */
+#ifdef SAMSUNG_CONTROL_METERING
+    vendorMeteringModes = NULL;
+    vendorMeteringModesLength = 0;
+#endif
+#ifdef SAMSUNG_RTHDR
+    vendorHdrRange[MIN] = 0;
+    vendorHdrRange[MAX] = 0;
+    vendorHdrModes = NULL;
+    vendorHdrModesLength = 0;
+#endif
+#ifdef SAMSUNG_PAF
+    vendorPafAvailable = 0;
+#endif
+#ifdef SAMSUNG_OIS
+    vendorOISModes = NULL;
+    vendorOISModesLength = 0;
+#endif
     vendorAwbModes = NULL;
     vendorAwbModesLength = 0;
     vendorWbColorTemp = 0;
@@ -486,6 +516,11 @@ ExynosCameraSensorInfoBase::ExynosCameraSensorInfoBase()
     vendorFlipModes = NULL;
     vendorFlipModesLength = 0;
 
+#ifdef SUPPORT_MULTI_AF
+    vendorMultiAfAvailable = NULL;
+    vendorMultiAfAvailableLength = 0;
+#endif
+
     /* Samsung Vendor Feature Available & Support */
     sceneHDRSupport = false;
     screenFlashAvailable = false;
@@ -493,9 +528,13 @@ ExynosCameraSensorInfoBase::ExynosCameraSensorInfoBase()
     fixedFaceFocusAvailable = false;
     factoryDramTestCount = 0;
 
+#ifdef SAMSUNG_TN_FEATURE
+    availableBasicFeaturesListLength = ARRAY_LENGTH(AVAILABLE_VENDOR_BASIC_FEATURES);
+    availableBasicFeaturesList = AVAILABLE_VENDOR_BASIC_FEATURES;
+#else
     availableBasicFeaturesListLength = 0;
     availableBasicFeaturesList = NULL;
-
+#endif
     availableOptionalFeaturesListLength = 0;
     availableOptionalFeaturesList = NULL;
 
@@ -743,6 +782,10 @@ ExynosCameraSensor2L7Base::ExynosCameraSensor2L7Base() : ExynosCameraSensorInfoB
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL; //0
 
+#ifdef SAMSUNG_TN_FEATURE
+    availableVideoListMax  = sizeof(S5K2L7_VIDEO_LIST) / (sizeof(int) * 7);
+    availableVideoList     = S5K2L7_VIDEO_LIST;
+#endif
     /* END of Camera HAL 3.2 Static Metadatas */
 };
 
@@ -980,6 +1023,10 @@ ExynosCameraSensor2P8Base::ExynosCameraSensor2P8Base() : ExynosCameraSensorInfoB
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL; //0
 
+#ifdef SAMSUNG_TN_FEATURE
+    availableVideoListMax   = sizeof(S5K2P8_VIDEO_LIST) / (sizeof(int) * 7);
+    availableVideoList      = S5K2P8_VIDEO_LIST;
+#endif
     /* END of Camera HAL 3.2 Static Metadatas */
 };
 
@@ -1227,6 +1274,51 @@ ExynosCameraSensorIMX333_2L2Base::ExynosCameraSensorIMX333_2L2Base(__unused int 
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL; //0
 
+#ifdef SAMSUNG_TN_FEATURE
+    availableVideoListMax          = sizeof(IMX333_2L2_AVAILABLE_VIDEO_LIST)            / (sizeof(int) * 7);
+    availableVideoList             = IMX333_2L2_AVAILABLE_VIDEO_LIST;
+
+    availableHighSpeedVideoListMax = sizeof(IMX333_2L2_AVAILABLE_HIGH_SPEED_VIDEO_LIST) / (sizeof(int) * 5);
+    availableHighSpeedVideoList    = IMX333_2L2_AVAILABLE_HIGH_SPEED_VIDEO_LIST;
+
+    hiddenPreviewListMax          = sizeof(IMX333_2L2_HIDDEN_PREVIEW_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPreviewList             = IMX333_2L2_HIDDEN_PREVIEW_SIZE_LIST;
+
+    hiddenPictureListMax          = sizeof(IMX333_2L2_HIDDEN_PICTURE_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPictureList             = IMX333_2L2_HIDDEN_PICTURE_SIZE_LIST;
+
+    /* Samsung Vendor Feature */
+#ifdef SAMSUNG_CONTROL_METERING
+    vendorMeteringModes = AVAILABLE_VENDOR_METERING_MODES;
+    vendorMeteringModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_METERING_MODES);
+#endif
+#ifdef SAMSUNG_RTHDR
+    vendorHdrRange[MIN] = 0;
+    vendorHdrRange[MAX] = 1;
+    vendorHdrModes = AVAILABLE_VENDOR_HDR_MODES;
+    vendorHdrModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_HDR_MODES);
+#endif
+#ifdef SAMSUNG_PAF
+    vendorPafAvailable = 1;
+#endif
+#ifdef SAMSUNG_OIS
+    vendorOISModes = AVAILABLE_VENDOR_OIS_MODES;
+    vendorOISModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_OIS_MODES);
+#endif
+
+    vendorAwbModes = AVAILABLE_VENDOR_AWB_MODES;
+    vendorAwbModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_AWB_MODES);
+
+    vendorWbColorTempRange[MIN] = 2300;
+    vendorWbColorTempRange[MAX] = 10000;
+    vendorWbLevelRange[MIN] = -4;
+    vendorWbLevelRange[MAX] = 4;
+
+#ifdef SUPPORT_MULTI_AF
+    vendorMultiAfAvailable = AVAILABLE_VENDOR_MULTI_AF_MODE;
+    vendorMultiAfAvailableLength = ARRAY_LENGTH(AVAILABLE_VENDOR_MULTI_AF_MODE);
+#endif
+#endif
     /* END of Camera HAL 3.2 Static Metadatas */
 };
 
@@ -1272,6 +1364,11 @@ ExynosCameraSensor2L3Base::ExynosCameraSensor2L3Base(__unused int sensorId) : Ex
     vtcallSizeLut               = VTCALL_SIZE_LUT_2L3;
     fastAeStableLut             = FAST_AE_STABLE_SIZE_LUT_2L3;
 
+#ifdef SAMSUNG_SSM
+    videoSizeLutSSMMax          = sizeof(VIDEO_SIZE_LUT_SSM_2L3) / (sizeof(int) * SIZE_OF_LUT);
+    videoSizeLutSSM             = VIDEO_SIZE_LUT_SSM_2L3;
+#endif
+
     /* Set the max of size/fps lists */
     yuvListMax                  = sizeof(SAK2L3_YUV_LIST)                           / (sizeof(int) * SIZE_OF_RESOLUTION);
     jpegListMax                 = sizeof(SAK2L3_JPEG_LIST)                          / (sizeof(int) * SIZE_OF_RESOLUTION);
@@ -1298,13 +1395,15 @@ ExynosCameraSensor2L3Base::ExynosCameraSensor2L3Base(__unused int sensorId) : Ex
     supportedHwLevel = ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL_FULL;
     /* FULL-Level default capabilities */
     supportedCapabilities = (CAPABILITIES_MANUAL_SENSOR | CAPABILITIES_MANUAL_POST_PROCESSING |
-                            CAPABILITIES_BURST_CAPTURE);
+                            CAPABILITIES_BURST_CAPTURE | CAPABILITIES_RAW | CAPABILITIES_PRIVATE_REPROCESSING);
     requestKeys = AVAILABLE_REQUEST_KEYS_BASIC;
     resultKeys = AVAILABLE_RESULT_KEYS_BASIC;
     characteristicsKeys = AVAILABLE_CHARACTERISTICS_KEYS_BASIC;
+    sessionKeys = AVAILABLE_SESSION_KEYS_BASIC;
     requestKeysLength = ARRAY_LENGTH(AVAILABLE_REQUEST_KEYS_BASIC);
     resultKeysLength = ARRAY_LENGTH(AVAILABLE_RESULT_KEYS_BASIC);
     characteristicsKeysLength = ARRAY_LENGTH(AVAILABLE_CHARACTERISTICS_KEYS_BASIC);
+    sessionKeysLength = ARRAY_LENGTH(AVAILABLE_SESSION_KEYS_BASIC);
 
     /* Android ColorCorrection Static Metadata */
     colorAberrationModes = AVAILABLE_COLOR_CORRECTION_ABERRATION_MODES;
@@ -1418,10 +1517,10 @@ ExynosCameraSensor2L3Base::ExynosCameraSensor2L3Base(__unused int sensorId) : Ex
     timestampSource = ANDROID_SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME;
     referenceIlluminant1 = ANDROID_SENSOR_REFERENCE_ILLUMINANT1_D65;
     referenceIlluminant2 = ANDROID_SENSOR_REFERENCE_ILLUMINANT1_STANDARD_A;
-    blackLevelPattern[R] = 0;
-    blackLevelPattern[GR] = 0;
-    blackLevelPattern[GB] = 0;
-    blackLevelPattern[B] = 0;
+    blackLevelPattern[R] = 64;
+    blackLevelPattern[GR] = 64;
+    blackLevelPattern[GB] = 64;
+    blackLevelPattern[B] = 64;
     maxAnalogSensitivity = 640;
     orientation = BACK_ROTATION;
     profileHueSatMapDimensions[HUE] = 1;
@@ -1476,6 +1575,53 @@ ExynosCameraSensor2L3Base::ExynosCameraSensor2L3Base(__unused int sensorId) : Ex
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL; //0
 
+#ifdef SAMSUNG_TN_FEATURE
+    /* Samsung Vendor Feature */
+    availableVideoListMax          = sizeof(SAK2L3_AVAILABLE_VIDEO_LIST)            / (sizeof(int) * 7);
+    availableVideoList             = SAK2L3_AVAILABLE_VIDEO_LIST;
+
+    availableHighSpeedVideoListMax = sizeof(SAK2L3_AVAILABLE_HIGH_SPEED_VIDEO_LIST) / (sizeof(int) * 5);
+    availableHighSpeedVideoList    = SAK2L3_AVAILABLE_HIGH_SPEED_VIDEO_LIST;
+
+    hiddenPreviewListMax          = sizeof(SAK2L3_HIDDEN_PREVIEW_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPreviewList             = SAK2L3_HIDDEN_PREVIEW_SIZE_LIST;
+
+    hiddenPictureListMax          = sizeof(SAK2L3_HIDDEN_PICTURE_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPictureList             = SAK2L3_HIDDEN_PICTURE_SIZE_LIST;
+
+#ifdef SAMSUNG_CONTROL_METERING
+    vendorMeteringModes = AVAILABLE_VENDOR_METERING_MODES;
+    vendorMeteringModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_METERING_MODES);
+#endif
+#ifdef SAMSUNG_RTHDR
+    vendorHdrRange[MIN] = 0;
+    vendorHdrRange[MAX] = 1;
+    vendorHdrModes = AVAILABLE_VENDOR_HDR_MODES;
+    vendorHdrModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_HDR_MODES);
+#endif
+#ifdef SAMSUNG_PAF
+    vendorPafAvailable = 1;
+#endif
+#ifdef SAMSUNG_OIS
+    vendorOISModes = AVAILABLE_VENDOR_OIS_MODES;
+    vendorOISModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_OIS_MODES);
+#endif
+
+    vendorAwbModes = AVAILABLE_VENDOR_AWB_MODES;
+    vendorAwbModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_AWB_MODES);
+
+    vendorWbColorTempRange[MIN] = 2300;
+    vendorWbColorTempRange[MAX] = 10000;
+    vendorWbLevelRange[MIN] = -4;
+    vendorWbLevelRange[MAX] = 4;
+
+#ifdef SUPPORT_MULTI_AF
+    vendorMultiAfAvailable = AVAILABLE_VENDOR_MULTI_AF_MODE;
+    vendorMultiAfAvailableLength = ARRAY_LENGTH(AVAILABLE_VENDOR_MULTI_AF_MODE);
+#endif
+
+    factoryDramTestCount = 16;
+#endif
     /* END of Camera HAL 3.2 Static Metadatas */
 };
 
@@ -1778,9 +1924,11 @@ ExynosCameraSensorIMX320_3H1Base::ExynosCameraSensorIMX320_3H1Base(__unused int 
     requestKeys = AVAILABLE_REQUEST_KEYS_BASIC;
     resultKeys = AVAILABLE_RESULT_KEYS_BASIC;
     characteristicsKeys = AVAILABLE_CHARACTERISTICS_KEYS_BASIC;
+    sessionKeys = AVAILABLE_SESSION_KEYS_BASIC;
     requestKeysLength = ARRAY_LENGTH(AVAILABLE_REQUEST_KEYS_BASIC);
     resultKeysLength = ARRAY_LENGTH(AVAILABLE_RESULT_KEYS_BASIC);
     characteristicsKeysLength = ARRAY_LENGTH(AVAILABLE_CHARACTERISTICS_KEYS_BASIC);
+    sessionKeysLength = ARRAY_LENGTH(AVAILABLE_SESSION_KEYS_BASIC);
 
     /* Android ColorCorrection Static Metadata */
     colorAberrationModes = AVAILABLE_COLOR_CORRECTION_ABERRATION_MODES;
@@ -1939,6 +2087,31 @@ ExynosCameraSensorIMX320_3H1Base::ExynosCameraSensorIMX320_3H1Base(__unused int 
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL; //0
 
+#ifdef SAMSUNG_TN_FEATURE
+    availableVideoListMax      = sizeof(IMX320_3H1_AVAILABLE_VIDEO_LIST)   / (sizeof(int) * 7);
+    availableVideoList         = IMX320_3H1_AVAILABLE_VIDEO_LIST;
+
+    hiddenPreviewListMax       = sizeof(IMX320_3H1_HIDDEN_PREVIEW_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPreviewList          = IMX320_3H1_HIDDEN_PREVIEW_SIZE_LIST;
+
+    hiddenPictureListMax       = sizeof(IMX320_3H1_HIDDEN_PICTURE_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPictureList          = IMX320_3H1_HIDDEN_PICTURE_SIZE_LIST;
+
+#ifdef SAMSUNG_CONTROL_METERING
+    vendorMeteringModes = AVAILABLE_VENDOR_METERING_MODES;
+    vendorMeteringModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_METERING_MODES);
+#endif
+#ifdef SAMSUNG_RTHDR
+    vendorHdrRange[MIN] = 0;
+    vendorHdrRange[MAX] = 1;
+    vendorHdrModes = AVAILABLE_VENDOR_HDR_MODES;
+    vendorHdrModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_HDR_MODES);
+#endif
+    vendorFlipModes = AVAILABLE_VENDOR_FLIP_MODES;
+    vendorFlipModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_FLIP_MODES);
+    vendorAwbModes = AVAILABLE_VENDOR_AWB_MODES;
+    vendorAwbModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_AWB_MODES);
+#endif
     /* END of Camera HAL 3.2 Static Metadatas */
 };
 
@@ -2077,8 +2250,8 @@ ExynosCameraSensor3M3Base::ExynosCameraSensor3M3Base(__unused int cameraId) : Ex
     filterDensity = 0.0f;
     focalLength = 6.0f;
     focalLengthIn35mmLength = 52;
-    hyperFocalDistance = 1.0f / 3.6f;
-    minimumFocusDistance = 1.0f / 0.1f;
+    hyperFocalDistance = 1.0f / 7.2f;
+    minimumFocusDistance = 1.0f / 0.5f;
     if (minimumFocusDistance > 0.0f) {
         afModes = AVAILABLE_AF_MODES;
         afModesLength = ARRAY_LENGTH(AVAILABLE_AF_MODES);
@@ -2122,11 +2295,12 @@ ExynosCameraSensor3M3Base::ExynosCameraSensor3M3Base(__unused int cameraId) : Ex
     sensitivityRange[MIN] = 25;
     sensitivityRange[MAX] = 1600;
     colorFilterArrangement = ANDROID_SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG;
-    exposureTimeRange[MIN] = 22000L;
+    exposureTimeRange[MIN] = 60000L;
     exposureTimeRange[MAX] = 100000000L;
-    maxFrameDuration = 125000000L;
-    sensorPhysicalSize[WIDTH] = 3.20f;
-    sensorPhysicalSize[HEIGHT] = 2.40f;
+    maxFrameDuration = 142857142L;
+    /* pixel size : 1um , 12M sensor */
+    sensorPhysicalSize[WIDTH] = 4.032f;
+    sensorPhysicalSize[HEIGHT] = 3.024001f; /* ITS test_metadata : float precision issue */
     whiteLevel = 1023;
     timestampSource = ANDROID_SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME;
     referenceIlluminant1 = ANDROID_SENSOR_REFERENCE_ILLUMINANT1_D65;
@@ -2172,6 +2346,43 @@ ExynosCameraSensor3M3Base::ExynosCameraSensor3M3Base(__unused int cameraId) : Ex
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL; //0
 
+#ifdef SAMSUNG_TN_FEATURE
+    availableVideoListMax   = sizeof(S5K3M3_AVAILABLE_VIDEO_LIST) / (sizeof(int) * 7);
+    availableVideoList      = S5K3M3_AVAILABLE_VIDEO_LIST;
+
+    hiddenPreviewListMax    = sizeof(S5K3M3_HIDDEN_PREVIEW_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPreviewList       = S5K3M3_HIDDEN_PREVIEW_SIZE_LIST;
+
+    hiddenPictureListMax    = sizeof(S5K3M3_HIDDEN_PICTURE_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPictureList       = S5K3M3_HIDDEN_PICTURE_SIZE_LIST;
+
+#ifdef SAMSUNG_CONTROL_METERING
+    vendorMeteringModes = AVAILABLE_VENDOR_METERING_MODES;
+    vendorMeteringModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_METERING_MODES);
+#endif
+#ifdef SAMSUNG_RTHDR
+    vendorHdrRange[MIN] = 0;
+    vendorHdrRange[MAX] = 1;
+    vendorHdrModes = AVAILABLE_VENDOR_HDR_MODES;
+    vendorHdrModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_HDR_MODES);
+#endif
+#ifdef SAMSUNG_PAF
+    vendorPafAvailable = 1;
+#endif
+#ifdef SAMSUNG_OIS
+    vendorOISModes = AVAILABLE_VENDOR_OIS_MODES;
+    vendorOISModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_OIS_MODES);
+#endif
+
+    vendorAwbModes = AVAILABLE_VENDOR_AWB_MODES;
+    vendorAwbModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_AWB_MODES);
+
+    vendorWbColorTempRange[MIN] = 2300;
+    vendorWbColorTempRange[MAX] = 10000;
+    vendorWbLevelRange[MIN] = -4;
+    vendorWbLevelRange[MAX] = 4;
+
+#endif
     /* END of Camera HAL 3.2 Static Metadatas */
 };
 
@@ -2334,6 +2545,13 @@ ExynosCameraSensorS5K5F1Base::ExynosCameraSensorS5K5F1Base(__unused int cameraId
 
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_UNKNOWN;
+
+#ifdef SAMSUNG_TN_FEATURE
+    availableIrisSizeListMax   = sizeof(S5K5F1_AVAILABLE_IRIS_SIZE_LIST) / (sizeof(int) * 2);
+    availableIrisSizeList      = S5K5F1_AVAILABLE_IRIS_SIZE_LIST;
+    availableIrisFormatListMax = sizeof(S5K5F1_AVAILABLE_IRIS_FORMATS_LIST) / sizeof(int);
+    availableIrisFormatList    = S5K5F1_AVAILABLE_IRIS_FORMATS_LIST;
+#endif
 
     availableThumbnailCallbackSizeListMax = 0;
     availableThumbnailCallbackSizeList = NULL;
@@ -2627,6 +2845,11 @@ ExynosCameraSensor2P7SQBase::ExynosCameraSensor2P7SQBase(int sensorId) : ExynosC
     vtcallSizeLut               = VTCALL_SIZE_LUT_2P7SQ;
     fastAeStableLut             = FAST_AE_STABLE_SIZE_LUT_2P7SQ;
 
+#ifdef SAMSUNG_SSM
+    videoSizeLutSSMMax          = sizeof(VIDEO_SIZE_LUT_SSM_2P7SQ) / (sizeof(int) * SIZE_OF_LUT);
+    videoSizeLutSSM             = VIDEO_SIZE_LUT_SSM_2P7SQ;
+#endif
+
     /* Set the max of size/fps lists */
     yuvListMax                  = sizeof(SAK2P7SQ_YUV_LIST)                         / (sizeof(int) * SIZE_OF_RESOLUTION);
     jpegListMax                 = sizeof(SAK2P7SQ_JPEG_LIST)                            / (sizeof(int) * SIZE_OF_RESOLUTION);
@@ -2831,6 +3054,56 @@ ExynosCameraSensor2P7SQBase::ExynosCameraSensor2P7SQBase(int sensorId) : ExynosC
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL; //0
 
+#ifdef SAMSUNG_TN_FEATURE
+    /* Samsung Vendor Feature */
+    availableVideoListMax          = sizeof(SAK2P7SQ_AVAILABLE_VIDEO_LIST)          / (sizeof(int) * 7);
+    availableVideoList             = SAK2P7SQ_AVAILABLE_VIDEO_LIST;
+
+    availableHighSpeedVideoListMax = sizeof(SAK2P7SQ_AVAILABLE_HIGH_SPEED_VIDEO_LIST) / (sizeof(int) * 5);
+    availableHighSpeedVideoList    = SAK2P7SQ_AVAILABLE_HIGH_SPEED_VIDEO_LIST;
+
+    hiddenPreviewListMax          = sizeof(SAK2P7SQ_HIDDEN_PREVIEW_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPreviewList             = SAK2P7SQ_HIDDEN_PREVIEW_SIZE_LIST;
+
+    hiddenPictureListMax          = sizeof(SAK2P7SQ_HIDDEN_PICTURE_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPictureList             = SAK2P7SQ_HIDDEN_PICTURE_SIZE_LIST;
+
+    effectFpsRangesListMax        = sizeof(SAK2P7SQ_EFFECT_FPS_RANGE_LIST) / (sizeof(int) * 2);
+    effectFpsRangesList           = SAK2P7SQ_EFFECT_FPS_RANGE_LIST;
+
+#ifdef SAMSUNG_CONTROL_METERING
+    vendorMeteringModes = AVAILABLE_VENDOR_METERING_MODES;
+    vendorMeteringModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_METERING_MODES);
+#endif
+#ifdef SAMSUNG_RTHDR
+    vendorHdrRange[MIN] = 0;
+    vendorHdrRange[MAX] = 1;
+    vendorHdrModes = AVAILABLE_VENDOR_HDR_MODES;
+    vendorHdrModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_HDR_MODES);
+#endif
+#ifdef SAMSUNG_PAF
+    vendorPafAvailable = 1;
+#endif
+#ifdef SAMSUNG_OIS
+    vendorOISModes = AVAILABLE_VENDOR_OIS_MODES;
+    vendorOISModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_OIS_MODES);
+#endif
+
+    vendorAwbModes = AVAILABLE_VENDOR_AWB_MODES;
+    vendorAwbModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_AWB_MODES);
+
+    vendorWbColorTempRange[MIN] = 2300;
+    vendorWbColorTempRange[MAX] = 10000;
+    vendorWbLevelRange[MIN] = -4;
+    vendorWbLevelRange[MAX] = 4;
+
+#ifdef SUPPORT_MULTI_AF
+    vendorMultiAfAvailable = AVAILABLE_VENDOR_MULTI_AF_MODE;
+    vendorMultiAfAvailableLength = ARRAY_LENGTH(AVAILABLE_VENDOR_MULTI_AF_MODE);
+#endif
+
+    factoryDramTestCount = 16;
+#endif
     /* END of Camera HAL 3.2 Static Metadatas */
 };
 
@@ -2875,6 +3148,11 @@ ExynosCameraSensor2T7SXBase::ExynosCameraSensor2T7SXBase(int sensorId) : ExynosC
     videoSizeLutHighSpeed240    = VIDEO_SIZE_LUT_240FPS_HIGH_SPEED_2T7SX;
     vtcallSizeLut               = VTCALL_SIZE_LUT_2T7SX;
     fastAeStableLut             = FAST_AE_STABLE_SIZE_LUT_2T7SX;
+
+#ifdef SAMSUNG_SSM
+    videoSizeLutSSMMax          = sizeof(VIDEO_SIZE_LUT_SSM_2T7SX) / (sizeof(int) * SIZE_OF_LUT);
+    videoSizeLutSSM             = VIDEO_SIZE_LUT_SSM_2T7SX;
+#endif
 
     /* Set the max of size/fps lists */
     yuvListMax                  = sizeof(SAK2T7SX_YUV_LIST)                         / (sizeof(int) * SIZE_OF_RESOLUTION);
@@ -3080,6 +3358,56 @@ ExynosCameraSensor2T7SXBase::ExynosCameraSensor2T7SXBase(int sensorId) : ExynosC
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL; //0
 
+#ifdef SAMSUNG_TN_FEATURE
+    /* Samsung Vendor Feature */
+    availableVideoListMax          = sizeof(SAK2T7SX_AVAILABLE_VIDEO_LIST)          / (sizeof(int) * 7);
+    availableVideoList             = SAK2T7SX_AVAILABLE_VIDEO_LIST;
+
+    availableHighSpeedVideoListMax = sizeof(SAK2T7SX_AVAILABLE_HIGH_SPEED_VIDEO_LIST) / (sizeof(int) * 5);
+    availableHighSpeedVideoList    = SAK2T7SX_AVAILABLE_HIGH_SPEED_VIDEO_LIST;
+
+    hiddenPreviewListMax          = sizeof(SAK2T7SX_HIDDEN_PREVIEW_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPreviewList             = SAK2T7SX_HIDDEN_PREVIEW_SIZE_LIST;
+
+    hiddenPictureListMax          = sizeof(SAK2T7SX_HIDDEN_PICTURE_SIZE_LIST)   / (sizeof(int) * SIZE_OF_RESOLUTION);
+    hiddenPictureList             = SAK2T7SX_HIDDEN_PICTURE_SIZE_LIST;
+
+    effectFpsRangesListMax        = sizeof(SAK2T7SX_EFFECT_FPS_RANGE_LIST) / (sizeof(int) * 2);
+    effectFpsRangesList           = SAK2T7SX_EFFECT_FPS_RANGE_LIST;
+
+#ifdef SAMSUNG_CONTROL_METERING
+    vendorMeteringModes = AVAILABLE_VENDOR_METERING_MODES;
+    vendorMeteringModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_METERING_MODES);
+#endif
+#ifdef SAMSUNG_RTHDR
+    vendorHdrRange[MIN] = 0;
+    vendorHdrRange[MAX] = 1;
+    vendorHdrModes = AVAILABLE_VENDOR_HDR_MODES;
+    vendorHdrModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_HDR_MODES);
+#endif
+#ifdef SAMSUNG_PAF
+    vendorPafAvailable = 1;
+#endif
+#ifdef SAMSUNG_OIS
+    vendorOISModes = AVAILABLE_VENDOR_OIS_MODES;
+    vendorOISModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_OIS_MODES);
+#endif
+
+    vendorAwbModes = AVAILABLE_VENDOR_AWB_MODES;
+    vendorAwbModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_AWB_MODES);
+
+    vendorWbColorTempRange[MIN] = 2300;
+    vendorWbColorTempRange[MAX] = 10000;
+    vendorWbLevelRange[MIN] = -4;
+    vendorWbLevelRange[MAX] = 4;
+
+#ifdef SUPPORT_MULTI_AF
+    vendorMultiAfAvailable = AVAILABLE_VENDOR_MULTI_AF_MODE;
+    vendorMultiAfAvailableLength = ARRAY_LENGTH(AVAILABLE_VENDOR_MULTI_AF_MODE);
+#endif
+
+    factoryDramTestCount = 16;
+#endif
     /* END of Camera HAL 3.2 Static Metadatas */
 };
 

@@ -18,8 +18,6 @@
 #ifndef EXYNOS_CAMERA_FRAME_H
 #define EXYNOS_CAMERA_FRAME_H
 
-#include <map>
-
 #include <utils/List.h>
 
 #include "ExynosCameraConfigurations.h"
@@ -44,25 +42,24 @@ typedef ExynosCameraList<uint32_t> frame_key_queue_t;
 
 namespace android {
 
-using namespace std;
-
 /* Frame type for debugging */
 typedef enum FRAME_TYPE {
     FRAME_TYPE_BASE                     = 0,
     FRAME_TYPE_OTHERS                   = 1,
     FRAME_TYPE_PREVIEW                  = 2,
-    FRAME_TYPE_REPROCESSING             = 3,
-    FRAME_TYPE_JPEG_REPROCESSING        = 4,
-    FRAME_TYPE_VISION                   = 5,
-    FRAME_TYPE_INTERNAL                 = 6,
+    FRAME_TYPE_PREVIEW_FRONT            = 3,
+    FRAME_TYPE_REPROCESSING             = 4,
+    FRAME_TYPE_JPEG_REPROCESSING        = 5,
+    FRAME_TYPE_VISION                   = 6,
+    FRAME_TYPE_INTERNAL                 = 7,
 #ifdef USE_DUAL_CAMERA
-    FRAME_TYPE_PREVIEW_SLAVE            = 7,
-    FRAME_TYPE_PREVIEW_DUAL_MASTER      = 8,
-    FRAME_TYPE_PREVIEW_DUAL_SLAVE       = 9,
-    FRAME_TYPE_REPROCESSING_SLAVE       = 10,
-    FRAME_TYPE_REPROCESSING_DUAL_MASTER = 11,
-    FRAME_TYPE_REPROCESSING_DUAL_SLAVE  = 12,
-    FRAME_TYPE_INTERNAL_SLAVE           = 13,
+    FRAME_TYPE_PREVIEW_SLAVE            = 8,
+    FRAME_TYPE_PREVIEW_DUAL_MASTER      = 9,
+    FRAME_TYPE_PREVIEW_DUAL_SLAVE       = 10,
+    FRAME_TYPE_REPROCESSING_SLAVE       = 11,
+    FRAME_TYPE_REPROCESSING_DUAL_MASTER = 12,
+    FRAME_TYPE_REPROCESSING_DUAL_SLAVE  = 13,
+    FRAME_TYPE_INTERNAL_SLAVE           = 14,
     /*
      * "Transition" means that
      * Master or Slave camera was ready to enter "INTERNAL" mode
@@ -70,8 +67,8 @@ typedef enum FRAME_TYPE {
      * This type is necessary to avoid frame drop
      * by changing from "INTERNAL" to "NORMAL" in opposite camera.
      */
-    FRAME_TYPE_TRANSITION               = 14,
-    FRAME_TYPE_TRANSITION_SLAVE         = 15,
+    FRAME_TYPE_TRANSITION               = 15,
+    FRAME_TYPE_TRANSITION_SLAVE         = 16,
 #endif
     FRAME_TYPE_MAX,
 } frame_type_t;
@@ -497,7 +494,6 @@ public:
     status_t        storeUserDynamicMeta(struct camera2_udm *udm, uint32_t srcNodeIndex = 0);
 
     status_t        getDynamicMeta(struct camera2_shot_ext *shot, uint32_t srcNodeIndex = 0);
-    status_t        setDynamicMeta(struct camera2_shot_ext *shot, uint32_t srcNodeIndex = 0);
     status_t        getDynamicMeta(struct camera2_dm *dm, uint32_t srcNodeIndex = 0);
     status_t        getUserDynamicMeta(struct camera2_shot_ext *shot, uint32_t srcNodeIndex = 0);
     status_t        getUserDynamicMeta(struct camera2_udm *udm, uint32_t srcNodeIndex = 0);
@@ -549,8 +545,6 @@ public:
      */
     void            setFrameIndex(int index);
     int             getFrameIndex(void);
-    void            setMaxFrameIndex(int index);
-    int             getMaxFrameIndex(void);
 
     void            setJpegSize(int size);
     int             getJpegSize(void);
@@ -568,16 +562,6 @@ public:
     ExynosCameraConfigurations *getConfigurations(void) const { return m_configurations; }
     void            setFrameType(frame_type_t frameType);
     uint32_t        getFrameType(void);
-
-#ifdef USE_DUAL_CAMERA
-    void            setMaster3a(enum DUAL_OPERATION_MODE master3a) {
-        m_master3a = master3a;
-    }
-
-    enum DUAL_OPERATION_MODE getMaster3a(void) {
-        return m_master3a;
-    }
-#endif
 
     void setFrameYuvStallPortUsage(int usage) {
         m_yuvStallPortEnable = usage;
@@ -615,11 +599,13 @@ public:
     void setFrameSpecialCaptureStep(uint32_t state) {m_specialCaptureStep = state;};
     uint32_t getFrameSpecialCaptureStep(void) {return m_specialCaptureStep;};
 
-    void    setPPScenario(int pipeId, int scenario);
+#ifdef SAMSUNG_TN_FEATURE
+    void    setPPScenario(int index, int scenario);
     int32_t getPPScenario(int pipeId);
     int32_t getPPScenarioIndex(int scenario);
     bool    hasPPScenario(int scenario);
     bool    isLastPPScenarioPipe(int pipeId);
+#endif
 
     void setStreamRequested(int stream, bool flag);
     bool getStreamRequested(int stream);
@@ -654,6 +640,9 @@ public:
     FRAME_STATE_IN_SELECTOR_T getRawStateInSelector(void);
     selector_tag_queue_t *getSelectorTagList(void);
 
+    void setNeedDynamicBayer(bool set);
+    bool getNeedDynamicBayer(void);
+
     void setReleaseDepthBuffer(bool releaseBuffer) {m_releaseDepthBufferFlag = releaseBuffer;};
     bool getReleaseDepthBuffer(void) {return m_releaseDepthBufferFlag;};
 
@@ -666,6 +655,12 @@ public:
     nsecs_t getCreateTimestamp(void) const   { return m_createTimestamp; }
     nsecs_t getCompleteTimestamp(void) const { return m_completeTimestamp; }
 #endif
+
+    void setBufferDondeIndex(int bufferDondeIndex) {m_bufferDondeIndex = bufferDondeIndex;};
+    int32_t getBufferDondeIndex(void) {return m_bufferDondeIndex;};
+
+    void setBvOffset(uint32_t bvOffset) {m_bvOffset  = bvOffset;};
+    uint32_t getBvOffset(void) {return m_bvOffset ;};
 
 private:
     status_t        m_init();
@@ -689,9 +684,6 @@ private:
     ExynosCameraParameters     *m_parameters;
     uint32_t                    m_frameCount;
     uint32_t                    m_frameType;
-#ifdef USE_DUAL_CAMERA
-    enum DUAL_OPERATION_MODE    m_master3a;
-#endif
 
     frame_status_t              m_frameState;
     mutable Mutex               m_frameStateLock;
@@ -743,11 +735,10 @@ private:
     bool                        m_hasRequest;
     bool                        m_updateResult;
 
-    map<int, int>               m_scenario;
-    mutable Mutex               m_scenarioLock;
-
+#ifdef SAMSUNG_TN_FEATURE
+    int32_t                     m_scenario[MAX_PIPE_UNI_NUM];
+#endif
     int                         m_frameIndex;
-    int                         m_frameMaxIndex;
     bool                        m_stream[STREAM_TYPE_MAX];
 
     enum pipeline               m_resultUpdatePipeId[RESULT_UPDATE_TYPE_MAX];
@@ -756,6 +747,8 @@ private:
     mutable Mutex               m_selectorTagQueueLock;
     selector_tag_queue_t        m_selectorTagQueue;
     FRAME_STATE_IN_SELECTOR_T   m_stateInSelector;
+
+    bool                        m_needDynamicBayer;
 
     bool                        m_releaseDepthBufferFlag;
     uint64_t                    m_streamTimeStamp;
@@ -768,6 +761,9 @@ private:
     nsecs_t                     m_createTimestamp;
     nsecs_t                     m_completeTimestamp;
 #endif
+
+    int32_t                     m_bufferDondeIndex;
+    uint32_t                    m_bvOffset;
 };
 
 }; /* namespace android */

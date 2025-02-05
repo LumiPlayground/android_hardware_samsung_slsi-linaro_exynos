@@ -45,9 +45,9 @@
 #define CLOG_COMMON(_prio, _cameraId, _name, _fmt, ...)  \
         do {                                             \
             if (_prio == ANDROID_LOG_VERBOSE) {          \
-                ALOGV(PREFIX_FMT LOCATION_FMT, _cameraId, _name, __FUNCTION__, __LINE__, ##__VA_ARGS__);    \
+                ALOGV(PREFIX_FMT LOCATION_FMT _fmt, _cameraId, _name, __FUNCTION__, __LINE__, ##__VA_ARGS__);    \
             } else {                                     \
-                LOG_PRI(_prio, LOG_TAG, PREFIX_FMT LOCATION_FMT, _cameraId, _name, __FUNCTION__, __LINE__, ##__VA_ARGS__);    \
+                LOG_PRI(_prio, LOG_TAG, PREFIX_FMT LOCATION_FMT _fmt, _cameraId, _name, __FUNCTION__, __LINE__, ##__VA_ARGS__);    \
             }                                            \
         } while(0)
 #define CLOG_PERFRAME(_type, _frame, _request, _fmt, ...) ((void)0)
@@ -140,6 +140,7 @@
 #define SENSOR_SCENARIO_OIS_FACTORY     (3)
 #define SENSOR_SCENARIO_READ_ROM        (4)
 #define SENSOR_SCENARIO_STANDBY         (5)
+#define SENSOR_SCENARIO_SECURE          (6)
 #define SENSOR_SCENARIO_VIRTUAL         (9)
 #define SENSOR_SCENARIO_MAX            (10)
 

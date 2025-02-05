@@ -16,6 +16,7 @@
 
 /*!
  * \file      ExynosCameraBufferManager.h
+ * \brief     header file for ExynosCameraBufferManager
  * \author    Sunmi Lee(carrotsm.lee@samsung.com)
  * \date      2013/07/17
  *
@@ -61,7 +62,11 @@ namespace android {
 #define EXYNOS_CAMERA_BUFFER_OUT()  ((void *)0)
 #endif
 
-#define ACQUIRE_FD_THRESHOLD                700
+// Hack: Close Fence FD if the fd is larger than specified number
+// Currently, Joon's fence FD is not closed properly
+/* #define FORCE_CLOSE_ACQUIRE_FD */
+#define FORCE_CLOSE_ACQUIRE_FD_THRESHOLD    700
+
 #define SWBUFFER_MAX_COUNT                  80
 
 typedef enum buffer_manager_type {

@@ -20,7 +20,7 @@
 
 #include <videodev2.h>
 #include <videodev2_exynos_camera.h>
-#include <camera/CameraMetadata.h>
+#include <CameraMetadata.h>
 #include "ExynosCameraConfig.h"
 #include "ExynosCameraSizeTable.h"
 #include "ExynosCameraAvailabilityTable.h"
@@ -42,6 +42,36 @@
 #define ARRAY_LENGTH(x)          (sizeof(x)/sizeof(x[0]))
 #define COMMON_DENOMINATOR       (100)
 #define EFFECTMODE_META_2_HAL(x) (1 << (x -1))
+
+#ifdef SAMSUNG_OIS
+#define OIS_EXIF_SIZE         50
+#define OIS_EXIF_TAG         "ssois"
+#endif
+
+#ifdef SAMSUNG_BD
+#define BD_EXIF_SIZE    70
+#define BD_EXIF_TAG "ssbd"
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+#define LLS_EXIF_SIZE    310
+#define LLS_EXIF_TAG "sslls"
+#endif
+
+#ifdef SAMSUNG_LENS_DC
+#define LDC_EXIF_SIZE    12
+#define LDC_EXIF_TAG "ssldc"
+#endif
+
+#ifdef SAMSUNG_STR_CAPTURE
+#define STR_EXIF_SIZE    120
+#define STR_EXIF_TAG "ssstr"
+#endif
+
+#ifdef SAMSUNG_MTF
+#define MTF_EXIF_TAG "ssmtf"
+#define MTF_EXIF_SIZE    61
+#endif
 
 #define SENSOR_ID_EXIF_SIZE         42
 #define SENSOR_ID_EXIF_UNIT_SIZE    16
@@ -149,6 +179,16 @@ enum {
     FOCUS_MODE_CONTINUOUS_PICTURE       = (1 << 6),
     FOCUS_MODE_TOUCH                    = (1 << 7),
     FOCUS_MODE_CONTINUOUS_PICTURE_MACRO = (1 << 8),
+#ifdef SAMSUNG_OT
+    FOCUS_MODE_OBJECT_TRACKING_PICTURE = (1 << 9),
+    FOCUS_MODE_OBJECT_TRACKING_VIDEO = (1 << 10),
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+    FOCUS_MODE_MANUAL = (1 << 11),
+#endif
+#ifdef SAMSUNG_FIXED_FACE_FOCUS
+    FOCUS_MODE_FIXED_FACE = (1 << 12),
+#endif
 };
 enum {
     FLASH_MODE_OFF     = (1 << 0),
@@ -157,6 +197,7 @@ enum {
     FLASH_MODE_RED_EYE = (1 << 3),
     FLASH_MODE_TORCH   = (1 << 4),
 };
+
 enum SERIES_SHOT_MODE {
     SERIES_SHOT_MODE_NONE              = 0,
     SERIES_SHOT_MODE_LLS               = 1,
@@ -167,6 +208,9 @@ enum SERIES_SHOT_MODE {
     SERIES_SHOT_MODE_BEST_PHOTO        = 6,
     SERIES_SHOT_MODE_MAGIC             = 7,
     SERIES_SHOT_MODE_SELFIE_ALARM      = 8,
+#ifdef ONE_SECOND_BURST_CAPTURE
+    SERIES_SHOT_MODE_ONE_SECOND_BURST  = 9,
+#endif
     SERIES_SHOT_MODE_MAX,
 };
 enum MULTI_CAPTURE_MODE {
@@ -175,6 +219,18 @@ enum MULTI_CAPTURE_MODE {
     MULTI_CAPTURE_MODE_HDR   = 2,
     MULTI_CAPTURE_MODE_MAX,
 };
+
+#ifdef SAMSUNG_LLS_DEBLUR
+enum MULTI_SHOT_MODE {
+    MULTI_SHOT_MODE_NONE              = 0,
+    MULTI_SHOT_MODE_MULTI1            = 1,
+    MULTI_SHOT_MODE_MULTI2            = 2,
+    MULTI_SHOT_MODE_MULTI3            = 3,
+    MULTI_SHOT_MODE_FLASHED_LLS       = 4,
+    MULTI_SHOT_MODE_SR                = 5,
+    MULTI_SHOT_MODE_MAX,
+};
+#endif
 
 enum TRANSIENT_ACTION {
     TRANSIENT_ACTION_NONE               = 0,
@@ -189,11 +245,48 @@ int getSensorIdFromFile(int camId);
 #ifdef SENSOR_FW_GET_FROM_FILE
 const char *getSensorFWFromFile(struct ExynosCameraSensorInfoBase *info, int camId);
 #endif
+#ifdef SAMSUNG_OIS
+char *getOisEXIFFromFile(struct ExynosCameraSensorInfoBase *info, int mode);
 
+struct ois_exif_data {
+    char ois_exif[OIS_EXIF_SIZE];
+};
+#endif
+#ifdef SAMSUNG_BD
+struct bd_exif_data {
+    char bd_exif[BD_EXIF_SIZE];
+};
+#endif
+#ifdef SAMSUNG_LLS_DEBLUR
+struct lls_exif_data {
+    char lls_exif[LLS_EXIF_SIZE];
+};
+#endif
+#ifdef SAMSUNG_LENS_DC
+struct ldc_exif_data {
+    char ldc_exif[LDC_EXIF_SIZE];
+};
+#endif
+#ifdef SAMSUNG_STR_CAPTURE
+struct str_exif_data {
+    char str_exif[STR_EXIF_SIZE];
+};
+#endif
+#ifdef SAMSUNG_MTF
+struct mtf_exif_data {
+    char mtf_exif[MTF_EXIF_SIZE];
+};
+#endif
 struct sensor_id_exif_data {
     char sensor_id_exif[SENSOR_ID_EXIF_SIZE];
 };
 
+#ifdef SAMSUNG_UTC_TS
+#define UTC_TS_SIZE 24 /* Tag (2bytes) + Length (2bytes) + Time (20bytes) */
+struct utc_ts {
+    char utc_ts_data[UTC_TS_SIZE];
+};
+#endif
 static camera_metadata_rational UNIT_MATRIX[] =
 {
     {1024, 1024}, {   0, 1024}, {   0, 1024},
@@ -285,7 +378,7 @@ public:
     int     visionModeAeTarget;
 
     bool    recordingHint;
-    bool    ysumRecordingHint;
+    bool    ysumRecordingMode;
     bool    pipMode;
 #ifdef USE_DUAL_CAMERA
     bool    dualMode;
@@ -297,10 +390,20 @@ public:
     bool    highSpeedRecording;
     bool    videoStabilization;
     bool    swVdisMode;
+    bool    hyperMotionMode;
     int     shotMode;
     int     vtMode;
+    bool    hdrMode;
 
+    char    imageUniqueId[UNIQUE_ID_BUF_SIZE];
+    bool    samsungCamera;
+    bool    isFactoryApp;
     int     recordingFps;
+
+    int     seriesShotMode;
+    int     seriesShotCount;
+    int     multiCaptureMode;
+
     int     deviceOrientation;
 };
 
@@ -308,6 +411,24 @@ struct ExynosCameraSensorInfoBase {
 public:
 #ifdef SENSOR_FW_GET_FROM_FILE
     char	sensor_fw[25];
+#endif
+#ifdef SAMSUNG_OIS
+    struct ois_exif_data     ois_exif_info;
+#endif
+#ifdef SAMSUNG_BD
+    struct bd_exif_data     bd_exif_info;
+#endif
+#ifdef SAMSUNG_LLS_DEBLUR
+    struct lls_exif_data     lls_exif_info;
+#endif
+#ifdef SAMSUNG_LENS_DC
+    struct ldc_exif_data     ldc_exif_info;
+#endif
+#ifdef SAMSUNG_STR_CAPTURE
+    struct str_exif_data     str_exif_info;
+#endif
+#ifdef SAMSUNG_MTF
+	struct mtf_exif_data	mtf_exif_info;
 #endif
     struct sensor_id_exif_data sensor_id_exif_info;
 
@@ -493,7 +614,31 @@ public:
     /* Android Reprocess Static Metadata */
     int32_t 	maxCaptureStall;
 
-    float     *availableApertureValues;
+    /* Samsung Vendor Feature */
+#ifdef SAMSUNG_CONTROL_METERING
+    int32_t   *vendorMeteringModes;
+    size_t    vendorMeteringModesLength;
+#endif
+#ifdef SAMSUNG_RTHDR
+    int32_t   vendorHdrRange[RANGE_TYPE_MAX];
+    int32_t   *vendorHdrModes;
+    size_t    vendorHdrModesLength;
+#endif
+#ifdef SAMSUNG_PAF
+    uint8_t   vendorPafAvailable;
+#endif
+#ifdef SAMSUNG_OIS
+    int32_t   *vendorOISModes;
+    size_t    vendorOISModesLength;
+#endif
+    int32_t   *vendorFlipModes;
+    size_t    vendorFlipModesLength;
+
+#ifdef SUPPORT_MULTI_AF
+    uint8_t   *vendorMultiAfAvailable;
+    size_t    vendorMultiAfAvailableLength;
+#endif
+    float   *availableApertureValues;
     size_t	  availableApertureValuesLength;
 
     /* Android Info Static Metadata */
@@ -509,6 +654,9 @@ public:
 
     /* vendor specifics available */
     bool   sceneHDRSupport;
+    bool   screenFlashAvailable;
+    bool   objectTrackingAvailable;
+    bool   fixedFaceFocusAvailable;
 
     /* The number of YUV(preview, video)/JPEG(picture) sizes in each list */
     int    yuvListMax;
@@ -537,7 +685,6 @@ public:
     int    videoSizeLutHighSpeed60Max;
     int    videoSizeLutHighSpeed120Max;
     int    videoSizeLutHighSpeed240Max;
-    int    videoSizeLutHighSpeed480Max;
     int    fastAeStableLutMax;
     int    previewFullSizeLutMax;
     int    pictureFullSizeLutMax;
@@ -552,7 +699,6 @@ public:
     int    (*videoSizeLutHighSpeed60)[SIZE_OF_LUT];
     int    (*videoSizeLutHighSpeed120)[SIZE_OF_LUT];
     int    (*videoSizeLutHighSpeed240)[SIZE_OF_LUT];
-    int    (*videoSizeLutHighSpeed480)[SIZE_OF_LUT];
     int    (*vtcallSizeLut)[SIZE_OF_LUT];
     int    (*fastAeStableLut)[SIZE_OF_LUT];
     int    (*previewFullSizeLut)[SIZE_OF_LUT];
@@ -571,6 +717,9 @@ public:
     int    (*availableThumbnailCallbackSizeList)[2];
     int    availableThumbnailCallbackFormatListMax;
     int    *availableThumbnailCallbackFormatList;
+
+    int    availableFeaturesListLength;
+    int    *availableFeaturesList;
 
 public:
     ExynosCameraSensorInfoBase();
@@ -596,11 +745,6 @@ public:
     ExynosCameraSensor2L3Base(int sensorId);
 };
 
-struct ExynosCameraSensor6B2Base : public ExynosCameraSensorInfoBase {
-public:
-    ExynosCameraSensor6B2Base(int sensorId);
-};
-
 struct ExynosCameraSensorIMX320_3H1Base : public ExynosCameraSensorInfoBase {
 public:
     ExynosCameraSensorIMX320_3H1Base(int sensorId);
@@ -614,11 +758,6 @@ public:
 struct ExynosCameraSensorS5K5F1Base : public ExynosCameraSensorInfoBase {
 public:
     ExynosCameraSensorS5K5F1Base(int sensorId);
-};
-
-struct ExynosCameraSensorS5KRPBBase : public ExynosCameraSensorInfoBase {
-public:
-    ExynosCameraSensorS5KRPBBase(int sensorId);
 };
 
 }; /* namespace android */

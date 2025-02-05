@@ -22,6 +22,9 @@
 #include "ExynosCameraParameters.h"
 #include "ExynosCamera3SensorInfo.h"
 #include "ExynosCameraUtilsModule.h"
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraUtil.h"
+#endif
 
 #define V4L2_FOURCC_LENGTH 5
 
@@ -61,6 +64,11 @@ public:
 
     void            getYuvSize(int *width, int *height, const int outputPortId);
     int             getYuvFormat(const int outputPortId);
+
+#ifdef SAMSUNG_FOOD_MODE
+    void        m_setWbLevel(int32_t value);
+    int32_t        getWbLevel(void);
+#endif
 
     status_t        calcPreviewGSCRect(ExynosRect *srcRect, ExynosRect *dstRect);
     status_t        calcHighResolutionPreviewGSCRect(ExynosRect *srcRect, ExynosRect *dstRect);
@@ -174,6 +182,14 @@ private:
     void            m_setMeteringMode(int meteringMode);
     /* Sets brightness */
     void            m_setBrightness(int brightness);
+#ifdef SAMSUNG_COMPANION
+    /* Sets RT DRC */
+    void            m_setRTDrc(enum  companion_drc_mode rtdrc);
+    /* Sets PAF */
+    void            m_setPaf(enum companion_paf_mode paf);
+    /* Sets RT HDR */
+    void            m_setRTHdr(enum companion_wdr_mode rthdr);
+#endif
     /* Sets ISO */
     void            m_setIso(uint32_t iso);
     /* Sets Contrast */
@@ -261,6 +277,11 @@ private:
     int             m_convertMetaCtlAwbMode(struct camera2_shot_ext *shot_ext);
 
 public:
+
+#ifdef SAMSUNG_DOF
+    /* Sets Lens Position */
+    void            m_setLensPosition(int step);
+#endif
 
     /* Returns the image format for FLITE/3AC/3AP bayer */
     int             getBayerFormat(int pipeId);
@@ -383,6 +404,11 @@ public:
     uint64_t        getCaptureExposureTime(void);
     int32_t         getLongExposureShotCount(void){return 0;};
 
+#ifdef SAMSUNG_TN_FEATURE
+    /* Export iso info to camera parameters */
+    void            setParamIso(camera2_udm *udm);
+#endif
+
     /* Gets Contrast */
     uint32_t        getContrast(void);
     /* Gets Saturation */
@@ -416,6 +442,15 @@ public:
     bool            getDrcMode(void);
     /* Gets TPU enable case or not */
     bool            getTpuEnabledMode(void);
+
+#ifdef SAMSUNG_COMPANION
+     /* Gets RT DRC */
+    enum companion_drc_mode            getRTDrc(void);
+     /* Gets PAF */
+    enum companion_paf_mode            getPaf(void);
+     /* Gets RT HDR */
+    enum companion_wdr_mode            getRTHdr(void);
+#endif
 
 /*
  * Vendor specific APIs
@@ -454,13 +489,21 @@ public:
     int             getFastFpsMode(void);
 
     bool            getHighResolutionCallbackMode(void);
+    bool            getSamsungCamera(void);
+    void            setSamsungCamera(bool value);
     bool            getHighSpeedRecording(void);
     bool            getScalableSensorMode(void);
     void            setScalableSensorMode(bool scaleMode);
+#ifdef USE_BINNING_MODE
+    int *           getBinningSizeTable(void);
+#endif
     long long int   getCityId(void);
     unsigned char   getWeatherId(void);
     /* Gets ImageUniqueId */
     const char     *getImageUniqueId(void);
+#ifdef SAMSUNG_TN_FEATURE
+    void            setImageUniqueId(char *uniqueId);
+#endif
     /* Gets camera angle */
     int             getAngle(void);
 
@@ -683,6 +726,11 @@ private:
     void            m_getSetfileYuvRange(bool flagReprocessing, int *setfile, int *yuvRange);
     void            m_getCropRegion(int *x, int *y, int *w, int *h);
 
+#ifdef USE_CSC_FEATURE
+    void            m_getAntiBandingFromLatinMCC(char *temp_str);
+    int             m_IsLatinOpenCSC();
+    void            m_chooseAntiBandingFrequency();
+#endif
     /* for initial 120fps start due to quick launch */
 /*
     void            set120FpsState(enum INIT_120FPS_STATE state);
@@ -737,6 +785,12 @@ public:
     void                setPreviewRunning(bool enable);
     void                setPictureRunning(bool enable);
     void                setRecordingRunning(bool enable);
+#ifdef SAMSUNG_COMPANION
+    void                setCompanionThreadDone(bool enable);
+#endif
+#ifdef SAMSUNG_EEPROM
+    void                setEepromThreadDone(bool enable);
+#endif
     bool                getPreviewRunning(void);
     bool                getPictureRunning(void);
     bool                getRecordingRunning(void);
@@ -790,6 +844,12 @@ public:
 
     int32_t             getYuvStreamMaxNum(void);
 
+#ifdef SAMSUNG_DOF
+    int                 getMoveLensTotal(void);
+    void                setMoveLensCount(int count);
+    void                setMoveLensTotal(int count);
+#endif
+
 #ifdef BURST_CAPTURE
     int                 getSeriesShotSaveLocation(void);
     void                setSeriesShotSaveLocation(int ssaveLocation);
@@ -807,6 +867,10 @@ public:
     void                setDvfsLock(bool lock);
     bool                getDvfsLock(void);
 
+#ifdef SAMSUNG_LLV
+    void                setLLV(bool enable);
+    bool                getLLV(void);
+#endif
     void                setFocusModeSetting(bool enable);
     int                 getFocusModeSetting(void);
     bool                getSensorOTFSupported(void);
@@ -837,6 +901,31 @@ public:
     int                 getConfigMode();
     /* Sets Shot mode */
     void                m_setShotMode(int shotMode);
+#ifdef LLS_CAPTURE
+    void                setLLSOn(uint32_t enable);
+    bool                getLLSOn(void);
+    void                m_setLLSShotMode();
+#ifdef SET_LLS_CAPTURE_SETFILE
+    void                setLLSCaptureOn(bool enable);
+    int                 getLLSCaptureOn();
+#endif
+#endif
+#ifdef SR_CAPTURE
+    void                setSROn(uint32_t enable);
+    bool                getSROn(void);
+#endif
+#ifdef OIS_CAPTURE
+    void                setOISCaptureModeOn(bool enable);
+    bool                getOISCaptureModeOn(void);
+#endif
+#ifdef SAMSUNG_OIS
+    void                m_setOIS(enum optical_stabilization_mode ois);
+    enum optical_stabilization_mode getOIS(void);
+    void                setOISNode(ExynosCameraNode *node);
+    void                setOISMode(void);
+    void                setOISModeSetting(bool enable);
+    int                 getOISModeSetting(void);
+#endif
     void                setZoomActiveOn(bool enable);
     bool                getZoomActiveOn(void);
     void                setFocusModeLock(bool enable);
@@ -869,6 +958,11 @@ public:
     bool                getSetFileCtl3AA(void);
     bool                getSetFileCtlISP(void);
     bool                getSetFileCtlSCP(void);
+
+#ifdef SAMSUNG_COMPANION
+    void    setUseCompanion(bool use);
+    bool    getUseCompanion();
+#endif
 
     virtual void setNormalBestFrameCount(uint32_t) {}
     virtual uint32_t getNormalBestFrameCount() {return 0;}
@@ -913,6 +1007,12 @@ private:
     bool                        m_pictureRunning;
     bool                        m_recordingRunning;
     bool                        m_flagCheckDualMode;
+#ifdef SAMSUNG_COMPANION
+    bool                        m_companionThreadDone;
+#endif
+#ifdef SAMSUNG_EEPROM
+    bool                        m_eepromThreadDone;
+#endif
     bool                        m_IsThumbnailCallbackOn;
     bool                        m_flagRestartPreviewChecked;
     bool                        m_flagRestartPreview;
@@ -924,13 +1024,26 @@ private:
     bool                        m_flagVideoStabilization;
     bool                        m_flag3dnrMode;
 
+#ifdef LLS_CAPTURE
+    bool                        m_flagLLSOn;
+    int                         m_LLSCaptureOn;
+#endif
+#ifdef SR_CAPTURE
+    bool                        m_flagSRSOn;
+#endif
+#ifdef OIS_CAPTURE
+    bool                        m_flagOISCaptureOn;
+    bool                        m_llsValue;
+#endif
     bool                        m_flagCheckRecordingHint;
 
     int                         m_setfile;
     int                         m_yuvRange;
     int                         m_setfileReprocessing;
     int                         m_yuvRangeReprocessing;
-
+#ifdef USE_BINNING_MODE
+    int                         m_binningProperty;
+#endif
     bool                        m_useSizeTable;
     bool                        m_useDynamicBayer;
     bool                        m_useDynamicBayerVideoSnapShot;
@@ -946,9 +1059,29 @@ private:
 
     struct ExynosConfigInfo     *m_exynosconfig;
 
+#ifdef SAMSUNG_LLV
+    bool                        m_isLLVOn;
+#endif
+
+#ifdef SAMSUNG_DOF
+    int                         m_curLensStep;
+    int                         m_curLensCount;
+#endif
     bool                        m_setFocusmodeSetting;
+#ifdef USE_CSC_FEATURE
+    char                        m_antiBanding[10];
+#endif
+#ifdef SAMSUNG_OIS
+    ExynosCameraNode        *m_oisNode;
+    bool                        m_setOISmodeSetting;
+#endif
     bool                        m_zoom_activated;
     int                         m_firing_flash_marking;
+
+#if defined(SAMSUNG_COMPANION) || defined(SAMSUNG_EEPROM)
+    bool                        m_romReadThreadDone;
+    bool                        m_use_companion;
+#endif
 
     uint64_t                    m_exposureTimeCapture;
 	bool                        m_zoomWithScaler;

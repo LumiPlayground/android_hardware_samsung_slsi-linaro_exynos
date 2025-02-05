@@ -22,12 +22,16 @@
 #include <utils/RefBase.h>
 #include <utils/String8.h>
 #include <cutils/properties.h>
-#include <camera/CameraParameters.h>
+#include <CameraParameters.h>
 
 #include <videodev2.h>
 #include <videodev2_exynos_media.h>
 #include <videodev2_exynos_camera.h>
 #include <map>
+
+#ifdef USE_CSC_FEATURE
+#include <SecNativeFeature.h>
+#endif
 
 #include "ExynosCameraObject.h"
 #include "ExynosCameraConfig.h"
@@ -40,12 +44,36 @@
 #include "ExynosCameraUtils.h"
 #include "ExynosCameraActivityControl.h"
 #include "ExynosCameraAutoTimer.h"
-#include "ExynosCameraNode.h"
-#include "ExynosCameraSensorInfo.h"
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraParameters.h"
+#endif
+#ifdef SAMSUNG_HYPER_MOTION
+#include "SecCameraHyperMotion.h"
+#endif /*SAMSUNG_HYPER_MOTION*/
+#ifdef SAMSUNG_OIS
+#include "ExynosCameraNode.h"
+#endif
+#ifdef SAMSUNG_DNG
+#include "SecCameraDng.h"
+#include "SecCameraDngThumbnail.h"
+#endif
+
+#include "ExynosCameraSensorInfo.h"
+#include "SecCameraUtil.h"
+
+#ifdef SAMSUNG_UNI_API
+#include "uni_api_wrapper.h"
+#endif
+
+#define FW_CUSTOM_OFFSET (1)
 #define V4L2_FOURCC_LENGTH 5
+#define IS_WBLEVEL_DEFAULT (4)
 
 #define GPS_PROCESSING_METHOD_SIZE 32
+
+#define EXYNOS_CONFIG_DEFINED (-1)
+#define EXYNOS_CONFIG_NOTDEFINED (-2)
 
 #define STATE_REG_BINNING_MODE          (1<<28)
 #define STATE_REG_MANUAL_ISO            (1<<26)
@@ -125,6 +153,8 @@
 namespace android {
 
 using namespace std;
+using ::android::hardware::camera::common::V1_0::helper::CameraParameters;
+using ::android::hardware::camera::common::V1_0::helper::CameraMetadata;
 
 namespace CONFIG_MODE {
     enum MODE {
@@ -132,7 +162,6 @@ namespace CONFIG_MODE {
         HIGHSPEED_60,
         HIGHSPEED_120,
         HIGHSPEED_240,
-        HIGHSPEED_480,
         MAX
     };
 };
@@ -161,7 +190,6 @@ struct CONFIG_BUFFER {
     uint32_t num_vra_buffers;
     uint32_t reprocessing_bayer_hold_count;
     uint32_t num_request_raw_buffers;
-    uint32_t num_request_bayer_buffers;
     uint32_t num_request_preview_buffers;
     uint32_t num_request_callback_buffers;
     uint32_t num_request_video_buffers;
@@ -178,14 +206,14 @@ struct ExynosConfigInfo {
     struct CONFIG_BUFFER_PIPE *current;
     struct CONFIG_BUFFER_PIPE info[CONFIG_MODE::MAX];
     uint32_t mode;
-#ifdef SUPPORT_RESTART_TRANSITION_HIGHSPEED
-    uint32_t delayedMode;
-#endif
 };
 
 struct CameraMetaParameters {
     int m_flashMode;
     float m_zoomRatio;
+#ifdef SAMSUNG_OT
+    bool m_startObjectTracking;
+#endif
 };
 
 #ifdef USE_DUAL_CAMERA
@@ -253,10 +281,6 @@ public:
     status_t        checkThumbnailQuality(int quality);
     status_t        checkPreviewFpsRange(uint32_t minFps, uint32_t maxFps);
 
-#ifdef SUPPORT_RESTART_TRANSITION_HIGHSPEED
-    status_t        updateHWParameter();
-#endif
-
     status_t        resetYuvSizeRatioId(void);
     status_t        checkYuvSize(const int width, const int height, const int outputPortId, bool reprocessing = false);
     status_t        checkHwYuvSize(const int width, const int height, const int outputPortId, bool reprocessing = false);
@@ -302,6 +326,9 @@ public:
     status_t        getPictureBdsSize(ExynosRect *dstRect);
     status_t        getPreviewYuvCropSize(ExynosRect *yuvCropSize);
     status_t        getPictureYuvCropSize(ExynosRect *yuvCropSize);
+    status_t        getFastenAeStableSensorSize(int *hwSensorW, int *hwSensorH, int index);
+    status_t        getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH, int index);
+    status_t        getFastenAeStableBdsSize(int *hwBdsW, int *hwBdsH, int index);
 
     status_t        calcPreviewBayerCropSize(ExynosRect *srcRect, ExynosRect *dstRect);
     status_t        calcPictureBayerCropSize(ExynosRect *srcRect, ExynosRect *dstRect);
@@ -335,14 +362,20 @@ private:
     /* Sets the dimensions for EXIF thumbnail in Jpeg picture. */
     void            m_setThumbnailSize(int w, int h);
     /* Sets the frame rate range for preview. */
-    void            m_setPreviewFpsRange(uint32_t min, uint32_t max, bool delayed = false);
+    void            m_setPreviewFpsRange(uint32_t min, uint32_t max);
     /* Sets Bayer Crop Region */
     status_t        m_setParamCropRegion(int srcW, int srcH, int dstW, int dstH);
 
 /*
+ * Additional API.
+ */
+    /* Sets ODC */
+    void            m_setOdcMode(bool toggle);
+/*
  * Vendor specific APIs
  */
-    void            m_setOdcMode(bool toggle);
+    /* Sets Intelligent mode */
+    void            m_setIntelligentMode(int intelligentMode);
     void            m_setVisionMode(bool vision);
     void            m_setVisionModeFps(int fps);
     void            m_setVisionModeAeTarget(int ae);
@@ -351,6 +384,7 @@ private:
     void            m_setVtMode(int vtMode);
 
     void            m_setHighSpeedRecording(bool highSpeed);
+    status_t        m_setImageUniqueId(const char *uniqueId);
 
 /*
  * Others
@@ -359,6 +393,35 @@ private:
     status_t        m_adjustPreviewFpsRange(uint32_t &newMinFps, uint32_t &newMaxFps);
 
 public:
+#ifdef SAMSUNG_DOF
+    /* Sets Lens Position */
+    void            m_setLensPos(int pos);
+#endif
+#ifdef SAMSUNG_HRM
+    void            m_setHRM(int ir_data, int flicker_data, int status);
+    void            m_setHRM_Hint(bool flag);
+    bool            m_getHRM_Hint(void);
+#endif
+#ifdef SAMSUNG_LIGHT_IR
+    void            m_setLight_IR(SensorListenerEvent_t data);
+    void            m_setLight_IR_Hint(bool flag);
+    bool            m_getLight_IR_Hint(void);
+#endif
+#ifdef SAMSUNG_GYRO
+    void            m_setGyro(SensorListenerEvent_t data);
+    void            m_setGyroHint(bool flag);
+    bool            m_getGyroHint(void);
+    SensorListenerEvent_t            *getGyroData(void);
+#endif
+#ifdef SAMSUNG_ACCELEROMETER
+    void            m_setAccelerometer(SensorListenerEvent_t data);
+    void            m_setAccelerometerHint(bool flag);
+    bool            m_getAccelerometerHint(void);
+#endif
+#ifdef SAMSUNG_ROTATION
+    void            m_setRotationHint(bool flag);
+    bool            m_getRotationHint(void);
+#endif
     /* Returns the image format for FLITE/3AC/3AP bayer */
     int             getBayerFormat(int pipeId);
     /* Returns the dimensions setting for preview pictures. */
@@ -403,7 +466,7 @@ public:
     /* Returns the max size for EXIF thumbnail in Jpeg picture. */
     void            getMaxThumbnailSize(int *w, int *h);
     /* Returns the current minimum and maximum preview fps. */
-    void            getPreviewFpsRange(uint32_t *min, uint32_t *max, bool delayed = false);
+    void            getPreviewFpsRange(uint32_t *min, uint32_t *max);
     /* Gets the current state of video stabilization. */
     bool            getVideoStabilization(void);
     /* Set the current crop region info */
@@ -412,8 +475,10 @@ public:
     bool            getRecordingHint(void);
     /* Sets recording mode hint. */
     void            setRecordingHint(bool hint);
-    /* Returns the YSUM recording mode hint. */
-    bool            getYsumRecordingHint(void);
+    /* Sets the YSUM recording mode */
+    void            setYsumRecordingMode(bool);
+    /* Returns the YSUM recording mode */
+    bool            getYsumRecordingMode(void);
 
     void            getHwVraInputSize(int *w, int *h, int dsInputPortId);
     int             getHwVraInputFormat(void);
@@ -427,24 +492,35 @@ public:
 /*
  * Additional API.
  */
+
+    /* Sets ExposureTime for capture */
+    void            setCaptureExposureTime(uint64_t exposureTime);
+    /* Gets ExposureTime for capture */
+    uint64_t        getCaptureExposureTime(void);
+    /* Gets LongExposureTime for capture */
+    uint64_t        getLongExposureTime(void);
+    /* Gets LongExposureShotCount for capture */
+    int32_t         getLongExposureShotCount(void);
+
     /* Gets WDR */
     bool            getHdrMode(void);
     /* Gets ODC */
     bool            getOdcMode(void);
+    /* Gets Shot mode */
+    int             getShotMode(void);
     /* Gets GDC enable case or not */
     bool            getGDCEnabledMode(void);
     /* Get sensor control frame delay count */
     int             getSensorControlDelay(void);
 
-    /* Static flag for LLS */
-    bool            getLLSOn(void);
-    void            setLLSOn(bool enable);
-#ifdef USE_LLS_REPROCESSING
-    /* Dynamic flag for LLS Capture */
-    bool            getLLSCaptureOn(void);
-    void            setLLSCaptureOn(bool enable);
-    int             getLLSCaptureCount(void);
-    void            setLLSCaptureCount(int count);
+#ifdef SAMSUNG_PAF
+     /* Gets PAF */
+    enum companion_paf_mode            getPaf(void);
+#endif
+#ifdef SAMSUNG_RTHDR
+     /* Gets RT HDR */
+    enum companion_wdr_mode            getRTHdr(void);
+    void                               setRTHdr(enum companion_wdr_mode rtHdrMode);
 #endif
 
 /*
@@ -452,16 +528,14 @@ public:
  */
 
     /* Gets Intelligent mode */
+    int             getIntelligentMode(void);
     bool            getVisionMode(void);
     int             getVisionModeFps(void);
     int             getVisionModeAeTarget(void);
 
     bool            getHWVdisMode(void);
     int             getHWVdisFormat(void);
-#ifdef SUPPORT_ME
-    int             getMeFormat(void);
-    void            getMeSize(int *meW, int *meH);
-#endif
+
     void            getYuvVendorSize(int *width, int *height, int outputPortId, ExynosRect ispSize);
 
     /* Gets VT mode */
@@ -492,12 +566,22 @@ public:
 #ifdef USE_BINNING_MODE
     int *           getBinningSizeTable(void);
 #endif
+    /* Gets ImageUniqueId */
+    const char     *getImageUniqueId(void);
+#ifdef SAMSUNG_TN_FEATURE
+    void            setImageUniqueId(char *uniqueId);
+#endif
 
     void            setFlipHorizontal(int val);
     int             getFlipHorizontal(void);
     void            setFlipVertical(int val);
     int             getFlipVertical(void);
 
+    /* Gets Burst mode */
+    int             getSeriesShotCount(void);
+    /* Gets Low Light Shot */
+    int             getLLS(struct camera2_shot_ext *shot);
+    /* Gets Low Light A */
     /* Sets the device orientation angle in degrees to camera FW for FD scanning property. */
     bool            setDeviceOrientation(int orientation);
     /* Gets the device orientation angle in degrees . */
@@ -536,11 +620,19 @@ public:
 #endif /* USE_BINNING_MODE */
 
 public:
+    /* For Vendor */
+    bool            getSamsungCamera(void);
+    void            setSamsungCamera(bool flag);
+    status_t        checkSamsungCamera(const CameraParameters& params);
     int             getRecordingFps(void);
     void            setRecordingFps(int fps);
     status_t        checkRecordingFps(const CameraParameters& params);
+    status_t        setParameters(const CameraParameters& params);
     status_t        checkDualMode(const CameraParameters& params);
+    status_t        checkIntelligentMode(const CameraParameters& params);
     status_t        checkVtMode(const CameraParameters& params);
+    status_t        checkFactorytest(const CameraParameters& params);
+    bool            getFactorytest(void);
 
     void            updateHwSensorSize(void);
     void            updateBinningScaleRatio(void);
@@ -550,6 +642,21 @@ public:
     bool            getUHDRecordingMode(void);
     status_t        init(void);
     void            vendorSpecificConstructor(int cameraId);
+    bool            getSWVdisMode(void);
+    bool            getHyperMotionMode(void);
+#ifdef SAMSUNG_STR_PREVIEW
+    bool            getSTRPreviewEnable(void);
+#endif
+
+#ifdef SAMSUNG_SW_VDIS
+    void            getSWVdisYuvSize(int w, int h, int *newW, int *newH);
+    void            getSWVdisAdjustYuvSize(int *width, int *height);
+    void            setSWVdisPreviewOffset(int left, int top);
+    void            getSWVdisPreviewOffset(int *left, int *top);
+    bool            isSWVdisOnPreview(void);
+    void            setSWVdisVideoIndex(int index);
+    int             getSWVdisVideoIndex(void);
+#endif
 
 private:
     bool            m_isSupportedYuvSize(const int width, const int height, const int outputPortId, int *ratio);
@@ -558,10 +665,13 @@ private:
     status_t        m_getPictureSizeList(int *sizeList);
     status_t        m_getPreviewSizeList(int *sizeList);
     bool            m_isSupportedFullSizePicture(void);
+    void            m_getSWVdisPreviewSize(int w, int h, int *newW, int *newH);
 
     void            m_initMetadata(void);
     bool            m_isUHDRecordingMode(void);
 
+    status_t        checkSWVdisMode(const CameraParameters& params);
+    status_t        checkHyperMotionMode(const CameraParameters& params);
 /*
  * Vendor specific adjust function
  */
@@ -573,6 +683,10 @@ private:
     void            m_adjustSensorMargin(int *sensorMarginW, int *sensorMarginH);
     void            m_getSetfileYuvRange(bool flagReprocessing, int *setfile, int *yuvRange);
     void            m_getCropRegion(int *x, int *y, int *w, int *h);
+#ifdef USE_CSC_FEATURE
+    bool            m_isLatinOpenCSC();
+    int             m_getAntiBandingFromLatinMCC();
+#endif
 
     status_t        m_setBinningScaleRatio(int ratio);
     void            m_setExifChangedAttribute(exif_attribute_t    *exifInfo,
@@ -583,8 +697,6 @@ private:
 
     void            m_getV4l2Name(char* colorName, size_t length, int colorFormat);
     bool            m_getUseFullSizeLUT(void);
-    /* Sets YSUM recording mode hint. */
-    void            m_setYsumRecordingHint(bool hint);
 
     /* H/W Chain Scenario Infos */
     enum HW_CONNECTION_MODE         m_getFlite3aaOtf(void);
@@ -602,6 +714,12 @@ private:
 #endif
 
 public:
+    void                setBurstShotFps(int value);
+    int                 getBurstShotFps(void);
+    void                setBurstShotTargetFps(int value);
+    int                 getBurstShotTargetFps(void);
+    int                 getLightCondition(void);
+
     ExynosCameraActivityControl *getActivityControl(void);
 
     void                getSetfileYuvRange(bool flagReprocessing, int *setfile, int *yuvRange);
@@ -617,7 +735,10 @@ public:
     bool                getUseDynamicBayer60FpsVideoSnapShot(void);
     bool                getUseDynamicBayer120FpsVideoSnapShot(void);
     bool                getUseDynamicBayer240FpsVideoSnapShot(void);
-    bool                getUseDynamicBayer480FpsVideoSnapShot(void);
+
+    void                setUseFastenAeStable(bool enable);
+    bool                getUseFastenAeStable(void);
+    bool                isFastenAeStableEnable(void);
 
     uint32_t            getBinningScaleRatio(void);
     /* Sets the dimensions for Sesnor-related BNS. */
@@ -636,6 +757,16 @@ public:
 
     int32_t             getYuvStreamMaxNum(void);
     int32_t             getInputStreamMaxNum(void);
+
+#ifdef SAMSUNG_DOF
+    int                 getFocusLensPos(void);
+    void                setFocusLensPos(int pos);
+#endif
+
+    int                 getSeriesShotMode(void);
+
+    int                 getMultiCaptureMode(void);
+    void                setMultiCaptureMode(int captureMode);
 
     void                setExposureTime(int64_t shutterSpeed);
     int64_t             getExposureTime(void);
@@ -660,10 +791,6 @@ public:
     /* True if private reprocessing or YUV reprocessing is supported */
     bool                isSupportZSLInput(void);
 
-    enum HW_CHAIN_TYPE  getHwChainType(void);
-    uint32_t            getNumOfMcscInputPorts(void);
-    uint32_t            getNumOfMcscOutputPorts(void);
-
     enum HW_CONNECTION_MODE getHwConnectionMode(
                                 enum pipeline srcPipeId,
                                 enum pipeline dstPipeId);
@@ -682,15 +809,39 @@ public:
     bool                setConfig(struct ExynosConfigInfo* config);
     struct ExynosConfigInfo* getConfig();
 
-    bool                setConfigMode(uint32_t mode, bool delayed = false);
-    int                 getConfigMode(bool delayed = false);
+    bool                setConfigMode(uint32_t mode);
+    int                 getConfigMode();
+    /* Sets Shot mode */
+    void                setShotMode(int shotMode);
+#ifdef LLS_CAPTURE
+    void                setLLSOn(uint32_t enable);
+    bool                getLLSOn(void);
+    void                setLLSValue(int value);
+    int                 getLLSValue(void);
+#ifdef SET_LLS_CAPTURE_SETFILE
+    void                setLLSCaptureOn(bool enable);
+    int                 getLLSCaptureOn();
+#endif
+#endif
+#ifdef SAMSUNG_HIFI_CAPTURE
+    bool                getHiFiCatureEnable(void);
+#endif
     void                setManualAeControl(bool isManualAeControl);
     bool                getManualAeControl(void);
     void                setFlashMode(int flashMode);
     int                 getFlashMode(void);
     void                updateMetaParameter(struct CameraMetaParameters *metaParameters);
+#ifdef OIS_CAPTURE
+    void                checkOISCaptureMode(int multiCaptureMode);
+    void                setOISCaptureModeOn(bool enable);
+    bool                getOISCaptureModeOn(void);
+#endif
     void                setDynamicPickCaptureModeOn(bool enable);
     bool                getDynamicPickCaptureModeOn(void);
+#ifdef RAWDUMP_CAPTURE
+    void                setRawCaptureModeOn(bool enable);
+    bool                getRawCaptureModeOn(void);
+#endif
     status_t            setMarkingOfExifFlash(int flag);
     int                 getMarkingOfExifFlash(void);
 
@@ -698,7 +849,7 @@ public:
     int                 getYuvBufferCount(const int outputPortId);
     void                resetYuvBufferCount(void);
 
-    void                setHighSpeedMode(uint32_t mode, bool delayed = false);
+    void                setHighSpeedMode(uint32_t mode);
     int                 getMaxHighSpeedFps(void);
 
 //Added
@@ -731,12 +882,65 @@ public:
     bool        getDepthCallbackOnCapture(void) {return 0;};
     bool        isDepthMapSupported(void);
 #endif
+#ifdef SAMSUNG_BD
+    void                setBlurInfo(unsigned char *data, unsigned int size);
+#endif
+#ifdef SAMSUNG_UTC_TS
+    void                setUTCInfo();
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    void                setLDCaptureMode(int LDMode);
+    int                 getLDCaptureMode(void);
+    int                 getLDCaptureCount(void);
+    void                setLDCaptureCount(int count);
+    void                checkLDCaptureMode(void);
+    void                setLDCaptureLLSValue(uint32_t lls);
+    int                 getLDCaptureLLSValue(void);
+    void                setLLSdebugInfo(unsigned char *data, unsigned int size);
+#endif
+
+#ifdef SAMSUNG_LENS_DC
+    bool                getLensDCEnable(void);
+#endif
+
+#ifdef SAMSUNG_STR_CAPTURE
+    void                checkSTRCaptureMode(bool hasCaptureStream);
+    void                setSTRCaptureEnable(bool enable);
+    bool                getSTRCaptureEnable(void);
+    void                setSTRdebugInfo(unsigned char *data, unsigned int size);
+#endif
 
     int                 getAntibanding();
     void                setUseFullSizeLUT(bool enable);
 
     bool                checkFaceDetectMeta(struct camera2_shot_ext *shot_ext);
+
+#ifdef SAMSUNG_OT
+    void                setObjectTrackingEnable(bool startObjectTracking);
+    bool                getObjectTrackingEnable(void);
+    void                setObjectTrackingAreas(int validFocusArea, ExynosRect2 area, int weight);
+    int                 getObjectTrackingAreas(int* validFocusArea, ExynosRect2* areas, int* weights);
+#endif
+
+#ifdef SAMSUNG_HLV
+    bool                getHLVEnable(bool recordingEnabled);
+#endif
+#ifdef SAMSUNG_IDDQD
+    bool                getIDDQDEnable(void);
+    void                setIDDQDresult(bool isdetected);
+    bool                getIDDQDresult(void);
+#endif
+    void                m_setSWVdisMode(bool swVdis);
+    void                m_setHyperMotionMode(bool enable);
+
+    void                setTransientActionMode(int transientAction);
+    int                 getTransientActionMode();
+
     bool                getHfdMode(void);
+#ifdef SAMSUNG_SSRM
+    struct ssrmCameraInfo* getSsrmCameraInfo(void) {return &m_ssrmCameraInfo; }
+#endif
 
 private:
     int                         m_scenario;
@@ -759,15 +963,26 @@ private:
     /* Flags for camera status */
     bool                        m_flagCheckPIPMode;
     bool                        m_flagRestartStream;
-    bool                        m_LLSOn;
-#ifdef USE_LLS_REPROCESSING
-    bool                        m_LLSCaptureOn;
-    int                         m_LLSCaptureCount;
-#endif
+
+    bool                        m_flagCheckProMode;
 #ifdef USE_DUAL_CAMERA
     bool                        m_flagCheckDualMode;
     enum DUAL_OPERATION_MODE    m_dualOperationMode;
 #endif
+   int                         m_burstShotFps;
+    int                         m_burstShotTargetFps;
+#ifdef LLS_CAPTURE
+    bool                        m_flagLLSOn;
+    int                         m_LLSValue;
+    int                         m_LLSCaptureOn;
+#endif
+#ifdef OIS_CAPTURE
+    bool                        m_flagOISCaptureOn;
+#endif
+#ifdef RAWDUMP_CAPTURE
+    bool                        m_flagRawCaptureOn;
+#endif
+    bool                        m_flagDynamicPickCaptureOn;
     bool                        m_flagCheckRecordingHint;
 
     int                         m_setfile;
@@ -786,11 +1001,21 @@ private:
     bool                        m_useDynamicBayer60Fps;
     bool                        m_useDynamicBayer120Fps;
     bool                        m_useDynamicBayer240Fps;
-    bool                        m_useDynamicBayer480Fps;
     bool                        m_usePureBayerReprocessing;
+    bool                        m_useFastenAeStable;
     bool                        m_dvfsLock;
 
+#ifdef SAMSUNG_SSRM
+    struct ssrmCameraInfo       m_ssrmCameraInfo;
+#endif
+
+#ifdef SAMSUNG_DOF
+    int                         m_focusLensPos;
+#endif
+
     int                         m_firing_flash_marking;
+    uint64_t                    m_exposureTimeCapture;
+
 #ifdef SUPPORT_DEPTH_MAP
     bool                        m_flagUseDepthMap;
     int                         m_depthMapW;
@@ -802,10 +1027,40 @@ private:
     int                         m_recordingPortId;
     int                         m_yuvOutPortId[MAX_PIPE_NUM];
 
+#ifdef SAMSUNG_LLS_DEBLUR
+    int                         m_flagLDCaptureMode;
+    uint32_t                    m_flagLDCaptureLLSValue;
+    int                         m_LDCaptureCount;
+#endif
     int                         m_yuvStallPort;
     int                         m_flagYuvStallPortUsage;
+#ifdef SAMSUNG_LENS_DC
+    bool                        m_flagLensDCEnable;
+    bool                        m_flagLensDCMode;
+#endif
+#ifdef SAMSUNG_STR_CAPTURE
+    bool                        m_flagSTRCaptureEnable;
+#endif
     bool                        m_isManualAeControl;
+#ifdef SAMSUNG_HRM
+    bool                        m_flagSensorHRM_Hint;
+#endif
+#ifdef SAMSUNG_LIGHT_IR
+    bool                        m_flagSensorLight_IR_Hint;
+#endif
+#ifdef SAMSUNG_GYRO
+    bool                        m_flagSensorGyroHint;
+    SensorListenerEvent_t       m_gyroListenerData;
+#endif
+#ifdef SAMSUNG_ACCELEROMETER
+    bool                        m_flagSensorAccelerationHint;
+#endif
+#ifdef SAMSUNG_ROTATION
+    bool                        m_flagSensorRotationHint;
+#endif
+    bool                        m_isUniqueIdRead;
 
+    bool                        m_isFactoryBin;
     int64_t                     m_exposureTime;
     int                         m_gain;
     int64_t                     m_ledPulseWidth;
@@ -820,9 +1075,18 @@ private:
     int                         m_previewDsInputPortId;
     int                         m_captureDsInputPortId;
 
-#ifdef SUPPORT_RESTART_TRANSITION_HIGHSPEED
-    uint32_t                    m_delayedMinFps;
-    uint32_t                    m_delayedMaxFps;
+#ifdef SAMSUNG_OT
+    ExynosRect2                 m_objectTrackingArea;
+    int                         m_objectTrackingWeight;
+#endif
+    int                         m_flagtransientAction;
+#ifdef SAMSUNG_IDDQD
+    bool                        m_lensDirtyDetected;
+#endif
+#ifdef SAMSUNG_SW_VDIS
+    int                         m_previewOffsetLeft;
+    int                         m_previewOffsetTop;
+    int                         m_videoOutIndex;
 #endif
 };
 

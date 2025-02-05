@@ -205,7 +205,9 @@ status_t ExynosCameraPipeSTK_PICTURE::m_run(void)
     int nv21Align = 0;
 
     if(m_configurations->getModeValue(CONFIGURATION_SERIES_SHOT_MODE) == SERIES_SHOT_MODE_LLS
-            || m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21) {
+            || m_configurations->getModeValue(CONFIGURATION_SHOT_MODE) == SAMSUNG_ANDROID_CONTROL_SHOOTING_MODE_HDR
+            || m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21
+            || m_configurations->getModeValue(CONFIGURATION_SHOT_MODE) == SAMSUNG_ANDROID_CONTROL_SHOOTING_MODE_SELECTIVE_FOCUS) {
         pixelformat = STK_NV21;
         nv21Align = ALIGN_UP(pictureRect.w, CAMERA_16PX_ALIGN) * ALIGN_UP(pictureRect.h, CAMERA_16PX_ALIGN);
     } else {
@@ -219,8 +221,6 @@ status_t ExynosCameraPipeSTK_PICTURE::m_run(void)
             m_thread_id = (*run_stk)(m_stk_handle, stk_in_Buffer.addr[0], stk_in_Buffer.addr[0] + nv21Align, pixelformat);
         else
             m_thread_id = (*run_stk)(m_stk_handle, stk_in_Buffer.addr[0], NULL, pixelformat);
-
-        ret = pthread_join(*m_thread_id, NULL);
 
         m_timer.stop();
         durationTime = m_timer.durationMsecs();

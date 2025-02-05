@@ -11,8 +11,7 @@ endif
 ifeq ($(BOARD_CAMERA_USES_DUAL_CAMERA_SOLUTION_ARCSOFT), true)
 LOCAL_CFLAGS += -DUSES_DUAL_CAMERA_SOLUTION_ARCSOFT
 LOCAL_C_INCLUDES += \
-    $(TOP)/hardware/samsung_slsi-linaro/exynos/libcamera3/common_v2/PlugIn/converter/libs/libArcsoftFusion
-
+    $(TOP)/hardware/samsung_slsi-linaro/exynos/libcamera/common_v3/PlugIn/converter/libs/libArcsoftFusion
 LOCAL_SRC_FILES += \
 	../../exynos/libcamera3/common_v2/PlugIn/converter/libs/libArcsoftFusion/ExynosCameraPlugInConverterArcsoftFusion.cpp \
 	../../exynos/libcamera3/common_v2/PlugIn/converter/libs/libArcsoftFusion/ExynosCameraPlugInConverterArcsoftFusionBokehCapture.cpp \
@@ -35,12 +34,4 @@ LOCAL_C_INCLUDES += \
     $(TOP)/hardware/samsung_slsi-linaro/exynos/libcamera3/common_v2/PlugIn/converter/libs/libVDIS
 LOCAL_SRC_FILES += \
 	../../exynos/libcamera3/common_v2/PlugIn/converter/libs/libVDIS/ExynosCameraPlugInConverterVDIS.cpp
-endif
-
-ifeq ($(BOARD_CAMERA_USES_HIFI_LLS_CAPTURE), true)
-LOCAL_CFLAGS += -DUSES_HIFI_LLS_CAPTURE
-LOCAL_C_INCLUDES += \
-    $(TOP)/hardware/samsung_slsi-linaro/exynos/libcamera3/common_v2/PlugIn/converter/libs/libhifills
-LOCAL_SRC_FILES += \
-	../../exynos/libcamera3/common_v2/PlugIn/converter/libs/libhifills/ExynosCameraPlugInConverterHifills.cpp
 endif

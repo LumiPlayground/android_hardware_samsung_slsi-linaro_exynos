@@ -21,12 +21,24 @@
 #include "ExynosCamera3Interface.h"
 #include "ExynosCameraAutoTimer.h"
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraVendorTags.h"
+#endif
+
 namespace android {
 
 /* Convert Id to the one for HAL. Refer to the enum CAMERA_ID in ExynosCameraSensorInfoBase.h  */ 
 static int HAL_getCameraId(int id)
 {
     int cameraId = id;
+    switch (cameraId) {
+    case 3:
+        cameraId = CAMERA_ID_SECURE;
+        break;
+    default:
+        break;
+    }
+
     return cameraId;
 }
 
@@ -86,7 +98,7 @@ static int HAL3_camera_device_open(const struct hw_module_t* module,
 
     g_cam_openLock[cameraId].lock();
     g_cam_device3[cameraId]->common.tag     = HARDWARE_DEVICE_TAG;
-    g_cam_device3[cameraId]->common.version = CAMERA_DEVICE_API_VERSION_3_4;
+    g_cam_device3[cameraId]->common.version = CAMERA_DEVICE_API_VERSION_3_3;
     g_cam_device3[cameraId]->common.module  = const_cast<hw_module_t *>(module);
     g_cam_device3[cameraId]->common.close   = HAL3_camera_device_close;
     g_cam_device3[cameraId]->ops            = &camera_device3_ops;
@@ -417,7 +429,7 @@ static int HAL_getCameraInfo(int camera_id, struct camera_info *info)
         memcpy(info, &sCameraInfo[cameraId], sizeof(CameraInfo));
 
     /* set device API version */
-    info->device_version = CAMERA_DEVICE_API_VERSION_3_4;
+    info->device_version = CAMERA_DEVICE_API_VERSION_3_3;
 
     /* set camera_metadata_t if needed */
     if (info->device_version >= HARDWARE_DEVICE_API_VERSION(2, 0)) {
@@ -640,7 +652,7 @@ static int HAL_camera_device_open(
 
     CameraMetadata metadata;
     camera_metadata_entry flashAvailable;
-    bool hasFlash = false;
+    bool hasFlash;
     char flashFilePath[100] = {'\0',};
 
 #ifdef BOARD_BACK_CAMERA_USES_EXTERNAL_CAMERA
@@ -880,7 +892,11 @@ static int HAL_camera_device_start_preview(struct camera_device *dev)
 #ifdef DUAL_CAMERA_SUPPORTED
     if (cameraId != 0 && g_cam_device[0] != NULL
         && cam_state[0] != CAMERA_NONE && cam_state[0] != CAMERA_CLOSED) {
+#ifdef SAMSUNG_QUICK_SWITCH
+        ret = obj(dev)->setDualMode(!obj(dev)->getQuickSwitchFlag());
+#else
         ret = obj(dev)->setDualMode(true);
+#endif
         if (ret != NO_ERROR) {
             ALOGE("ERR(%s[%d]):camera(%d) set dual mode fail, ret(%d)",
                 __FUNCTION__, __LINE__, cameraId, ret);
@@ -1129,7 +1145,7 @@ char *HAL_camera_device_get_parameters(struct camera_device *dev)
     CameraParameters parms = obj(dev)->getParameters();
     str = parms.flatten();
 #endif
-    return strdup(str.string());
+    return strdup(str.c_str());
 }
 
 static void HAL_camera_device_put_parameters(
@@ -1199,7 +1215,18 @@ static void HAL_get_vendor_tag_ops(__unused vendor_tag_ops_t* ops)
 {
     ALOGV("INFO(%s):", __FUNCTION__);
 
+#ifdef SAMSUNG_TN_FEATURE
+    SecCameraVendorTags::Ops = ops;
+
+    ops->get_all_tags = SecCameraVendorTags::get_ext_all_tags;
+    ops->get_tag_count = SecCameraVendorTags::get_ext_tag_count;
+    ops->get_tag_type = SecCameraVendorTags::get_ext_tag_type;
+    ops->get_tag_name = SecCameraVendorTags::get_ext_tag_name;
+    ops->get_section_name = SecCameraVendorTags::get_ext_section_name;
+    ops->reserved[0] = NULL;
+#else
     ALOGW("WARN(%s[%d]):empty operation", __FUNCTION__, __LINE__);
+#endif
 }
 
 }; /* namespace android */

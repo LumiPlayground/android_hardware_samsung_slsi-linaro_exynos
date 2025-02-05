@@ -262,6 +262,13 @@ status_t ExynosCameraPipePP::m_run(void)
     }
 
     ret = m_pp->draw(srcImage, dstImage, params);
+
+    if (dstImage[0].bufferDondeIndex >= 0) {
+        newFrame->setBufferDondeIndex(dstImage[0].bufferDondeIndex);
+    }
+    
+    newFrame->setBvOffset(dstImage[0].bvOffset);
+
     if (ret != NO_ERROR) {
         goto func_exit;
     }

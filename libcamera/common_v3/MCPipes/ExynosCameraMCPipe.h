@@ -285,6 +285,9 @@ protected:
     bool                        m_serializeOperation;
     static Mutex                g_serializationLock;
 #endif
+#ifdef SAMSUNG_JQ
+    unsigned char               m_qtable[128];
+#endif
 
     int                         m_sensorNodeIndex;
 #ifdef SUPPORT_DEPTH_MAP

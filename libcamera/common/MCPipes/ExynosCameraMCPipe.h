@@ -78,6 +78,10 @@ public:
     virtual ~ExynosCameraMCPipe();
 
     virtual status_t        create(int32_t *sensorIds = NULL);
+#ifdef SAMSUNG_COMPANION
+    virtual status_t        precreate(int32_t *sensorIds = NULL);
+    virtual status_t        postcreate(int32_t *sensorIds = NULL);
+#endif
     virtual status_t        destroy(void);
 
     virtual status_t        setupPipe(camera_pipe_info_t *pipeInfos, int32_t *sensorIds = NULL);

@@ -22,6 +22,10 @@
 #include "ExynosCameraInterface.h"
 #include "ExynosCameraAutoTimer.h"
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraVendorTags.h"
+#endif
+
 namespace android {
 
 static int HAL_camera_device_open(
@@ -32,6 +36,12 @@ static int HAL_camera_device_open(
     ExynosCameraAutoTimer autoTimer(__FUNCTION__);
 
     int cameraId = atoi(id);
+    CameraMetadata metadata;
+    camera_metadata_entry flashAvailable;
+    bool hasFlash = false;
+    FILE *fp = NULL;
+    int ret = 0;
+    char flashFilePath[100] = {'\0',};
 
 #ifdef BOARD_FRONT_CAMERA_ONLY_USE
     cameraId += 1;
@@ -132,6 +142,44 @@ done:
     cam_stateLock[cameraId].lock();
     cam_state[cameraId] = state;
     cam_stateLock[cameraId].unlock();
+
+    if (g_cam_info[cameraId]) {
+        metadata = g_cam_info[cameraId];
+        flashAvailable = metadata.find(ANDROID_FLASH_INFO_AVAILABLE);
+
+        if (flashAvailable.count == 1 && flashAvailable.data.u8[0] == 1) {
+            hasFlash = true;
+        } else {
+            hasFlash = false;
+        }
+    }
+
+    if(hasFlash && g_cam_torchEnabled[cameraId]) {
+        if (cameraId == CAMERA_ID_BACK) {
+            snprintf(flashFilePath, sizeof(flashFilePath), TORCH_REAR_FILE_PATH);
+        } else {
+            snprintf(flashFilePath, sizeof(flashFilePath), TORCH_FRONT_FILE_PATH);
+        }
+
+        fp = fopen(flashFilePath, "w+");
+
+        if (fp == NULL) {
+            ALOGE("ERR(%s[%d]):torch file open(%s) fail, ret(%d)",
+                __FUNCTION__, __LINE__, flashFilePath, fp);
+        } else {
+            fwrite("0", sizeof(char), 1, fp);
+            fflush(fp);
+            fclose(fp);
+
+            g_cam_torchEnabled[cameraId] = false;
+        }
+    }
+
+    if (g_callbacks) {
+        g_callbacks->torch_mode_status_change(g_callbacks, id, TORCH_MODE_STATUS_NOT_AVAILABLE);
+        ALOGI("INFO(%s[%d]):camera(%d) TORCH_MODE_STATUS_NOT_AVAILABLE", __FUNCTION__, __LINE__, cameraId);
+    }
+
     ALOGI("INFO(%s[%d]):camera(%d) out", __FUNCTION__, __LINE__, cameraId);
 #endif /* (defined BOARD_BACK_CAMERA_USES_EXTERNAL_CAMERA) && (defined BOARD_FRONT_CAMERA_USES_EXTERNAL_CAMERA) */
 
@@ -144,6 +192,7 @@ static int HAL_camera_device_close(struct hw_device_t* device)
 
     uint32_t cameraId;
     enum CAMERA_STATE state;
+    char camid[10];
 
 #if (defined BOARD_BACK_CAMERA_USES_EXTERNAL_CAMERA) && (defined BOARD_FRONT_CAMERA_USES_EXTERNAL_CAMERA)
 #else
@@ -177,6 +226,13 @@ static int HAL_camera_device_close(struct hw_device_t* device)
         ALOGI("INFO(%s[%d]):camera(%d)", __FUNCTION__, __LINE__, cameraId);
     }
 
+    /* Update torch status */
+    g_cam_torchEnabled[cameraId] = false;
+    snprintf(camid, sizeof(camid), "%d\n", cameraId);
+    if (g_callbacks) {
+        g_callbacks->torch_mode_status_change(g_callbacks, camid, TORCH_MODE_STATUS_AVAILABLE_OFF);
+        ALOGI("INFO(%s[%d]):camera(%d) TORCH_MODE_STATUS_AVAILABLE_OFF", __FUNCTION__, __LINE__, cameraId);
+    }
     ALOGI("INFO(%s[%d]): out", __FUNCTION__, __LINE__);
 #endif /* (defined BOARD_BACK_CAMERA_USES_EXTERNAL_CAMERA) && (defined BOARD_FRONT_CAMERA_USES_EXTERNAL_CAMERA) */
 
@@ -507,7 +563,7 @@ char *HAL_camera_device_get_parameters(struct camera_device *dev)
     CameraParameters parms = obj(dev)->getParameters();
     str = parms.flatten();
 #endif
-    return strdup(str.string());
+    return strdup(str.c_str());
 }
 
 static void HAL_camera_device_put_parameters(
@@ -526,7 +582,7 @@ static int HAL_camera_device_send_command(
         int32_t arg1,
         int32_t arg2)
 {
-    //ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+    ExynosCameraAutoTimer autoTimer(__FUNCTION__);
 
     ALOGV("DEBUG(%s):", __FUNCTION__);
     return obj(dev)->sendCommand(cmd, arg1, arg2);
@@ -580,15 +636,22 @@ static int HAL_getNumberOfCameras()
     return sizeof(sCameraInfo) / sizeof(sCameraInfo[0]);
 }
 
-static int HAL_set_callbacks(__unused const camera_module_callbacks_t *callbacks)
+static int HAL_set_callbacks(const camera_module_callbacks_t *callbacks)
 {
-    ALOGW("WRN(%s): not supported API level 1.0", __FUNCTION__);
+    ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+
+    if (callbacks == NULL)
+        ALOGE("ERR(%s[%d]):dev is NULL", __FUNCTION__, __LINE__);
+
+    g_callbacks = callbacks;
+
     return 0;
 }
 
 static int HAL_getCameraInfo(int cameraId, struct camera_info *info)
 {
     ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+    status_t ret = NO_ERROR;
 
     ALOGV("DEBUG(%s):", __FUNCTION__);
     if (cameraId < 0 || cameraId >= HAL_getNumberOfCameras()) {
@@ -600,7 +663,128 @@ static int HAL_getCameraInfo(int cameraId, struct camera_info *info)
     info->orientation = sCameraInfo[cameraId][1];
     info->device_version = HARDWARE_DEVICE_API_VERSION(1, 0);
 
+    if (g_cam_info[cameraId] == NULL) {
+        ALOGD("DEBUG(%s[%d]):Return static information (%d)", __FUNCTION__, __LINE__, cameraId);
+        ret = ExynosCamera1MetadataConverter::constructStaticInfo(cameraId, &g_cam_info[cameraId]);
+        if (ret != 0) {
+            ALOGE("ERR(%s[%d]): static information is NULL", __FUNCTION__, __LINE__);
+            return -EINVAL;
+        }
+        info->static_camera_characteristics = g_cam_info[cameraId];
+    } else {
+        ALOGD("DEBUG(%s[%d]):Reuse!! Return static information (%d)", __FUNCTION__, __LINE__, cameraId);
+        info->static_camera_characteristics = g_cam_info[cameraId];
+    }
+
+    /* set service arbitration (resource_cost, conflicting_devices, conflicting_devices_length */
+    info->resource_cost = sCameraConfigInfo[cameraId].resource_cost;
+    info->conflicting_devices = sCameraConfigInfo[cameraId].conflicting_devices;
+    info->conflicting_devices_length = sCameraConfigInfo[cameraId].conflicting_devices_length;
+    ALOGD("INFO(%s info->resource_cost = %d ", __FUNCTION__, info->resource_cost);
+    if (info->conflicting_devices_length) {
+        for (size_t i = 0; i < info->conflicting_devices_length; i++) {
+            ALOGD("INFO(%s info->conflicting_devices = %s ", __FUNCTION__, info->conflicting_devices[i]);
+        }
+    } else {
+        ALOGD("INFO(%s info->conflicting_devices_length is zero ", __FUNCTION__);
+    }
+
     return NO_ERROR;
+}
+
+static int HAL_set_torch_mode(const char* camera_id, bool enabled)
+{
+    ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+
+    int cameraId = atoi(camera_id);
+    FILE *fp = NULL;
+    char flashFilePath[100] = {'\0',};
+    CameraMetadata metadata;
+    camera_metadata_entry flashAvailable;
+    int ret = 0;
+
+    ALOGI("INFO(%s[%d]):in =====", __FUNCTION__, __LINE__);
+    if (cameraId < 0 || cameraId >= HAL_getNumberOfCameras()) {
+        ALOGE("ERR(%s[%d]):Invalid camera ID %d", __FUNCTION__, __LINE__, cameraId);
+        return -EINVAL;
+    }
+
+    /* Check the android.flash.info.available */
+    /* If this camera device does not support flash, It have to return -ENOSYS */
+    metadata = g_cam_info[cameraId];
+    flashAvailable = metadata.find(ANDROID_FLASH_INFO_AVAILABLE);
+
+    if (flashAvailable.count == 1 && flashAvailable.data.u8[0] == 1) {
+        ALOGV("DEBUG(%s[%d]): Flash metadata exist", __FUNCTION__, __LINE__);
+    } else {
+        ALOGE("ERR(%s[%d]): Can not find flash metadata", __FUNCTION__, __LINE__);
+        return -ENOSYS;
+    }
+
+    ALOGI("INFO(%s[%d]): Current Camera State (state = %d)", __FUNCTION__, __LINE__, cam_state[cameraId]);
+
+    /* Add the check the camera state that camera in use or not */
+    if (cam_state[cameraId] > CAMERA_CLOSED) {
+        ALOGE("ERR(%s[%d]): Camera Device is busy (state = %d)", __FUNCTION__, __LINE__, cam_state[cameraId]);
+        if (g_callbacks) {
+            g_callbacks->torch_mode_status_change(g_callbacks, camera_id, TORCH_MODE_STATUS_AVAILABLE_OFF);
+            ALOGI("INFO(%s[%d]):camera(%d) TORCH_MODE_STATUS_AVAILABLE_OFF", __FUNCTION__, __LINE__, cameraId);
+        }
+        return -EBUSY;
+    }
+
+    /* Add the sysfs file read (sys/class/camera/flash/torch_flash) then set 0 or 1 */
+    if (cameraId == CAMERA_ID_BACK) {
+        snprintf(flashFilePath, sizeof(flashFilePath), TORCH_REAR_FILE_PATH);
+    } else {
+        snprintf(flashFilePath, sizeof(flashFilePath), TORCH_FRONT_FILE_PATH);
+    }
+
+    fp = fopen(flashFilePath, "w+");
+
+    if (fp == NULL) {
+        ALOGE("ERR(%s[%d]):torch file open(%s) fail, ret(%d)",
+            __FUNCTION__, __LINE__, flashFilePath, fp);
+        return -ENOSYS;
+    }
+
+    if (enabled) {
+        fwrite("1", sizeof(char), 1, fp);
+    } else {
+        fwrite("0", sizeof(char), 1, fp);
+    }
+
+    fflush(fp);
+
+    ret = fclose(fp);
+    if (ret != 0) {
+        ALOGE("ERR(%s[%d]): file close failed(%d)", __FUNCTION__, __LINE__, ret);
+    }
+
+    if (enabled) {
+        g_cam_torchEnabled[cameraId] = true;
+        if (g_callbacks) {
+            g_callbacks->torch_mode_status_change(g_callbacks, camera_id, TORCH_MODE_STATUS_AVAILABLE_ON);
+            ALOGI("INFO(%s[%d]):camera(%d) TORCH_MODE_STATUS_AVAILABLE_ON", __FUNCTION__, __LINE__, cameraId);
+        }
+    } else {
+        g_cam_torchEnabled[cameraId] = false;
+        if (g_callbacks) {
+            g_callbacks->torch_mode_status_change(g_callbacks, camera_id, TORCH_MODE_STATUS_AVAILABLE_OFF);
+            ALOGI("INFO(%s[%d]):camera(%d) TORCH_MODE_STATUS_AVAILABLE_OFF", __FUNCTION__, __LINE__, cameraId);
+        }
+    }
+
+    ALOGI("INFO(%s[%d]):out =====", __FUNCTION__, __LINE__);
+
+    return NO_ERROR;
+}
+
+static int HAL_init()
+{
+    ALOGI("INFO(%s[%d]):in =====", __FUNCTION__, __LINE__);
+
+    return OK;
 }
 
 static int HAL_open_legacy(__unused const struct hw_module_t* module, __unused const char* id,

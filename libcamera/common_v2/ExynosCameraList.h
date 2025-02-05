@@ -124,15 +124,44 @@ public:
     /* Process Queue */
     void pushProcessQ(T *buf)
     {
+        status_t ret = NO_ERROR;
+        int retryCount = 3;
+        bool retryFlag = false;
         char threadName[30] = "ExynosCameraQueueThread";
 
         Mutex::Autolock lock(m_processQMutex);
         m_processQ.push_back(*buf);
 
-        if (m_waitProcessQ)
+        if (m_waitProcessQ) {
             m_processQCondition.signal();
-        else if (m_thread != NULL && m_thread->isRunning() == false)
-            m_thread->run(threadName);
+        } else if (m_thread != NULL && m_thread->isRunning() == false) {
+            do {
+                ret = m_thread->run(threadName);
+                switch (ret) {
+                    case INVALID_OPERATION:
+                        /* Already running */
+                        ALOGW("WARN(%s[%d]):[TID %d]Failed to run thread. Already running.",
+                                __FUNCTION__, __LINE__, m_thread->getTid());
+
+                        retryFlag = false;
+                        break;
+                    case UNKNOWN_ERROR:
+                        /* Failed to run thread */
+                        ALOGE("ERR(%s[%d]):[TID %d]Failed to run Thread. Unknown error. Retry. RemainCount %d",
+                                __FUNCTION__, __LINE__, m_thread->getTid(), retryCount);
+
+                        retryFlag = true;
+                        break;
+                    default:
+                        /* Success to run thread */
+                        ALOGV("DEBUG(%s[%d]):[TID %d]Success to run thread",
+                                __FUNCTION__, __LINE__, m_thread->getTid());
+
+                        retryFlag = false;
+                        break;
+                }
+            } while (retryFlag == true && retryCount-- > 0);
+        }
     };
 
     status_t popProcessQ(T *buf)

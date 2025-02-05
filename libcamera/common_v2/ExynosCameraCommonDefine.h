@@ -5,7 +5,7 @@
 
 #include <cutils/log.h>
 
-#define BUILD_DATE()   ALOGE("Build Date is (__DATE__) (__TIME__)")
+#define BUILD_DATE()   ALOGE("Build Date is (%s) (%s)", __DATE__, __TIME__)
 #define WHERE_AM_I()   ALOGE("[(%s)%d] ", __FUNCTION__, __LINE__)
 #define LOG_DELAY()    usleep(100000)
 
@@ -73,7 +73,7 @@
 #define ROUND_OFF_DIGIT(x, dig)     ((uint32_t)(floor(((double)x)/((double)dig) + 0.5f) * dig))
 
 /* Image processing */
-#define SATURATING_ADD(a, b)  ((((a<<4) > (0xFFFF - (b<<4))) ? 0xFFFF : ((a<<4) + (b<<4)))>>4)
+#define SATURATING_ADD(a, b)  (((a) > (0x3FF - (b))) ? 0x3FF : ((a) + (b)))
 #define COMBINE(a, b) ((((a<<20)&0xFFF00000)|((b<<8)&0x000FFF00)))
 #define COMBINE_P0(a, b) ((((a)&0x00FF)|((b<<8)&0x0F00)))
 #define COMBINE_P1(a, b) ((((a>>4)&0x000F)|((b<<4)&0x0FF0)))

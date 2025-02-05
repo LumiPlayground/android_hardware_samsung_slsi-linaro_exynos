@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraFrameFactoryPreviewFrontPIP"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraFrameFactoryPreviewFrontPIP.h"
 
@@ -38,7 +38,7 @@ status_t ExynosCameraFrameFactoryPreviewFrontPIP::m_setDeviceInfo(void)
     int pipeId = -1;
     int node3aa = -1, node3ac = -1, node3ap = -1;
     int nodeIsp = -1, nodeIspc = -1, nodeIspp = -1;
-    int nodeMcsc = -1, nodeMcscp0 = -1, nodeMcscp1 = -1, nodeMcscpDs = -1;
+    int nodeMcsc = -1, nodeMcscp0 = -1, nodeMcscp1 = -1, nodeMcscp5 = -1;
     int nodeVra = -1;
     int previousPipeId = -1;
     int vraSrcPipeId = -1;
@@ -57,37 +57,30 @@ status_t ExynosCameraFrameFactoryPreviewFrontPIP::m_setDeviceInfo(void)
     nodeIspc = FIMC_IS_VIDEO_I0C_NUM;
     nodeIspp = FIMC_IS_VIDEO_I0P_NUM;
     nodeMcsc = FIMC_IS_VIDEO_M0S_NUM;
+    nodeMcscp0 = FIMC_IS_VIDEO_M2P_NUM;
+    nodeMcscp1 = FIMC_IS_VIDEO_M3P_NUM;
+    nodeMcscp5 = FIMC_IS_VIDEO_M5P_NUM;
     nodeVra = FIMC_IS_VIDEO_VRA_NUM;
-
-    switch (m_parameters->getNumOfMcscOutputPorts()) {
-    case 5:
-        nodeMcscp0 = FIMC_IS_VIDEO_M2P_NUM;
-        nodeMcscp1 = FIMC_IS_VIDEO_M3P_NUM;
-        nodeMcscpDs = FIMC_IS_VIDEO_M5P_NUM;
-        break;
-    case 3:
-        nodeMcscp0 = FIMC_IS_VIDEO_M0P_NUM;
-        nodeMcscp1 = FIMC_IS_VIDEO_M1P_NUM;
-        nodeMcscpDs = FIMC_IS_VIDEO_M3P_NUM;
-        break;
-    default:
-        CLOGE("invalid output port(%d)", m_parameters->getNumOfMcscOutputPorts());
-        break;
-    }
 
     /*
      * FLITE
      */
+    bool flagQuickSwitchFlag = false;
+
+#ifdef SAMSUNG_QUICK_SWITCH
+    flagQuickSwitchFlag = m_parameters->getQuickSwitchFlag();
+#endif
+
     if (m_flagFlite3aaOTF == HW_CONNECTION_MODE_M2M) {
         pipeId = PIPE_FLITE;
-    } else {
+    }else {
         pipeId = PIPE_3AA;
     }
 
     /* FLITE */
     nodeType = getNodeType(PIPE_FLITE);
     m_deviceInfo[pipeId].pipeId[nodeType]  = PIPE_FLITE;
-    m_deviceInfo[pipeId].nodeNum[nodeType] = getFliteNodenum(m_cameraId);
+    m_deviceInfo[pipeId].nodeNum[nodeType] = getFliteNodenum(m_cameraId, false, flagQuickSwitchFlag);
     m_deviceInfo[pipeId].bufferManagerType[nodeType] = BUFFER_MANAGER_ION_TYPE;
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "FLITE", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[nodeType], false, flagStreamLeader, m_flagReprocessing);
@@ -108,7 +101,7 @@ status_t ExynosCameraFrameFactoryPreviewFrontPIP::m_setDeviceInfo(void)
     if (m_parameters->isDepthMapSupported()) {
         nodeType = getNodeType(PIPE_VC1);
         m_deviceInfo[pipeId].pipeId[nodeType]  = PIPE_VC1;
-        m_deviceInfo[pipeId].nodeNum[nodeType] = getDepthVcNodeNum(m_cameraId);
+        m_deviceInfo[pipeId].nodeNum[nodeType] = getDepthVcNodeNum(m_cameraId, false);
         strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "DEPTH", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
         m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_FLITE)], false, flagStreamLeader, m_flagReprocessing);
     }
@@ -213,7 +206,7 @@ status_t ExynosCameraFrameFactoryPreviewFrontPIP::m_setDeviceInfo(void)
     /* MCSC5 */
     nodeType = getNodeType(PIPE_MCSC5);
     m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC5;
-    m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcscpDs;
+    m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcscp5;
     m_deviceInfo[pipeId].bufferManagerType[nodeType] = BUFFER_MANAGER_ION_TYPE;
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_DS", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC)], true, flagStreamLeader, m_flagReprocessing);
@@ -257,7 +250,6 @@ status_t ExynosCameraFrameFactoryPreviewFrontPIP::m_initPipes(uint32_t frameRate
     int dsWidth = MAX_VRA_INPUT_WIDTH;
     int dsHeight = MAX_VRA_INPUT_HEIGHT;
     int dsFormat = m_parameters->getHwVraInputFormat();
-    int stride = 0;
     int bayerFormat = m_parameters->getBayerFormat(PIPE_3AA);
     int hwVdisformat = m_parameters->getHWVdisFormat();
     int perFramePos = 0;

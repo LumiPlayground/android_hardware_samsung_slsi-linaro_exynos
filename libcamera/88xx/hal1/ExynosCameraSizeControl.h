@@ -33,9 +33,22 @@
 
 namespace android {
 
+typedef struct size_control_info {
+    ExynosRect      bnsSize;
+    ExynosRect      bayerCropSize;
+    ExynosRect      bdsSize;
+    ExynosRect      yuvCropSize;
+    ExynosRect      hwPreviewSize;
+    ExynosRect      previewSize;
+    ExynosRect      hwVideoSize;
+    ExynosRect      pictureSize;
+    ExynosRect      thumbnailSize;
+} size_control_info_t;
+
 void updateNodeGroupInfo(
         int pipeId,
         ExynosCameraParameters *params,
+        const size_control_info_t sizeControlInfo,
         camera2_node_group *node_group_info);
 
 /* Helper function */

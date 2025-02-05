@@ -26,6 +26,7 @@ namespace android {
 void updateNodeGroupInfo(
         int pipeId,
         ExynosCameraParameters *params,
+        const size_control_info_t sizeControlInfo,
         camera2_node_group *node_group_info)
 {
     status_t ret = NO_ERROR;
@@ -41,74 +42,77 @@ void updateNodeGroupInfo(
     ExynosRect mcsc1Size;
     ExynosRect mcsc2Size;
 
-    if (isReprocessing == false) {
-        params->getPreviewBayerCropSize(&bnsSize, &bayerCropSize);
-        params->getPreviewBdsSize(&bdsSize);
+    bnsSize = sizeControlInfo.bnsSize;
+    bayerCropSize = sizeControlInfo.bayerCropSize;
+    bdsSize = sizeControlInfo.bdsSize;
 
+    if (bdsSize.w > bayerCropSize.w || bdsSize.h > bayerCropSize.h) {
+        ALOGW("WARN(%s[%d]):Bcrop size(%dx%d) < BDS size(%dx%d). Fix it.",
+                __FUNCTION__, __LINE__,
+                bayerCropSize.w, bayerCropSize.h, bdsSize.w, bdsSize.h);
+        bdsSize.w = bayerCropSize.w;
+        bdsSize.h = bayerCropSize.h;
+    }
+
+    if (isReprocessing == false) {
         if (params->isUseIspInputCrop() == true)
-            params->getPreviewYuvCropSize(&ispSize);
+            ispSize = sizeControlInfo.yuvCropSize;
         else
-            params->getPreviewBdsSize(&ispSize);
+            ispSize = sizeControlInfo.bdsSize;
 
         if (params->isUseMcscInputCrop() == true)
-            params->getPreviewYuvCropSize(&mcscInputSize);
+            mcscInputSize = sizeControlInfo.yuvCropSize;
         else
             mcscInputSize = ispSize;
 
-        params->getPreviewSize(&mcsc0Size.w, &mcsc0Size.h);
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-        if (params->isFusionEnabled() == true)
-            params->getHwPreviewSize(&mcsc0Size.w, &mcsc0Size.h);
-#endif
-        params->getPreviewSize(&mcsc1Size.w, &mcsc1Size.h);
-        params->getHwVideoSize(&mcsc2Size.w, &mcsc2Size.h);
+        mcsc0Size = sizeControlInfo.hwPreviewSize;
+
+        if (params->getHighResolutionCallbackMode() == true) {
+            mcsc1Size = sizeControlInfo.hwPreviewSize;
+        } else {
+            mcsc1Size = sizeControlInfo.previewSize;
+        }
+
+        if (params->getCameraId() == CAMERA_ID_FRONT && params->getDualMode() == true)
+            mcsc2Size = sizeControlInfo.hwPreviewSize;
+        else
+            mcsc2Size = sizeControlInfo.hwVideoSize;
+
 #ifdef BOARD_CAMERA_USES_DUAL_CAMERA
         if (params->isFusionEnabled() == true) {
             if ((params->getCameraId() == CAMERA_ID_FRONT || params->getCameraId() == CAMERA_ID_BACK_1) &&
                 (params->getDualMode() == true)) {
-                params->getHwPreviewSize(&mcsc2Size.w, &mcsc2Size.h);
+                mcsc2Size = sizecontrolInfo.hwPreviewSize;
             }
         }
 #endif
     } else {
-        if (params->getUsePureBayerReprocessing() == true) {
-            params->getPictureBayerCropSize(&bnsSize, &bayerCropSize);
-            params->getPictureBdsSize(&bdsSize);
-        } else { /* If dirty bayer is used for reprocessing, reprocessing ISP input size should be set preview bayer crop size */
-            params->getPreviewBayerCropSize(&bnsSize, &bayerCropSize);
-            params->getPreviewBdsSize(&bdsSize);
-        }
-
         if (params->isUseReprocessingIspInputCrop() == true)
-            params->getPictureYuvCropSize(&ispSize);
-        else if (params->getUsePureBayerReprocessing() == true)
-            params->getPictureBdsSize(&ispSize);
-        else /* for dirty bayer reprocessing */
-            ispSize = bayerCropSize;
+            ispSize = sizeControlInfo.yuvCropSize;
+        else
+            ispSize = sizeControlInfo.bdsSize;
 
         if (params->isUseReprocessingMcscInputCrop() == true)
-            params->getPictureYuvCropSize(&mcscInputSize);
+            mcscInputSize = sizeControlInfo.yuvCropSize;
         else
             mcscInputSize = ispSize;
 
         if (params->isSingleChain() == true) {
-            params->getPictureSize(&mcsc1Size.w, &mcsc1Size.h);
-            params->getThumbnailSize(&mcsc2Size.w, &mcsc2Size.h);
+            mcsc1Size = sizeControlInfo.pictureSize;
+            mcsc2Size = sizeControlInfo.thumbnailSize;
 
-            if (params->getOutPutFormatNV21Enable()) {
-                params->getPictureSize(&mcsc0Size.w, &mcsc0Size.h);
-            } else {
-                params->getPreviewSize(&mcsc0Size.w, &mcsc0Size.h);
-            }
+            if (params->getOutPutFormatNV21Enable())
+                mcsc0Size = sizeControlInfo.pictureSize;
+            else
+                mcsc0Size = sizeControlInfo.previewSize;
         } else {
-            params->getPictureSize(&mcsc0Size.w, &mcsc0Size.h);
-            params->getThumbnailSize(&mcsc1Size.w, &mcsc1Size.h);
+            mcsc0Size = sizeControlInfo.pictureSize;
+            mcsc1Size = sizeControlInfo.thumbnailSize;
 
-            if (params->getOutPutFormatNV21Enable()) {
-                params->getPictureSize(&mcsc2Size.w, &mcsc2Size.h);
-            } else {
-                params->getPreviewSize(&mcsc2Size.w, &mcsc2Size.h);
-            }
+            if (params->getOutPutFormatNV21Enable())
+                mcsc2Size = sizeControlInfo.pictureSize;
+            else
+                mcsc2Size = sizeControlInfo.previewSize;
         }
     }
 
@@ -241,6 +245,15 @@ void updateNodeGroupInfo(
                 ratioCropSize.w = mcscInputSize.w;
                 ratioCropSize.h = mcscInputSize.h;
             }
+
+#if defined(USE_MCSC1_FOR_PREVIEWCALLBACK) && defined(SAMSUNG_HYPER_MOTION)
+            if (params->getHyperMotionMode() == true) {
+                params->getHyperMotionCropSize(mcscInputSize.w, mcscInputSize.h,
+                                                mcsc0Size.w, mcsc0Size.h,
+                                                &ratioCropSize.x, &ratioCropSize.y,
+                                                &ratioCropSize.w, &ratioCropSize.h);
+            }
+#endif
 
             setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
                                                     ratioCropSize.x, ratioCropSize.y,

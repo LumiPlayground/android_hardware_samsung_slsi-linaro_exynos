@@ -37,7 +37,6 @@ int ExynosCameraStreamManager::getOutputPortId(int streamId)
     case HAL_STREAM_ID_PREVIEW:
     case HAL_STREAM_ID_VIDEO:
     case HAL_STREAM_ID_CALLBACK:
-    case HAL_STREAM_ID_PREVIEW_VIDEO:
         startIndex = ExynosCameraParameters::YUV_0;
         endIndex = ExynosCameraParameters::YUV_MAX;
         break;
@@ -82,7 +81,6 @@ status_t ExynosCameraStreamManager::m_increaseYuvStreamCount(int streamId)
             m_setYuvStreamId(yuvIndex, streamId);
         case HAL_STREAM_ID_PREVIEW:
         case HAL_STREAM_ID_VIDEO:
-        case HAL_STREAM_ID_PREVIEW_VIDEO:
             /* Preview stream */
             yuvIndex = ExynosCameraParameters::YUV_0
                        + getTotalYuvStreamCount();
@@ -143,7 +141,6 @@ status_t ExynosCameraStreamManager::m_decreaseYuvStreamCount(int streamId)
             m_setYuvStreamId(yuvIndex, -1);
         case HAL_STREAM_ID_PREVIEW:
         case HAL_STREAM_ID_VIDEO:
-        case HAL_STREAM_ID_PREVIEW_VIDEO:
             /* Preview stream */
             yuvIndex = getOutputPortId(streamId);
             m_setYuvStreamId(yuvIndex, -1);

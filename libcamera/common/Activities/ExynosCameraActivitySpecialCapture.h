@@ -135,6 +135,24 @@ public:
     int resetHdrStartFcount();
     int getHdrWaitFcount();
     void setHdrBuffer(ExynosCameraBuffer *secondBuffer, ExynosCameraBuffer *thirdBuffer);
+#ifdef OIS_CAPTURE
+#ifdef SAMSUNG_LBP
+    void setBestMultiCaptureMode(bool enable);
+#endif
+    void setMultiCaptureMode(bool enable);
+    unsigned int getOISCaptureFcount(void);
+    void resetOISCaptureFcount();
+    void waitShutterCallback();
+#if defined(LLS_REPROCESSING) && defined(FLASHED_LLS_CAPTURE)
+    bool getIsFlashLLSCapture();
+    void setIsFlashLLSCapture(bool isFlashLLSCapture);
+#endif
+#endif
+
+#ifdef RAWDUMP_CAPTURE
+    unsigned int getRawCaptureFcount(void);
+    void resetRawCaptureFcount();
+#endif
 
     ExynosCameraBuffer *getHdrBuffer(int index);
 
@@ -157,6 +175,23 @@ private:
 
     ExynosCameraBuffer  m_reqBuf;
     ExynosCameraBuffer  *m_hdrBuffer[2];
+#ifdef OIS_CAPTURE
+#ifdef SAMSUNG_LBP
+    bool                m_bestMultiCaptureMode;
+#endif
+    bool                m_multiCaptureMode;
+    bool                m_waitAvailable;
+    unsigned int m_OISCaptureFcount;
+    Mutex               m_SignalMutex;
+    mutable Condition   m_SignalCondition;
+    uint64_t            m_waitSignalTime;
+#if defined(LLS_REPROCESSING) && defined(FLASHED_LLS_CAPTURE)
+    bool                m_isFlashLLSCapture;
+#endif
+#endif
+#ifdef RAWDUMP_CAPTURE
+    unsigned int        m_RawCaptureFcount;
+#endif
 };
 }
 

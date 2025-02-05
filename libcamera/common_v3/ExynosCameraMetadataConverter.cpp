@@ -20,6 +20,10 @@
 #include "ExynosCameraMetadataConverter.h"
 #include "ExynosCameraRequestManager.h"
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraVendorTags.h"
+#endif
+
 namespace android {
 #define SET_BIT(x)      (1 << x)
 
@@ -48,7 +52,6 @@ ExynosCamera3MetadataConverter::ExynosCamera3MetadataConverter(int cameraId, Exy
 
     m_maxFps = 30;
     m_overrideFlashControl= false;
-    m_defaultAntibanding = m_parameters->getAntibanding();
     memset(m_gpsProcessingMethod, 0x00, sizeof(m_gpsProcessingMethod));
 }
 
@@ -129,19 +132,22 @@ status_t ExynosCamera3MetadataConverter::constructDefaultRequestSettings(int typ
     switch (type) {
     case CAMERA3_TEMPLATE_PREVIEW:
         controlMode = ANDROID_CONTROL_MODE_AUTO;
-        afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+        if (m_cameraId == CAMERA_ID_BACK)
+            afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
         aeMode = ANDROID_CONTROL_AE_MODE_ON;
         awbMode = ANDROID_CONTROL_AWB_MODE_AUTO;
         break;
     case CAMERA3_TEMPLATE_STILL_CAPTURE:
         controlMode = ANDROID_CONTROL_MODE_AUTO;
-        afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+        if (m_cameraId == CAMERA_ID_BACK)
+            afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
         aeMode = ANDROID_CONTROL_AE_MODE_ON;
         awbMode = ANDROID_CONTROL_AWB_MODE_AUTO;
         break;
     case CAMERA3_TEMPLATE_VIDEO_RECORD:
         controlMode = ANDROID_CONTROL_MODE_AUTO;
-        afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
+        if (m_cameraId == CAMERA_ID_BACK)
+            afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
         aeMode = ANDROID_CONTROL_AE_MODE_ON;
         awbMode = ANDROID_CONTROL_AWB_MODE_AUTO;
         /* Fix FPS for Recording */
@@ -150,13 +156,15 @@ status_t ExynosCamera3MetadataConverter::constructDefaultRequestSettings(int typ
         break;
     case CAMERA3_TEMPLATE_VIDEO_SNAPSHOT:
         controlMode = ANDROID_CONTROL_MODE_AUTO;
-        afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
+        if (m_cameraId == CAMERA_ID_BACK)
+            afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
         aeMode = ANDROID_CONTROL_AE_MODE_ON;
         awbMode = ANDROID_CONTROL_AWB_MODE_AUTO;
         break;
     case CAMERA3_TEMPLATE_ZERO_SHUTTER_LAG:
         controlMode = ANDROID_CONTROL_MODE_AUTO;
-        afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+        if (m_cameraId == CAMERA_ID_BACK)
+            afMode = ANDROID_CONTROL_AF_MODE_CONTINUOUS_PICTURE;
         aeMode = ANDROID_CONTROL_AE_MODE_ON;
         awbMode = ANDROID_CONTROL_AWB_MODE_AUTO;
         break;
@@ -171,9 +179,6 @@ status_t ExynosCamera3MetadataConverter::constructDefaultRequestSettings(int typ
         break;
     }
     settings.update(ANDROID_CONTROL_MODE, &controlMode, 1);
-    if (m_sensorStaticInfo->minimumFocusDistance == 0.0f) {
-        afMode = ANDROID_CONTROL_AF_MODE_OFF;
-    }
     settings.update(ANDROID_CONTROL_AF_MODE, &afMode, 1);
     settings.update(ANDROID_CONTROL_AE_MODE, &aeMode, 1);
     settings.update(ANDROID_CONTROL_AWB_MODE, &awbMode, 1);
@@ -203,13 +208,9 @@ status_t ExynosCamera3MetadataConverter::constructDefaultRequestSettings(int typ
     const int32_t controlRegions[5] = {
         0, 0, w, h, 0
     };
-    if (m_sensorStaticInfo->max3aRegions[AE] > 0) {
+    if (m_cameraId == CAMERA_ID_BACK) {
         settings.update(ANDROID_CONTROL_AE_REGIONS, controlRegions, 5);
-    }
-    if (m_sensorStaticInfo->max3aRegions[AWB] > 0) {
         settings.update(ANDROID_CONTROL_AWB_REGIONS, controlRegions, 5);
-    }
-    if (m_sensorStaticInfo->max3aRegions[AF] > 0) {
         settings.update(ANDROID_CONTROL_AF_REGIONS, controlRegions, 5);
     }
 
@@ -228,9 +229,6 @@ status_t ExynosCamera3MetadataConverter::constructDefaultRequestSettings(int typ
     /* video stabilization mode */
     const uint8_t vstabMode = ANDROID_CONTROL_VIDEO_STABILIZATION_MODE_OFF;
     settings.update(ANDROID_CONTROL_VIDEO_STABILIZATION_MODE, &vstabMode, 1);
-
-    const int32_t rawsensitivity = 100;
-    settings.update(ANDROID_CONTROL_POST_RAW_SENSITIVITY_BOOST, &rawsensitivity, 1);
 
     /** android.lens */
     const float focusDistance = -1.0f;
@@ -269,6 +267,8 @@ status_t ExynosCamera3MetadataConverter::constructDefaultRequestSettings(int typ
         {0,1}, {0,1}, {1,1}
     };
     settings.update(ANDROID_COLOR_CORRECTION_TRANSFORM, colorTransform, 9);
+    const uint8_t aberrationMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_OFF;
+    settings.update(ANDROID_COLOR_CORRECTION_ABERRATION_MODE, &aberrationMode, 1);
 
     /** android.tonemap */
     const float tonemapCurve[4] = {
@@ -332,8 +332,6 @@ status_t ExynosCamera3MetadataConverter::constructDefaultRequestSettings(int typ
     uint8_t tonemapMode = ANDROID_TONEMAP_MODE_CONTRAST_CURVE;
     uint8_t edgeMode = ANDROID_EDGE_MODE_OFF;
     uint8_t lensShadingMapMode = ANDROID_STATISTICS_LENS_SHADING_MAP_MODE_OFF;
-    uint8_t colorCorrectionAberrationMode = ANDROID_COLOR_CORRECTION_ABERRATION_MODE_OFF;
-
     switch (type) {
     case CAMERA3_TEMPLATE_STILL_CAPTURE:
         if (m_cameraId == CAMERA_ID_BACK)
@@ -380,7 +378,6 @@ status_t ExynosCamera3MetadataConverter::constructDefaultRequestSettings(int typ
     settings.update(ANDROID_TONEMAP_MODE, &tonemapMode, 1);
     settings.update(ANDROID_EDGE_MODE, &edgeMode, 1);
     settings.update(ANDROID_STATISTICS_LENS_SHADING_MAP_MODE, &lensShadingMapMode, 1);
-    settings.update(ANDROID_COLOR_CORRECTION_ABERRATION_MODE, &colorCorrectionAberrationMode, 1);
 
     *request = settings.release();
     m_defaultRequestSetting = *request;
@@ -555,13 +552,6 @@ status_t ExynosCamera3MetadataConverter::constructStaticInfo(int cameraId, camer
         ALOGD("DEBUG(%s[%d]):controlModes at sensorStaticInfo is NULL", __FUNCTION__, __LINE__);
     }
 
-    ret = info.update(ANDROID_CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE,
-            sensorStaticInfo->postRawSensitivityBoost,
-            ARRAY_LENGTH(sensorStaticInfo->postRawSensitivityBoost));
-    if (ret < 0) {
-        ALOGD("DEBUG(%s):ANDROID_CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE update failed(%d)",  __FUNCTION__, ret);
-    }
-
     /* android.edge static attributes */
     if (sensorStaticInfo->edgeModes != NULL) {
         ret = info.update(ANDROID_EDGE_AVAILABLE_EDGE_MODES,
@@ -709,7 +699,7 @@ status_t ExynosCamera3MetadataConverter::constructStaticInfo(int cameraId, camer
         ALOGD("DEBUG(%s):ANDROID_REQUEST_PIPELINE_MAX_DEPTH update failed(%d)",  __FUNCTION__, ret);
 
     ret = info.update(ANDROID_REQUEST_PARTIAL_RESULT_COUNT,
-            &(sensorStaticInfo->partialResultCount), 1);
+            &(sensorStaticInfo->partialResultCount), 2);
     if (ret < 0)
         ALOGD("DEBUG(%s):ANDROID_REQUEST_PARTIAL_RESULT_COUNT update failed(%d)",  __FUNCTION__, ret);
 
@@ -1037,6 +1027,50 @@ status_t ExynosCamera3MetadataConverter::constructStaticInfo(int cameraId, camer
         ALOGD("DEBUG(%s[%d]):leds at sensorStaticInfo is NULL", __FUNCTION__, __LINE__);
     }
 
+#ifndef CAMERA_GED_FEATURE
+#ifdef SAMSUNG_COMPANION
+    /* samsung.android.control.liveHdrLevelRange */
+    ret = info.update(SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL_RANGE,
+            sensorStaticInfo->vendorHdrRange,
+            ARRAY_LENGTH(sensorStaticInfo->vendorHdrRange));
+    if (ret < 0)
+        ALOGD("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL_RANGE update failed(%d)",  __FUNCTION__, ret);
+
+    /* samsung.android.control.pafAvailableMode */
+    ret = info.update(SAMSUNG_ANDROID_CONTROL_PAF_AVAILABLE_MODE,
+            &(sensorStaticInfo->vendorPafAvailable), 1);
+    if (ret < 0)
+        ALOGD("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_PAF_AVAILABLE_MODE update failed(%d)",  __FUNCTION__, ret);
+#endif
+
+#ifdef SAMSUNG_CONTROL_METERING
+    /* samsung.android.control.meteringAvailableMode */
+    if (sensorStaticInfo->vendorMeteringModes != NULL) {
+        ret = info.update(SAMSUNG_ANDROID_CONTROL_METERING_AVAILABLE_MODE,
+                sensorStaticInfo->vendorMeteringModes,
+                sensorStaticInfo->vendorMeteringModesLength);
+        if (ret < 0)
+            ALOGD("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_METERING_AVAILABLE_MODE update failed(%d)",  __FUNCTION__, ret);
+    } else {
+        ALOGD("DEBUG(%s[%d]):vendorMeteringModes at sensorStaticInfo is NULL", __FUNCTION__, __LINE__);
+    }
+#endif
+
+#ifdef SAMSUNG_OIS
+    /* samsung.android.lens.info.availableOpticalStabilizationOperationMode */
+    if (sensorStaticInfo->vendorOISModes != NULL) {
+        ret = info.update(SAMSUNG_ANDROID_LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION_OPERATION_MODE ,
+                sensorStaticInfo->vendorOISModes,
+                sensorStaticInfo->vendorOISModesLength);
+        if (ret < 0)
+            ALOGD("DEBUG(%s):SAMSUNG_ANDROID_LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION_OPERATION_MODE",
+                    "update failed(%d)",  __FUNCTION__, ret);
+    } else {
+        ALOGD("DEBUG(%s[%d]):vendorOISModes at sensorStaticInfo is NULL", __FUNCTION__, __LINE__);
+    }
+#endif
+#endif
+
     /* andorid.info static attributes */
     ret = info.update(ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL,
             &(sensorStaticInfo->supportedHwLevel), 1);
@@ -1233,6 +1267,12 @@ status_t ExynosCamera3MetadataConverter::initShotData(struct camera2_shot_ext *s
     /* 2. dm */
 
     /* 3. utrl */
+#ifdef SAMSUNG_COMPANION
+    shot->uctl.companionUd.drc_mode = COMPANION_DRC_OFF;
+    shot->uctl.companionUd.paf_mode = COMPANION_PAF_OFF;
+    shot->uctl.companionUd.wdr_mode = COMPANION_WDR_OFF;
+#endif
+
 #ifdef USE_FW_OPMODE
     shot->uctl.opMode = CAMERA_OP_MODE_HAL3_GED;
 #endif
@@ -1342,9 +1382,6 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
     if (settings.exists(ANDROID_CONTROL_AE_ANTIBANDING_MODE)) {
         entry = settings.find(ANDROID_CONTROL_AE_ANTIBANDING_MODE);
         dst->ctl.aa.aeAntibandingMode = (enum aa_ae_antibanding_mode) FIMC_IS_METADATA(entry.data.u8[0]);
-        if (dst->ctl.aa.aeAntibandingMode != AA_AE_ANTIBANDING_OFF) {
-            dst->ctl.aa.aeAntibandingMode = (enum aa_ae_antibanding_mode) m_defaultAntibanding;
-        }
         ALOGV("DEBUG(%s):ANDROID_COLOR_AE_ANTIBANDING_MODE(%d)", __FUNCTION__, entry.data.u8[0]);
     }
 
@@ -1397,6 +1434,31 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
         ALOGV("DEBUG(%s):ANDROID_CONTROL_AE_MODE(%d)", __FUNCTION__, entry.data.u8[0]);
     }
 
+#ifdef SAMSUNG_CONTROL_METERING
+    if (dst->ctl.aa.aeMode != AA_AEMODE_OFF) {
+        if (settings.exists(SAMSUNG_ANDROID_CONTROL_METERING_MODE)) {
+            entry = settings.find(SAMSUNG_ANDROID_CONTROL_METERING_MODE);
+            switch (entry.data.u8[0]) {
+            case SAMSUNG_ANDROID_CONTROL_METERING_MODE_CENTER:
+                dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_CENTER;
+                break;
+            case SAMSUNG_ANDROID_CONTROL_METERING_MODE_SPOT:
+                dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_SPOT;
+                break;
+            case SAMSUNG_ANDROID_CONTROL_METERING_MODE_MATRIX:
+                dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_MATRIX;
+                break;
+            case SAMSUNG_ANDROID_CONTROL_METERING_MODE_MANUAL:
+                dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_SPOT_TOUCH;
+                break;
+            default:
+                break;
+            }
+            ALOGV("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_METERING_MODE(%d, aeMode = %d)", __FUNCTION__, entry.data.u8[0], dst->ctl.aa.aeMode );
+        }
+    }
+#endif
+
     if (settings.exists(ANDROID_CONTROL_AE_LOCK)) {
         entry = settings.find(ANDROID_CONTROL_AE_LOCK);
         dst->ctl.aa.aeLock = (enum aa_ae_lock) FIMC_IS_METADATA(entry.data.u8[0]);
@@ -1412,6 +1474,22 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
         aeRegion.x2 = entry.data.i32[2];
         aeRegion.y2 = entry.data.i32[3];
         dst->ctl.aa.aeRegions[4] = entry.data.i32[4];
+#ifdef SAMSUNG_CONTROL_METERING
+        if (dst->ctl.aa.aeMode == AA_AEMODE_SPOT) {
+            int hwSensorW,hwSensorH;
+            m_parameters->getHwSensorSize(&hwSensorW, &hwSensorH);
+
+            aeRegion.x1 = hwSensorW/2;
+            aeRegion.y1 = hwSensorH/2;
+            aeRegion.x2 = hwSensorW/2;
+            aeRegion.y2 = hwSensorH/2;
+        } else if (dst->ctl.aa.aeMode == AA_AEMODE_CENTER || dst->ctl.aa.aeMode == AA_AEMODE_MATRIX) {
+            aeRegion.x1 = 0;
+            aeRegion.y1 = 0;
+            aeRegion.x2 = 0;
+            aeRegion.y2 = 0;
+        }
+#endif
         m_convert3AARegion(&aeRegion);
 
         dst->ctl.aa.aeRegions[0] = aeRegion.x1;
@@ -1425,6 +1503,18 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
                 entry.data.i32[3],
                 entry.data.i32[4]);
 
+#ifndef SAMSUNG_CONTROL_METERING
+        // If AE region has meaningful value, AE region can be applied to the output image
+        if (entry.data.i32[0] && entry.data.i32[1] && entry.data.i32[2] && entry.data.i32[3]) {
+            dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_SPOT;
+            ALOGV("DEBUG(%s):update AA_AEMODE(%d)", __FUNCTION__, dst->ctl.aa.aeMode);
+        }
+#endif
+    } else {
+#ifdef SAMSUNG_CONTROL_METERING
+        if (dst->ctl.aa.aeMode == AA_AEMODE_SPOT_TOUCH)
+            dst->ctl.aa.aeMode = (enum aa_aemode)AA_AEMODE_CENTER; //default ae
+#endif
     }
 
     if (settings.exists(ANDROID_CONTROL_AWB_REGIONS)) {
@@ -1665,6 +1755,23 @@ status_t ExynosCamera3MetadataConverter::translateControlControlData(CameraMetad
     } else {
         m_isManualAeControl = false;
     }
+
+#ifndef CAMERA_GED_FEATURE
+#ifdef SAMSUNG_COMPANION
+    if (settings.exists(SAMSUNG_ANDROID_CONTROL_PAF_MODE)) {
+        entry = settings.find(SAMSUNG_ANDROID_CONTROL_PAF_MODE);
+        dst->uctl.companionUd.paf_mode = (enum companion_paf_mode) FIMC_IS_METADATA(entry.data.u8[0]);
+        ALOGV("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_PAF_MODE(%d)", __FUNCTION__, entry.data.u8[0]);
+    }
+
+    if (settings.exists(SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL)) {
+        entry = settings.find(SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL);
+        dst->uctl.companionUd.wdr_mode = (enum companion_wdr_mode) FIMC_IS_METADATA(entry.data.u8[0]);
+        dst->uctl.companionUd.drc_mode = (enum companion_drc_mode) FIMC_IS_METADATA(entry.data.u8[0]);
+        ALOGV("DEBUG(%s):SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL(%d)", __FUNCTION__, entry.data.u8[0]);
+    }
+#endif
+#endif
 
     return OK;
 }
@@ -1949,6 +2056,21 @@ status_t ExynosCamera3MetadataConverter::translateLensControlData(CameraMetadata
         }
         ALOGV("DEBUG(%s):ANDROID_LENS_OPTICAL_STABILIZATION_MODE(%d)", __FUNCTION__, entry.data.u8[0]);
     }
+
+#ifdef SAMSUNG_OIS
+    if (settings.exists(SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE)) {
+        entry = settings.find(SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE);
+
+        if (dst->ctl.lens.opticalStabilizationMode == OPTICAL_STABILIZATION_MODE_STILL) {
+            switch (entry.data.u8[0]) {
+            case SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE_VIDEO:
+                dst->ctl.lens.opticalStabilizationMode = OPTICAL_STABILIZATION_MODE_VIDEO;
+                break;
+            }
+        }
+        ALOGV("DEBUG(%s):SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE(%d)", __FUNCTION__, entry.data.u8[0]);
+    }
+#endif
 
     return OK;
 }
@@ -2586,11 +2708,7 @@ status_t ExynosCamera3MetadataConverter::translateControlMetaData(ExynosCameraRe
     requestInfo->getResultShot(&shot_ext);
     src = &shot_ext.shot;
 
-    uint8_t antibandingMode = (uint8_t) CAMERA_METADATA(src->dm.aa.aeAntibandingMode);
-    if (src->dm.aa.aeAntibandingMode == AA_AE_ANTIBANDING_AUTO_50HZ
-        || src->dm.aa.aeAntibandingMode == AA_AE_ANTIBANDING_AUTO_60HZ) {
-        antibandingMode = ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO;
-    }
+    const uint8_t antibandingMode = (uint8_t) CAMERA_METADATA(src->dm.aa.aeAntibandingMode);
     settings.update(ANDROID_CONTROL_AE_ANTIBANDING_MODE, &antibandingMode, 1);
     ALOGV("DEBUG(%s):dm.aa.aeAntibandingMode(%d)",  __FUNCTION__, src->dm.aa.aeAntibandingMode);
 
@@ -2623,6 +2741,28 @@ status_t ExynosCamera3MetadataConverter::translateControlMetaData(ExynosCameraRe
     }
     settings.update(ANDROID_CONTROL_AE_MODE, &aeMode, 1);
     ALOGV("DEBUG(%s):dm.aa.aeMode(%d), AE_MODE(%d)", __FUNCTION__, src->dm.aa.aeMode, aeMode);
+
+#ifdef SAMSUNG_CONTROL_METERING
+    int32_t vendorAeMode = SAMSUNG_ANDROID_CONTROL_METERING_MODE_MANUAL;
+    switch (src->dm.aa.aeMode) {
+    case AA_AEMODE_CENTER:
+        vendorAeMode = SAMSUNG_ANDROID_CONTROL_METERING_MODE_CENTER;
+        break;
+    case AA_AEMODE_SPOT:
+        vendorAeMode = SAMSUNG_ANDROID_CONTROL_METERING_MODE_SPOT;
+        break;
+    case AA_AEMODE_MATRIX:
+        vendorAeMode = SAMSUNG_ANDROID_CONTROL_METERING_MODE_MATRIX;
+        break;
+    case AA_AEMODE_SPOT_TOUCH:
+        vendorAeMode = SAMSUNG_ANDROID_CONTROL_METERING_MODE_MANUAL;
+        break;
+    default:
+        break;
+    }
+    settings.update(SAMSUNG_ANDROID_CONTROL_METERING_MODE, &vendorAeMode, 1);
+    ALOGV("DEBUG(%s):vendorAeMode(%d)", __FUNCTION__, vendorAeMode);
+#endif
 
     const uint8_t aeLock = (uint8_t) CAMERA_METADATA(src->dm.aa.aeLock);
     settings.update(ANDROID_CONTROL_AE_LOCK, &aeLock, 1);
@@ -2795,7 +2935,7 @@ status_t ExynosCamera3MetadataConverter::translateControlMetaData(ExynosCameraRe
     ALOGV("DEBUG(%s):dm.aa.videoStabilizationMode(%d)", __FUNCTION__, src->dm.aa.videoStabilizationMode);
 
     uint8_t tmpAeState = (uint8_t) CAMERA_METADATA(src->dm.aa.aeState);
-
+ 
     /* HACK: forcely set AE state during init skip count (FW not supported) */
     if (src->dm.request.frameCount < INITIAL_SKIP_FRAME) {
         tmpAeState = (uint8_t) CAMERA_METADATA(AE_STATE_SEARCHING);
@@ -2840,6 +2980,19 @@ status_t ExynosCamera3MetadataConverter::translateControlMetaData(ExynosCameraRe
     const uint8_t afState = (uint8_t) CAMERA_METADATA(src->dm.aa.afState);
     settings.update(ANDROID_CONTROL_AF_STATE, &afState, 1);
     ALOGV("DEBUG(%s):dm.aa.afState(%d)",  __FUNCTION__, src->dm.aa.afState);
+
+#ifndef CAMERA_GED_FEATURE
+#ifdef SAMSUNG_COMPANION
+    int32_t vendorPafMode = (int32_t) CAMERA_METADATA(src->udm.companion.paf_mode);
+    settings.update(SAMSUNG_ANDROID_CONTROL_PAF_MODE, &vendorPafMode, 1);
+    ALOGV("DEBUG(%s): udm.companion.paf_mode(%d)", __FUNCTION__, src->udm.companion.paf_mode);
+
+    int32_t vendorHdrMode  = (int32_t) CAMERA_METADATA(src->udm.companion.wdr_mode);
+    //const uint8_t drcMode = (int32_t) CAMERA_METADATA(src->udm.companion.drc_mode);
+    settings.update(SAMSUNG_ANDROID_CONTROL_LIVE_HDR_LEVEL, &vendorHdrMode, 1);
+    ALOGV("DEBUG(%s): udm.companion.wdr_mode(%d)", __FUNCTION__, src->udm.companion.wdr_mode);
+#endif
+#endif
 
     switch (src->dm.aa.afState) {
     case AA_AFSTATE_FOCUSED_LOCKED:
@@ -3069,6 +3222,9 @@ status_t ExynosCamera3MetadataConverter::translateLensMetaData(ExynosCameraReque
     ALOGV("DEBUG(%s):dm.lens.focusDistance(%f)", __FUNCTION__, src->dm.lens.focusDistance);
 
     uint8_t opticalStabilizationMode = (uint8_t) src->dm.lens.opticalStabilizationMode;
+#ifdef SAMSUNG_OIS
+    int32_t vendorOpticalStabilizationMode = SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE_PICTURE;
+#endif
 
     switch (opticalStabilizationMode) {
     case OPTICAL_STABILIZATION_MODE_STILL:
@@ -3076,6 +3232,9 @@ status_t ExynosCamera3MetadataConverter::translateLensMetaData(ExynosCameraReque
         break;
     case OPTICAL_STABILIZATION_MODE_VIDEO:
         opticalStabilizationMode = ANDROID_LENS_OPTICAL_STABILIZATION_MODE_ON;
+#ifdef SAMSUNG_OIS
+        vendorOpticalStabilizationMode = SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE_VIDEO;
+#endif
         break;
     case OPTICAL_STABILIZATION_MODE_CENTERING:
     default:
@@ -3085,6 +3244,12 @@ status_t ExynosCamera3MetadataConverter::translateLensMetaData(ExynosCameraReque
     settings.update(ANDROID_LENS_OPTICAL_STABILIZATION_MODE, &opticalStabilizationMode, 1);
     ALOGV("DEBUG(%s):dm.lens.opticalStabilizationMode(%d)", __FUNCTION__,
             src->dm.lens.opticalStabilizationMode);
+
+#ifdef SAMSUNG_OIS
+    settings.update(SAMSUNG_ANDROID_LENS_OPTICAL_STABILIZATION_OPERATION_MODE, &vendorOpticalStabilizationMode, 1);
+    ALOGV("DEBUG(%s):SAMSUNG_ANDROID_LENS is (%d)", __FUNCTION__,
+            src->dm.lens.opticalStabilizationMode);
+#endif
 
     const uint8_t lensState = src->dm.lens.state;
     settings.update(ANDROID_LENS_STATE, &lensState, 1);
@@ -4150,23 +4315,9 @@ void ExynosCamera3MetadataConverter::m_updateFaceDetectionMetaData(CameraMetadat
     if ((maxSensorH - bayerCropSize.h) / 2 > 0)
         yOffset = ALIGN_DOWN(((maxSensorH - bayerCropSize.h) / 2), 2);
     if (m_parameters->isMcscVraOtf() == true)
-#if defined(USE_SW_MCSC) && (USE_SW_MCSC == true)
-        m_parameters->getCalculatedMaxYuvSize(&hwPreviewW, &hwPreviewH);
-#else
         m_parameters->getYuvSize(&hwPreviewW, &hwPreviewH, 0);
-#endif
     else
         m_parameters->getHwVraInputSize(&hwPreviewW, &hwPreviewH);
-
-    if (m_parameters->isFullOtfPreview() == true) {
-        if (bayerCropSize.w < hwPreviewW) {
-            hwPreviewW = bayerCropSize.w;
-        }
-        if (bayerCropSize.h < hwPreviewH) {
-            hwPreviewH = bayerCropSize.h;
-        }
-    }
-
     scaleRatioW = (float)bayerCropSize.w / (float)hwPreviewW;
     scaleRatioH = (float)bayerCropSize.h / (float)hwPreviewH;
 

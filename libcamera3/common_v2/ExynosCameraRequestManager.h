@@ -228,6 +228,9 @@ public:
     virtual status_t                       setAcquireFenceDone(buffer_handle_t *handle, bool done);
     virtual bool                           getAcquireFenceDone(buffer_handle_t *handle);
 
+    virtual void                           setBvOffset(uint32_t bvOffset);
+    virtual uint32_t                       getBvOffset(void);
+
 private:
     virtual status_t                       m_init();
     virtual status_t                       m_deinit();
@@ -301,6 +304,8 @@ private:
 
     int                           m_dsInputPortId;
     struct ysum_data              m_ysumValue;
+
+    uint32_t                      m_bvOffset;
 };
 
 typedef list< uint32_t >           CallbackListkeys;
@@ -495,6 +500,10 @@ private:
     int32_t                       m_lastResultKey[EXYNOS_REQUEST_RESULT::CALLBACK_MAX];
 
     struct FaceDetectMeta {
+#ifdef USE_DUAL_CAMERA
+        enum aa_cameraMode      cameraMode;
+        enum aa_sensorPlace     masterCamPosition;
+#endif
         uint32_t    frameCount;
         uint32_t    faceIds[CAMERA2_MAX_FACES];
         uint32_t    faceLandmarks[CAMERA2_MAX_FACES][6];

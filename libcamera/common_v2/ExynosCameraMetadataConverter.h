@@ -154,6 +154,9 @@ private:
     static status_t         m_createControlAvailableHighSpeedVideoConfigurations(const struct ExynosSensorInfoBase *sensorStaticInfo,
                                                                                  Vector<int32_t> *streamConfigs,
                                                                                  int cameraId);
+    static status_t         m_createScalerAvailableInputOutputFormatsMap(const struct ExynosSensorInfoBase *sensorStaticInfo,
+                                                                         Vector<int32_t> *streamConfigs,
+                                                                         int cameraId);
     static status_t         m_createScalerAvailableStreamConfigurationsOutput(const struct ExynosSensorInfoBase *sensorStaticInfo,
                                                                               Vector<int32_t> *streamConfigs,
                                                                               int cameraId);
@@ -199,7 +202,6 @@ private:
     uint32_t                        m_preAfMode;
     float                           m_focusDistance;
     uint32_t                        m_maxFps;
-    uint32_t                        m_aeMode;
     bool                            m_overrideFlashControl;
     uint8_t                         m_gpsProcessingMethod[32];
 };

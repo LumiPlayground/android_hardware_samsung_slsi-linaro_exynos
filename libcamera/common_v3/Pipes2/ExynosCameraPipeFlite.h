@@ -24,10 +24,17 @@ namespace android {
 
 typedef ExynosCameraList<ExynosCameraFrameSP_sptr_t> frame_queue_t;
 
-#define FLITE_CNTS  ( FIMC_IS_VIDEO_SS3_NUM - FIMC_IS_VIDEO_SS0_NUM + 2) /* HACK : because of 4 cameras , wide tele front iris , 1->2 */
+#ifdef SAMSUNG_QUICK_SWITCH
+#define FLITE_CNTS (FIMC_IS_VIDEO_SS5_NUM - FIMC_IS_VIDEO_SS0_NUM + 2)
+#ifdef SUPPORT_DEPTH_MAP
+#define VC_CNTS     (FIMC_IS_VIDEO_SS4VC3_NUM - FIMC_IS_VIDEO_SS0VC0_NUM + 1)
+#endif
+#else /* SAMSUNG_QUICK_SWITCH */
+#define FLITE_CNTS  (FIMC_IS_VIDEO_SS3_NUM - FIMC_IS_VIDEO_SS0_NUM + 1)
 #ifdef SUPPORT_DEPTH_MAP
 #define VC_CNTS     (FIMC_IS_VIDEO_SS3VC3_NUM - FIMC_IS_VIDEO_SS0VC0_NUM + 1)
 #endif
+#endif /* SAMSUNG_QUICK_SWITCH */
 
 class ExynosCameraPipeFlite : public ExynosCameraPipe {
 public:

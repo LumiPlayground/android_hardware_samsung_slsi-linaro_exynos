@@ -32,7 +32,7 @@ ExynosCamera3FrameFactoryPreview::~ExynosCamera3FrameFactoryPreview()
         CLOGE("ERR(%s[%d]):destroy fail", __FUNCTION__, __LINE__);
 }
 
-status_t ExynosCamera3FrameFactoryPreview::create(bool active)
+status_t ExynosCamera3FrameFactoryPreview::create()
 {
     CLOGI("INFO(%s[%d])", __FUNCTION__, __LINE__);
 
@@ -1089,6 +1089,12 @@ status_t ExynosCamera3FrameFactoryPreview::m_setupConfig()
     pipeId = PIPE_FLITE;
     m_nodeNums[pipeId][CAPTURE_NODE_1] = m_getFliteNodenum();
     m_sensorIds[pipeId][CAPTURE_NODE_1] = m_getSensorId(m_nodeNums[pipeId][CAPTURE_NODE_1], m_flagReprocessing);
+#ifdef SUPPORT_DEPTH_MAP
+    if (m_parameters->getUseDepthMap()) {
+        m_nodeNums[pipeId][CAPTURE_NODE_2] = m_getDepthVcNodeNum();
+        m_sensorIds[pipeId][CAPTURE_NODE_2] = m_getSensorId(m_nodeNums[pipeId][CAPTURE_NODE_2], m_flagReprocessing);
+    }
+#endif
 
     /* 3AA ~ MCSC */
     ret = m_setDeviceInfo();
@@ -1403,7 +1409,6 @@ status_t ExynosCamera3FrameFactoryPreview::m_initPipes(void)
                 yuvWidth[i], yuvHeight[i], yuvFormat[i]);
     }
 
-
     /*
      * 3AA
      */
@@ -1491,8 +1496,12 @@ status_t ExynosCamera3FrameFactoryPreview::m_initPipes(void)
             break;
         case REPROCESSING_BAYER_MODE_DIRTY_ALWAYS_ON:
         case REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC:
-            pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_sensor_buffers
-                                                + config->current->bufInfo.num_bayer_buffers;
+            if (m_parameters->isSupportZSLInput()) {
+                pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
+            } else {
+                pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_sensor_buffers
+                                                   + config->current->bufInfo.num_bayer_buffers;
+            }
             break;
         default:
             CLOGE("ERR(%s[%d]):Invalid reprocessing mode(%d)", __FUNCTION__, __LINE__, m_parameters->getReprocessingBayerMode());
@@ -1789,7 +1798,7 @@ status_t ExynosCamera3FrameFactoryPreview::m_initPipesFastenAeStable(int32_t num
     ExynosRect tempRect;
     int bayerFormat = m_parameters->getBayerFormat(PIPE_3AA);
     int hwVdisformat = m_parameters->getHWVdisFormat();
-    int previewFormat = m_parameters->getPreviewFormat();
+    int hwPreviewFormat = (m_parameters->getHwPreviewFormat() == 0) ? V4L2_PIX_FMT_NV21M : m_parameters->getHwPreviewFormat();
     int perFramePos = 0;
 
 #ifdef DEBUG_RAWDUMP
@@ -1935,7 +1944,7 @@ status_t ExynosCamera3FrameFactoryPreview::m_initPipesFastenAeStable(int32_t num
     nodeType = getNodeType(PIPE_MCSC0);
     perFramePos = PERFRAME_BACK_SCP_POS;
 
-    tempRect.colorFormat = previewFormat;
+    tempRect.colorFormat = hwPreviewFormat;
 
     pipeInfo[nodeType].bufInfo.count = numFrames;
 

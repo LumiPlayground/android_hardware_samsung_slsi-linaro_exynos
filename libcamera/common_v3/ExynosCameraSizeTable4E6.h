@@ -593,6 +593,9 @@ static int S5K4E6_HIDDEN_PREVIEW_LIST[][SIZE_OF_RESOLUTION] =
     { 1440, 1080, SIZE_RATIO_4_3},
     { 1072, 1072, SIZE_RATIO_1_1},
 #endif
+#ifdef USE_BDS_WIDE_SELFIE
+    { 1920, 1440, SIZE_RATIO_4_3}, /* For WideSelfie Shot */
+#endif
     { 2240, 1680, SIZE_RATIO_4_3},  /* For Easy 360 */
     { 1600, 1200, SIZE_RATIO_4_3},
     { 1280,  960, SIZE_RATIO_4_3},
@@ -696,7 +699,6 @@ static int S5K4E6_FPS_RANGE_LIST[][2] =
 
 static int S5K4E6_HIDDEN_FPS_RANGE_LIST[][2] =
 {
-    {   5000,   5000},
     {  10000,  24000},
     {  30000,  60000},
     {  60000,  60000},

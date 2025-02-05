@@ -207,7 +207,6 @@ private:
     uint32_t                        m_maxFps;
     bool                            m_overrideFlashControl;
     uint8_t                         m_gpsProcessingMethod[32];
-    uint8_t                         m_defaultAntibanding;
 };
 
 }; /* namespace android */

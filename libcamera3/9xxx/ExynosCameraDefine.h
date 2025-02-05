@@ -41,6 +41,18 @@
 #include "ExynosCameraActivityControl.h"
 #include "ExynosCameraFrameSelector.h"
 
+#ifdef USE_CAMERA_PREVIEW_FRAME_SCHEDULER
+#include "SecCameraPreviewFrameSchedulerSimple.h"
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraUtil.h"
+#endif
+
+#ifdef SAMSUNG_DNG
+#include "SecCameraDngCreator.h"
+#endif
+
 namespace android {
 
 typedef ExynosCameraList<ExynosCameraFrameSP_sptr_t> frame_queue_t;
@@ -48,6 +60,10 @@ typedef ExynosCameraList<ExynosCameraBuffer> buffer_queue_t;
 typedef ExynosCameraList<buffer_dump_info_t> buffer_dump_info_queue_t;
 
 typedef ExynosCameraList<uint32_t> worker_queue_t;
+#ifdef SAMSUNG_DNG
+typedef ExynosCameraList<ExynosCameraBuffer> dng_capture_queue_t;
+typedef ExynosCameraList<ExynosCameraBuffer> bayer_release_queue_t;
+#endif
 
 typedef sp<ExynosCameraFrame>  ExynosCameraFrameSP_t;
 typedef sp<ExynosCameraFrame>  ExynosCameraFrameSP_sptr_t; /* single ptr */

@@ -56,8 +56,19 @@ ExynosCameraActivityAutofocus::ExynosCameraActivityAutofocus(int cameraId) : Exy
 
     m_recordingHint = false;
     m_flagFaceDetection = false;
+#ifdef SAMSUNG_DOF
+    m_flagPDAF = false;
+    m_flagLensMoveStart = false;
+#endif
+#ifdef SAMSUNG_OT
+    m_isOTstart = false;
+#endif
+#ifdef SUPPORT_MULTI_AF
+    m_flagMultiAf = false;
+#endif
     m_macroPosition = AUTOFOCUS_MACRO_POSITION_BASE;
     m_fpsValue = 0;
+    m_samsungCamera = false;
     m_afInMotionResult = false;
 
     m_af_mode_info = 0;
@@ -341,6 +352,11 @@ void ExynosCameraActivityAutofocus::setFpsValue(int fpsValue)
 int ExynosCameraActivityAutofocus::getFpsValue()
 {
     return m_fpsValue;
+}
+
+void ExynosCameraActivityAutofocus::setSamsungCamera(int flags)
+{
+    m_samsungCamera = flags;
 }
 
 void ExynosCameraActivityAutofocus::setAfInMotionResult(bool afInMotion)

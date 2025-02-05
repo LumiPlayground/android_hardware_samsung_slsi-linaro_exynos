@@ -39,7 +39,7 @@
 #include <videodev2_exynos_camera.h>
 #include <ion/ion.h>
 
-#include "gralloc_priv.h"
+#include "gralloc1_priv.h"
 
 #include "ExynosCameraConfig.h"
 #include "fimc-is-metadata.h"
@@ -101,8 +101,6 @@ public:
 
     status_t create(const char *name, void *defaultAllocator);
     status_t create(const char *name, int cameraId, void *defaultAllocator);
-
-    char    *getName(void);
 
     void     init(void);
     virtual void     deinit(void);

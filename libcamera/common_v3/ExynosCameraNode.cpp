@@ -62,7 +62,6 @@ ExynosCameraNode::ExynosCameraNode()
     memset(&m_v4l2ReqBufs, 0x00, sizeof(struct v4l2_requestbuffers));
 
     m_fd        = NODE_INIT_NEGATIVE_VALUE;
-    m_flagCopyedFd = false;
 
     m_v4l2Format.fmt.pix_mp.width       = NODE_INIT_NEGATIVE_VALUE;
     m_v4l2Format.fmt.pix_mp.height      = NODE_INIT_NEGATIVE_VALUE;
@@ -95,7 +94,6 @@ ExynosCameraNode::ExynosCameraNode()
     m_cameraId = 0;
     m_sensorId = -1;
     m_videoNodeNum = -1;
-    m_dummyColorIndex = 0;
 
     for (uint32_t i = 0; i < MAX_BUFFERS; i++) {
         m_queueBufferList[i].index = NODE_INIT_NEGATIVE_VALUE;
@@ -191,7 +189,6 @@ status_t ExynosCameraNode::create(const char *nodeName, int cameraId, int fd)
     }
 
     m_fd = fd;
-    m_flagCopyedFd = true;
 
     m_nodeType = NODE_TYPE_BASE;
 
@@ -227,7 +224,6 @@ status_t ExynosCameraNode::destroy(void)
     m_removeItemBufferQ();
 
     m_nodeType = NODE_TYPE_BASE;
-    m_flagCopyedFd = false;
 
     EXYNOS_CAMERA_NODE_OUT();
 
@@ -252,18 +248,15 @@ status_t ExynosCameraNode::open(int videoNodeNum)
     snprintf(node_name, sizeof(node_name), "%s%d", NODE_PREFIX, videoNodeNum);
 
     if (videoNodeNum == (int)NODE_TYPE_DUMMY) {
-        m_fd = NODE_TYPE_DUMMY;
         m_nodeType = NODE_TYPE_DUMMY;
         m_dummyIndexQ.clear();
 
         CLOGW(" dummy node opened");
-    } else if (m_flagCopyedFd == true) {
-        CLOGD("Node(%d)(%s) is copyed fd. so, skip exynos_v4l2_open(%d)", videoNodeNum, node_name, m_fd);
     } else {
         m_fd = exynos_v4l2_open(node_name, O_RDWR, 0);
         if (m_fd < 0) {
-            CLOGE("exynos_v4l2_open(%s) fail, ret(%d) errno(%s)",
-                node_name, m_fd, strerror(errno));
+            CLOGE("exynos_v4l2_open(%s) fail, ret(%d)",
+                 node_name, m_fd);
             return INVALID_OPERATION;
         }
         CLOGD(" Node(%d)(%s) opened. m_fd(%d)", videoNodeNum, node_name, m_fd);
@@ -300,8 +293,6 @@ status_t ExynosCameraNode::close(void)
     if (m_nodeType == NODE_TYPE_DUMMY) {
         m_dummyIndexQ.clear();
         CLOGW("dummy node closed");
-    } else if (m_flagCopyedFd == true) {
-        CLOGD("Node(%d)(%s) is copyed fd. so, skip exynos_v4l2_close(%d)", m_videoNodeNum, m_name, m_fd);
     } else {
         if (exynos_v4l2_close(m_fd) != 0) {
             CLOGE("close fail");
@@ -319,30 +310,6 @@ status_t ExynosCameraNode::close(void)
     EXYNOS_CAMERA_NODE_OUT();
 
     return NO_ERROR;
-}
-
-
-bool ExynosCameraNode::flagOpened(void)
-{
-    bool bRet = false;
-
-    {
-        m_nodeStateLock.lock();
-
-        switch (m_nodeState) {
-        case NODE_STATE_OPENED:
-        case NODE_STATE_IN_PREPARE:
-        case NODE_STATE_RUNNING:
-            bRet = true;
-            break;
-        default:
-            break;
-        }
-
-        m_nodeStateLock.unlock();
-    }
-
-    return bRet;
 }
 
 status_t ExynosCameraNode::getFd(int *fd)
@@ -943,7 +910,7 @@ status_t ExynosCameraNode::prepareBuffer(ExynosCameraBuffer *buf)
 #endif
 
     if (m_nodeType == NODE_TYPE_DUMMY) {
-        //m_dummyIndexQ.push_back(v4l2_buf.index);
+        m_dummyIndexQ.push_back(v4l2_buf.index);
     } else {
         ret = exynos_v4l2_prepare(m_fd, &v4l2_buf);
         if (ret < 0) {
@@ -1362,15 +1329,7 @@ int ExynosCameraNode::m_getControl(unsigned int id, int *value)
     int ret = 0;
 
     if (m_nodeType == NODE_TYPE_DUMMY) {
-         /* nop */
-        if (id == V4L2_CID_IS_G_BNS_SIZE) {
-            // You can change this size, up to your sensor size and fastAE size.
-            int bnsWidth = 4032;
-            //int bnsHeight = 2268;
-            int bnsHeight = 3024;
-            int bns = (bnsWidth << 16) | (bnsHeight & 0xffff);
-            *value = bns;
-        }
+        /* nop */
     } else {
         ret = exynos_v4l2_g_ctrl(m_fd, id, value);
         if (ret < 0) {
@@ -1586,234 +1545,6 @@ int ExynosCameraNode::m_mBuf(ExynosCameraBuffer *buf)
     return ret;
 }
 
-status_t ExynosCameraNode::m_drawColor(ExynosCameraBuffer *buf, int v4l2Format)
-{
-    status_t ret = NO_ERROR;
-
-    #define DUMMY_YUV_COLOR_COUNTS (8)
-
-    char color[DUMMY_YUV_COLOR_COUNTS][3] = {
-        { /* red */
-            81, 90, 240
-        },
-        { /* blue */
-            41, 240, 110
-        },
-        { /* cyan */
-            170, 166, 16
-        },
-        { /* magenta */
-            106, 202, 222
-        },
-        { /* yellow */
-            210, 16, 146
-        },
-        { /* green */
-            145, 54, 34
-        },
-        { /* white */
-            235, 128, 128
-        },
-        { /* black */
-            16, 128, 128
-        },
-    };
-
-    int colorIndex = 0;
-    if (m_dummyColorIndex != 0) {
-        colorIndex = ((m_dummyColorIndex / DUMMY_YUV_COLOR_COUNTS) % DUMMY_YUV_COLOR_COUNTS);
-    }
-
-    m_dummyColorIndex++;
-
-    char *oneColor = color[colorIndex];
-
-    switch (v4l2Format) {
-    case V4L2_PIX_FMT_NV12:
-        ret = m_drawNV12(buf, oneColor);
-        break;
-    case V4L2_PIX_FMT_NV12M:
-        ret = m_drawNV12M(buf, oneColor);
-        break;
-    case V4L2_PIX_FMT_NV21:
-        ret = m_drawNV21(buf, oneColor);
-        break;
-    case V4L2_PIX_FMT_NV21M:
-        ret = m_drawNV21M(buf, oneColor);
-        break;
-    case V4L2_PIX_FMT_YVU420M:
-        ret = m_drawYV12(buf, oneColor);
-        break;
-    case V4L2_PIX_FMT_YUYV:
-        ret = m_drawYUYV(buf, oneColor);
-        break;
-    default:
-        CLOGE("invalid v4l2Format(%d)", v4l2Format);
-        ret = INVALID_OPERATION;
-        break;
-    }
-
-    if (ret != NO_ERROR) {
-        CLOGE("m_draw%c%c%c%c() fail",
-            v4l2Format2Char(v4l2Format, 0),
-            v4l2Format2Char(v4l2Format, 1),
-            v4l2Format2Char(v4l2Format, 2),
-            v4l2Format2Char(v4l2Format, 3));
-    }
-
-    return ret;
-}
-
-status_t ExynosCameraNode::m_drawNV12(ExynosCameraBuffer *buf, char color[])
-{
-    for (int i = 0; i < 1; i++) {
-        if (buf->addr[i] == NULL) {
-            CLOGE("buf->addr[%d] == NULL", i);
-            return INVALID_OPERATION;
-        } else if (buf->size[i] <= 0) {
-            CLOGE("buf->size[%d] <= 0", i);
-            return INVALID_OPERATION;
-        }
-    }
-
-    /* Y */
-    memset(buf->addr[0], color[0], buf->size[0]);
-
-    /* CrCb */
-    // we don't know Y,cbcr size
-    /*
-    for (int i = 0; i < buf->size[1]; i += 2) {
-        buf->addr[1][i + 0] = (char)color[1];
-        buf->addr[1][i + 1] = (char)color[2];
-    }
-    */
-
-    return NO_ERROR;
-}
-
-status_t ExynosCameraNode::m_drawNV12M(ExynosCameraBuffer *buf, char color[])
-{
-    for (int i = 0; i < 2; i++) {
-        if (buf->addr[i] == NULL) {
-            CLOGE("buf->addr[%d] == NULL", i);
-            return INVALID_OPERATION;
-        } else if (buf->size[i] <= 0) {
-            CLOGE("buf->size[%d] <= 0", i);
-            return INVALID_OPERATION;
-        }
-    }
-
-    /* Y */
-    memset(buf->addr[0], color[0], buf->size[0]);
-
-    /* CrCb */
-    for (int i = 0; i < buf->size[1]; i += 2) {
-        buf->addr[1][i + 0] = (char)color[1];
-        buf->addr[1][i + 1] = (char)color[2];
-    }
-
-    return NO_ERROR;
-}
-
-status_t ExynosCameraNode::m_drawNV21(ExynosCameraBuffer *buf, char color[])
-{
-    for (int i = 0; i < 1; i++) {
-        if (buf->addr[i] == NULL) {
-            CLOGE("buf->addr[%d] == NULL", i);
-            return INVALID_OPERATION;
-        } else if (buf->size[i] <= 0) {
-            CLOGE("buf->size[%d] <= 0", i);
-            return INVALID_OPERATION;
-        }
-    }
-
-    /* Y */
-    memset(buf->addr[0], color[0], buf->size[0]);
-
-    /* CrCb */
-    // we don't know Y,cbcr size
-    /*
-    for (int i = 0; i < buf->size[1]; i += 2) {
-        buf->addr[1][i + 0] = (char)color[2];
-        buf->addr[1][i + 1] = (char)color[1];
-    }
-    */
-
-    return NO_ERROR;
-}
-
-status_t ExynosCameraNode::m_drawNV21M(ExynosCameraBuffer *buf, char color[])
-{
-    for (int i = 0; i < 2; i++) {
-        if (buf->addr[i] == NULL) {
-            CLOGE("buf->addr[%d] == NULL", i);
-            return INVALID_OPERATION;
-        } else if (buf->size[i] <= 0) {
-            CLOGE("buf->size[%d] <= 0", i);
-            return INVALID_OPERATION;
-        }
-    }
-
-    /* Y */
-    memset(buf->addr[0], color[0], buf->size[0]);
-
-    /* CrCb */
-    for (int i = 0; i < buf->size[1]; i += 2) {
-        buf->addr[1][i + 0] = (char)color[2];
-        buf->addr[1][i + 1] = (char)color[1];
-    }
-
-    return NO_ERROR;
-}
-
-status_t ExynosCameraNode::m_drawYV12(ExynosCameraBuffer *buf, char color[])
-{
-    for (int i = 0; i < 3; i++) {
-        if (buf->addr[i] == NULL) {
-            CLOGE("buf->addr[%d] == NULL", i);
-            return INVALID_OPERATION;
-        } else if (buf->size[i] <= 0) {
-            CLOGE("buf->size[%d] <= 0", i);
-            return INVALID_OPERATION;
-        }
-    }
-
-    /* Y */
-    memset(buf->addr[0], color[0], buf->size[0]);
-
-    /* Cr */
-    memset(buf->addr[1], color[1], buf->size[1]);
-
-    /* Cb */
-    memset(buf->addr[2], color[2], buf->size[2]);
-
-    return NO_ERROR;
-}
-
-status_t ExynosCameraNode::m_drawYUYV(ExynosCameraBuffer *buf, char color[])
-{
-    for (int i = 0; i < 1; i++) {
-        if (buf->addr[i] == NULL) {
-            /* Hack */
-            /* CLOGE("buf->addr[%d] == NULL", i); */
-            return INVALID_OPERATION;
-        } else if (buf->size[i] <= 0) {
-            CLOGE("buf->size[%d] <= 0", i);
-            return INVALID_OPERATION;
-        }
-    }
-
-    /* Y Cb Y Cr*/
-    for (int i = 0; i < (int)buf->size[0]; i += 4) {
-        buf->addr[0][i + 0] = (char)color[0];
-        buf->addr[0][i + 1] = (char)color[1];
-        buf->addr[0][i + 2] = (char)color[0];
-        buf->addr[0][i + 3] = (char)color[2];
-    }
-
-    return NO_ERROR;
-}
-
 int ExynosCameraNode::m_dqBuf(ExynosCameraBuffer *buf, int *dqIndex)
 {
     int ret = 0;
@@ -1899,48 +1630,6 @@ int ExynosCameraNode::m_dqBuf(ExynosCameraBuffer *buf, int *dqIndex)
     error = m_getBufferQ(buf, dqIndex);
     if( error != NO_ERROR ) {
         ret = error;
-    }
-
-    if (m_nodeType == NODE_TYPE_DUMMY) {
-        int  waitTime = 0;
-
-        /* fill with meaningful color */
-        if (strcmp(m_name, "MCSC_PREVIEW") == 0 ||
-            strcmp(m_name, "MCSC_PREVIEW_CALLBACK") == 0 ||
-            strcmp(m_name, "MCSC_RECORDING") == 0 ||
-            strcmp(m_name, "MCSC_PREVIEW_CALLBACK") == 0 ||
-            strcmp(m_name, "MCSC_CAPTURE_MAIN") == 0 ||
-            strcmp(m_name, "ODC_CAPTURE") == 0) {
-
-            int  waitTime = 10000; // 10 msec
-
-            if (buf->addr[0] == NULL) {
-                CLOGW("node(%s), buf->addr[0] == NULL. so, can not fill meaningful color", m_name);
-            } else {
-                ExynosCameraDurationTimer drawColorTimer;
-
-                drawColorTimer.start();
-
-                status_t localRet = m_drawColor(buf, m_v4l2Format.fmt.pix_mp.pixelformat);
-                if (localRet != NO_ERROR)
-                    CLOGW("node(%s), m_drawColor() fail", m_name);
-
-                drawColorTimer.stop();
-
-                int drawTime = (int)drawColorTimer.durationMsecs();
-
-                waitTime -= drawTime;
-                if (waitTime < 0)
-                    waitTime = 0;
-            }
-        } else if (strcmp(m_name, "3AA_OUTPUT") == 0 ||
-                   strcmp(m_name, "FLITE") == 0) {
-            waitTime = 30000; // 30msec;
-        }
-
-        if (0 < waitTime) {
-            usleep(waitTime);
-        }
     }
 
     return ret;
@@ -2046,10 +1735,6 @@ void ExynosCameraNode::m_removeItemBufferQ()
 {
     List<ExynosCameraBuffer>::iterator r;
     Mutex::Autolock lock(m_queueBufferListLock);
-
-    if (m_nodeType == NODE_TYPE_DUMMY) {
-        m_dummyIndexQ.clear();
-    }
 
 #if 0
     for (r = m_queueBufferList.begin(); r != m_queueBufferList.end(); r++) {

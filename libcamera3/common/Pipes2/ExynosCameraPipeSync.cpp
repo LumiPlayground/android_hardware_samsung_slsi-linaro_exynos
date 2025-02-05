@@ -221,7 +221,6 @@ status_t ExynosCameraPipeSync::m_run(void)
         /* No break: Same as preview */
     case FRAME_TYPE_PREVIEW:
     case FRAME_TYPE_REPROCESSING:
-    case FRAME_TYPE_JPEG_REPROCESSING:
         goto func_exit;
         break;
     case FRAME_TYPE_PREVIEW_DUAL_MASTER:

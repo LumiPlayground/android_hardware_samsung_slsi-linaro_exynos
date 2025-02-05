@@ -65,10 +65,10 @@ public:
     virtual ExynosCameraFrameSP_sptr_t createNewFrame(uint32_t frameCount, bool useJpegFlag = false);
 
     /* Helper functions for PipePP */
-    virtual void            connectPPScenario(int pipeId, int scenario);
-    virtual void            startPPScenario(int pipeId);
-    virtual void            stopPPScenario(int pipeId, bool suspendFlag = false);
-    virtual int             getPPScenario(int pipeId);
+    virtual void            connectScenario(int pipeId, int scenario);
+    virtual void            startScenario(int pipeId);
+    virtual void            stopScenario(int pipeId, bool suspendFlag = false);
+    virtual int             getScenario(int pipeId);
 
 protected:
     virtual status_t        m_setupConfig(void);

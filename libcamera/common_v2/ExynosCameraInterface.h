@@ -22,18 +22,17 @@
 
 #include "ExynosCamera.h"
 #include "ExynosCameraInterfaceState.h"
+#include "ExynosCamera1MetadataConverter.h"
 
 #if defined(BOARD_BACK_CAMERA_USES_EXTERNAL_CAMERA) || defined(BOARD_FRONT_CAMERA_USES_EXTERNAL_CAMERA)
 #include "SecCameraInterface.h"
 #endif
 
 #ifndef CAMERA_MODULE_VERSION
-#define CAMERA_MODULE_VERSION   CAMERA_MODULE_API_VERSION_1_0
+#define CAMERA_MODULE_VERSION   CAMERA_MODULE_API_VERSION_2_4
 #endif
 
 #define SET_METHOD(m) m : HAL_camera_device_##m
-
-#define MAX_NUM_OF_CAMERA 4
 
 namespace android {
 
@@ -58,15 +57,53 @@ static int sCameraInfo[][2] = {
     {
         CAMERA_FACING_FRONT,
         FRONT_ROTATION  /* orientation */
+    },
+#endif
+#if defined(MAIN_1_CAMERA_SENSOR_NAME)
+    {
+        CAMERA_FACING_BACK,
+        BACK_ROTATION  /* orientation */
+    },
+#endif
+#if defined(FRONT_1_CAMERA_SENSOR_NAME)
+    {
+        CAMERA_FACING_FRONT,
+        FRONT_ROTATION  /* orientation */
     }
 #endif
 };
+
+/* This struct used in device3.3 service arbitration */
+struct CameraConfigInfo {
+    int resource_cost;
+    char** conflicting_devices;
+    size_t conflicting_devices_length;
+};
+
+const CameraConfigInfo sCameraConfigInfo[] = {
+#if !defined(BOARD_FRONT_CAMERA_ONLY_USE)
+    {
+        51,      /* resoruce_cost               : [0 , 100] */
+        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
+        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
+    },
+#endif
+    {
+        51,      /* resoruce_cost               : [0, 100] */
+        NULL,    /* conflicting_devices         : NULL, (char *[]){"0"}, (char *[]){"0", "1"} */
+        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
+    }
+};
+
+static camera_metadata_t *g_cam_info[MAX_NUM_OF_CAMERA] = {NULL, NULL};
+static const camera_module_callbacks_t *g_callbacks = NULL;
 
 static camera_device_t *g_cam_device[MAX_NUM_OF_CAMERA];
 
 static Mutex            g_cam_openLock[MAX_NUM_OF_CAMERA];
 static Mutex            g_cam_previewLock[MAX_NUM_OF_CAMERA];
 static Mutex            g_cam_recordingLock[MAX_NUM_OF_CAMERA];
+static bool             g_cam_torchEnabled[MAX_NUM_OF_CAMERA] = {false, false};
 
 static inline ExynosCamera *obj(struct camera_device *dev)
 {
@@ -310,6 +347,8 @@ static int HAL_getNumberOfCameras();
 static int HAL_open_legacy(const struct hw_module_t* module, const char* id, uint32_t halVersion, struct hw_device_t** device);
 
 static void HAL_get_vendor_tag_ops(vendor_tag_ops_t* ops);
+static int HAL_set_torch_mode(const char* camera_id, bool enabled);
+static int HAL_init();
 
 static camera_device_ops_t camera_device_ops = {
         SET_METHOD(set_preview_window),
@@ -360,8 +399,8 @@ extern "C" {
 #if (TARGET_ANDROID_VER_MAJ >= 4 && TARGET_ANDROID_VER_MIN >= 4)
       get_vendor_tag_ops    : HAL_get_vendor_tag_ops,
       open_legacy           : HAL_open_legacy,
-      set_torch_mode        : NULL,
-      init                  : NULL,
+      set_torch_mode        : HAL_set_torch_mode,
+      init                  : HAL_init,
       reserved              : {0}
 #endif
     };

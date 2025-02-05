@@ -127,6 +127,14 @@ public:
     status_t setParentPipeId(enum pipeline parentPipeId);
     int      getParentPipeId(void);
 
+    status_t setRotation(int rotation);
+    int      getRotation(void);
+#ifdef PERFRAME_CONTROL_FOR_FLIP
+    status_t setFlipHorizontal(int flipHorizontal);
+    int      getFlipHorizontal(void);
+    status_t setFlipVertical(int flipVertical);
+    int      getFlipVertical(void);
+#endif
 private:
     status_t m_setEntityType(entity_type_t type);
 
@@ -150,6 +158,12 @@ private:
 
     bool                     m_flagSpecificParent;
     int                      m_parentPipeId;
+
+    int                      m_rotation;
+#ifdef PERFRAME_CONTROL_FOR_FLIP
+    int                      m_flipHorizontal;
+    int                      m_flipVertical;
+#endif
 };
 
 /* Frame state define */
@@ -318,6 +332,7 @@ public:
     bool            checkFrameState(frame_status_t state);
 
     void            printEntity(void);
+    void            printNotDoneEntity(void);
     void            dump(void);
 
     void            frameLock(void);
@@ -351,6 +366,9 @@ public:
     int             getJpegSize(void);
 
     int64_t         getTimeStamp(void);
+#ifdef  SAMSUNG_TIMESTAMP_BOOT
+    int64_t         getTimeStampBoot(void);
+#endif
     void            getFpsRange(uint32_t *min, uint32_t *max);
 
     void            setIspDone(bool done);
@@ -436,6 +454,15 @@ public:
 
 #ifdef DEBUG_FRAME_MEMORY_LEAK
     long long int   getCheckLeakCount();
+#endif
+
+    status_t setRotation(uint32_t pipeId, int rotation);
+    int      getRotation(uint32_t pipeId);
+#ifdef PERFRAME_CONTROL_FOR_FLIP
+    status_t setFlipHorizontal(uint32_t pipeId, int flipHorizontal);
+    int      getFlipHorizontal(uint32_t pipeId);
+    status_t setFlipVertical(uint32_t pipeId, int flipVertical);
+    int      getFlipVertical(uint32_t pipeId);
 #endif
 
 private:

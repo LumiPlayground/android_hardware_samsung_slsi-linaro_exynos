@@ -58,7 +58,11 @@
 
 #include "fimc-is-metadata.h"
 
+#ifdef SAMSUNG_UNIPLUGIN
+#include "uni_plugin_wrapper.h"
+#else
 #define UniPluginFocusData_t int
+#endif
 
 #define AUTOFOCUS_WATING_TIME        (10000)   /* 10msec */
 #define AUTOFOCUS_TOTAL_WATING_TIME  (3000000) /* 3000msec */
@@ -130,6 +134,16 @@ public:
         AUTOFOCUS_MODE_CONTINUOUS_PICTURE       = (1 << 6),
         AUTOFOCUS_MODE_TOUCH                    = (1 << 7),
         AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO = (1 << 8),
+#ifdef SAMSUNG_OT
+        AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE  = (1 << 9),
+        AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO    = (1 << 10),
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+        AUTOFOCUS_MODE_MANUAL                   = (1 << 11),
+#endif
+#ifdef SAMSUNG_FIXED_FACE_FOCUS
+        AUTOFOCUS_MODE_FIXED_FACE               = (1 << 12),
+#endif
     };
 
     enum AUTOFOCUS_MACRO_POSITION {
@@ -173,6 +187,13 @@ protected:
 public:
     bool setRecordingHint(bool hint);
     enum aa_afstate getAfState(void);
+#ifdef SAMSUNG_DOF
+    void setStartLensMove(bool toggle);
+#endif
+#ifdef SAMSUNG_OT
+    bool setObjectTrackingAreas(UniPluginFocusData_t *focusData);
+    bool getObjectTrackingAreas(UniPluginFocusData_t *focusData);
+#endif
     void displayAFInfo(void);
     void displayAFStatus(void);
 
@@ -212,6 +233,13 @@ private:
 
     uint16_t m_af_pos[10];
     uint64_t m_af_filter[10];
+#ifdef SAMSUNG_DOF
+    bool m_flagLensMoveStart;
+#endif
+#ifdef SAMSUNG_OT
+    UniPluginFocusData_t m_OTfocusData;
+    mutable Mutex m_OTfocusDataLock;
+#endif
 };
 
 }

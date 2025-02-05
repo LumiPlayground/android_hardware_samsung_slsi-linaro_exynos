@@ -140,6 +140,18 @@ public:
     void setHdrBuffer(ExynosCameraBuffer *secondBuffer, ExynosCameraBuffer *thirdBuffer);
     unsigned int getDynamicPickCaptureFcount(void);
     void resetDynamicPickCaptureFcount();
+#ifdef OIS_CAPTURE
+    void setMultiCaptureMode(bool enable);
+    bool getMultiCaptureMode(void);
+    unsigned int getOISCaptureFcount(void);
+    void resetOISCaptureFcount();
+    void waitShutterCallback();
+#endif
+
+#ifdef RAWDUMP_CAPTURE
+    unsigned int getRawCaptureFcount(void);
+    void resetRawCaptureFcount();
+#endif
 
     ExynosCameraBuffer *getHdrBuffer(int index);
 
@@ -164,6 +176,17 @@ private:
 
     ExynosCameraBuffer  m_reqBuf;
     ExynosCameraBuffer  *m_hdrBuffer[2];
+#ifdef OIS_CAPTURE
+    bool                m_multiCaptureMode;
+    bool                m_waitAvailable;
+    unsigned int        m_OISCaptureFcount;
+    Mutex               m_SignalMutex;
+    mutable Condition   m_SignalCondition;
+    uint64_t            m_waitSignalTime;
+#endif
+#ifdef RAWDUMP_CAPTURE
+    unsigned int        m_RawCaptureFcount;
+#endif
     unsigned int        m_DynamicPickCaptureFcount;
 };
 

@@ -31,7 +31,7 @@ ExynosCameraNodeJpegHAL::ExynosCameraNodeJpegHAL()
     memset(m_alias, 0x00, sizeof(m_alias));
     memset(&m_v4l2Format,  0x00, sizeof(struct v4l2_format));
     memset(&m_v4l2ReqBufs, 0x00, sizeof(struct v4l2_requestbuffers));
-    memset(&m_exifInfo, 0x00, sizeof(exif_attribute_t));
+    //memset(&m_exifInfo, 0x00, sizeof(exif_attribute_t));
     memset(&m_debugInfo, 0x00, sizeof(debug_attribute_t));
 
     m_fd        = NODE_INIT_NEGATIVE_VALUE;
@@ -352,6 +352,45 @@ status_t ExynosCameraNodeJpegHAL::setQuality(int quality)
     return ret;
 }
 
+status_t ExynosCameraNodeJpegHAL::setQuality(const unsigned char qtable[])
+{
+    EXYNOS_CAMERA_NODE_IN();
+
+    status_t ret = NO_ERROR;
+
+    m_nodeStateLock.lock();
+    if (m_nodeState != NODE_STATE_IN_PREPARE && m_nodeState != NODE_STATE_OPENED) {
+        CLOGE("ERR(%s[%d]):m_nodeState = [%d] is not valid",
+            __FUNCTION__, __LINE__, (int)m_nodeState);
+        m_nodeStateLock.unlock();
+        return INVALID_OPERATION;
+    }
+
+    CLOGD("DEBUG(%s[%d]):setQuality(qtable[])", __FUNCTION__, __LINE__);
+
+    switch (m_videoNodeNum) {
+    case FIMC_IS_VIDEO_HWFC_JPEG_NUM:
+        ret = m_jpegEncoder->setQuality(qtable);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):ExynosJpegEncoderForCamera setQuality fail, ret(%d)",
+                    __FUNCTION__, __LINE__, ret);
+            m_nodeStateLock.unlock();
+            return ret;
+        }
+        break;
+    default:
+        CLOGE("ERR(%s[%d]):Invalid node num(%d)", __FUNCTION__, __LINE__, ret);
+        break;
+    }
+
+    m_nodeState = NODE_STATE_IN_PREPARE;
+    m_nodeStateLock.unlock();
+
+    EXYNOS_CAMERA_NODE_OUT();
+
+    return ret;
+}
+
 status_t ExynosCameraNodeJpegHAL::setSize(int w, int h)
 {
     EXYNOS_CAMERA_NODE_IN();
@@ -407,6 +446,7 @@ status_t ExynosCameraNodeJpegHAL::reqBuffers(void)
 
 status_t ExynosCameraNodeJpegHAL::clrBuffers(void)
 {
+    m_jpegEncoder->destroy();
     return NO_ERROR;
 }
 
@@ -472,7 +512,7 @@ status_t ExynosCameraNodeJpegHAL::setCrop(__unused enum v4l2_buf_type type,
 
 status_t ExynosCameraNodeJpegHAL::setExifInfo(exif_attribute_t *exifInfo)
 {
-    memcpy(&m_exifInfo, exifInfo, sizeof(exif_attribute_t));
+    //memcpy(&m_exifInfo, exifInfo, sizeof(exif_attribute_t));
     memcpy(&exifInfo__, exifInfo, sizeof(exif_attribute_t));
 
     return NO_ERROR;

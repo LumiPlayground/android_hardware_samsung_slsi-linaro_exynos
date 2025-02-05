@@ -3,7 +3,7 @@
 
 #include <math.h>
 
-#include <cutils/log.h>
+#include <log/log.h>
 
 #define BUILD_DATE()   ALOGE("Build Date is (%s) (%s)", __DATE__, __TIME__)
 #define WHERE_AM_I()   ALOGE("[(%s)%d] ", __FUNCTION__, __LINE__)
@@ -56,21 +56,6 @@
 
 #define CLOGI2(fmt, ...) \
         ALOGI(Paste2("INFO" LOCATION_ID, fmt), LOCATION_ID_PARM, ##__VA_ARGS__)
-
-#define CLOGV3(cameraId, fmt, ...) \
-        ALOGV(Paste2(CAM_ID"VERB" LOCATION_ID, fmt), cameraId, m_name, LOCATION_ID_PARM, ##__VA_ARGS__)
-
-#define CLOGD3(cameraId, fmt, ...) \
-        ALOGD(Paste2(CAM_ID"DEBUG" LOCATION_ID, fmt), cameraId, m_name, LOCATION_ID_PARM, ##__VA_ARGS__)
-
-#define CLOGW3(cameraId, fmt, ...) \
-        ALOGW(Paste2(CAM_ID"WARN" LOCATION_ID, fmt), cameraId, m_name, LOCATION_ID_PARM, ##__VA_ARGS__)
-
-#define CLOGE3(cameraId, fmt, ...) \
-        ALOGE(Paste2(CAM_ID"ERR" LOCATION_ID, fmt), cameraId, m_name, LOCATION_ID_PARM, ##__VA_ARGS__)
-
-#define CLOGI3(cameraId, fmt, ...) \
-        ALOGI(Paste2(CAM_ID"INFO" LOCATION_ID, fmt), cameraId, m_name, LOCATION_ID_PARM, ##__VA_ARGS__)
 
 /* ---------------------------------------------------------- */
 /* Debug Timer */

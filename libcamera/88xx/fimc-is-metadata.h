@@ -111,6 +111,7 @@ enum is_subscenario_id {
     ISS_SUB_SCENARIO_STILL_CAPTURE_SHARPEN = 29,
     ISS_SUB_SCENARIO_STILL_CAPTURE_LONG = 30,
     ISS_SUB_SCENARIO_STILL_CAPTURE_MANUAL_ISO = 31,
+    ISS_SUB_SCENARIO_STILL_PREVIEW_BINNING = 40, /* 40: binning mode for low power */
 
     ISS_SUB_SCENARIO_FRONT_VT1 = 31,                    /* 31: front camera VT1 */
     ISS_SUB_SCENARIO_FRONT_VT2 = 32,                    /* 32: front camera VT2 */
@@ -121,7 +122,12 @@ enum is_subscenario_id {
     ISS_SUB_SCENARIO_FRONT_C2_OFF_VIDEO = 37,           /* 37: C2 off front video */
     ISS_SUB_SCENARIO_FRONT_VT4 = 38,                    /* 38: front camera VT4 */
     ISS_SUB_SCENARIO_FRONT_VT1_STILL_CAPTURE = 39,      /* 39: front camera VT1 still capture */
+    ISS_SUB_SCENARIO_FRONT_STILL_PREVIEW_BINNING = 40, /* 40: front camera binning mode for low power */
     ISS_SUB_END,
+};
+
+enum is_scenario_is {
+	FIMC_IS_SCENARIO_SWVDIS = 1,
 };
 
 enum available_capabilities {
@@ -993,6 +999,7 @@ enum ae_state {
     AE_STATE_PRECAPTURE,
     AE_STATE_LOCKED_CONVERGED = 10,
     AE_STATE_LOCKED_FLASH_REQUIRED,
+    AE_STATE_SEARCHING_FLASH_REQUIRED,
 };
 
 enum awb_state {
@@ -1588,6 +1595,7 @@ enum camera_flash_mode {
 enum camera_op_mode {
     CAMERA_OP_MODE_GED = 0,   // default
     CAMERA_OP_MODE_TW,
+    CAMERA_OP_MODE_HAL3_GED,
 };
 
 struct camera2_companion_uctl {

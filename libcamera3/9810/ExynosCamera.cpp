@@ -16,7 +16,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCamera"
-#include <cutils/log.h>
+#include <log/log.h>
 #include <ui/Fence.h>
 
 #include "ExynosCamera.h"
@@ -27,12 +27,17 @@ namespace android {
 uint32_t ExynosCamera::cameraSyncLogId = 0;
 #endif
 
-ExynosCamera::ExynosCamera(int cameraId, camera_metadata_t **info, uint32_t numOfSensors):
+ExynosCamera::ExynosCamera(int cameraId,
+        camera_metadata_t **info,
+#ifndef USE_DUAL_CAMERA
+        __unused
+#endif
+        uint32_t numOfSensors):
     m_requestMgr(NULL),
     m_streamManager(NULL),
     m_activityControl(NULL)
 {
-    BUILD_DATE();
+    //BUILD_DATE();
 
     m_cameraOriginId = cameraId;
     if (m_cameraOriginId == CAMERA_ID_SECURE) {
@@ -44,11 +49,6 @@ ExynosCamera::ExynosCamera(int cameraId, camera_metadata_t **info, uint32_t numO
     }
 
     m_cameraId = m_cameraIds[0];
-#ifdef DEBUG_CLASS_INFO
-    m_dumpClassInfo();
-#endif
-
-    TIME_LOGGER_INIT(m_cameraId);
 
 #ifdef USE_DUAL_CAMERA
     if (numOfSensors >= 2) {
@@ -154,7 +154,9 @@ ExynosCamera::ExynosCamera(int cameraId, camera_metadata_t **info, uint32_t numO
 
     m_pipeFrameDoneQ[PIPE_VRA] = new frame_queue_t(m_previewStreamVRAThread);
 #ifdef SUPPORT_HFD
-    m_pipeFrameDoneQ[PIPE_HFD] = new frame_queue_t(m_previewStreamHFDThread);
+    if (m_parameters[m_cameraId]->getHfdMode() == true) {
+        m_pipeFrameDoneQ[PIPE_HFD] = new frame_queue_t(m_previewStreamHFDThread);
+    }
 #endif
 
 #ifdef USE_DUAL_CAMERA
@@ -180,8 +182,6 @@ ExynosCamera::ExynosCamera(int cameraId, camera_metadata_t **info, uint32_t numO
     m_yuvCaptureDoneQ->setWaitTime(2000000000);
     m_reprocessingDoneQ = new frame_queue_t;
     m_reprocessingDoneQ->setWaitTime(2000000000);
-    m_bayerStreamQ = new frame_queue_t;
-    m_bayerStreamQ->setWaitTime(2000000000);
 
     m_shotDoneQ->setWaitTime(4000000000);
 
@@ -215,6 +215,7 @@ ExynosCamera::ExynosCamera(int cameraId, camera_metadata_t **info, uint32_t numO
 
     m_visionFps = 0;
 
+    m_flushLockWait = false;
     m_captureStreamExist = false;
     m_rawStreamExist = false;
     m_videoStreamExist = false;
@@ -235,7 +236,7 @@ ExynosCamera::ExynosCamera(int cameraId, camera_metadata_t **info, uint32_t numO
     m_dumpFrameQ = new frame_queue_t(m_dumpThread);
 #endif
 
-    m_ionClient = ion_open();
+    m_ionClient = exynos_ion_open();
     if (m_ionClient < 0) {
         ALOGE("ERR(%s):m_ionClient ion_open() fail", __func__);
         m_ionClient = -1;
@@ -275,7 +276,6 @@ status_t  ExynosCamera::m_setConfigInform() {
     exynosConfig.info[CONFIG_MODE::NORMAL].bufInfo.num_picture_buffers = VIDEO_MAX_FRAME;
     /* Required stream buffers for HAL */
     exynosConfig.info[CONFIG_MODE::NORMAL].bufInfo.num_request_raw_buffers = NUM_REQUEST_RAW_BUFFER;
-    exynosConfig.info[CONFIG_MODE::NORMAL].bufInfo.num_request_bayer_buffers = NUM_REQUEST_BAYER_BUFFER;
     exynosConfig.info[CONFIG_MODE::NORMAL].bufInfo.num_request_preview_buffers = NUM_REQUEST_PREVIEW_BUFFER;
     exynosConfig.info[CONFIG_MODE::NORMAL].bufInfo.num_request_callback_buffers = NUM_REQUEST_CALLBACK_BUFFER;
     exynosConfig.info[CONFIG_MODE::NORMAL].bufInfo.num_request_video_buffers = NUM_REQUEST_VIDEO_BUFFER;
@@ -303,7 +303,6 @@ status_t  ExynosCamera::m_setConfigInform() {
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_60].bufInfo.num_picture_buffers = VIDEO_MAX_FRAME;
     /* Required stream buffer for HAL */
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_60].bufInfo.num_request_raw_buffers = NUM_REQUEST_RAW_BUFFER;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_60].bufInfo.num_request_bayer_buffers = NUM_REQUEST_BAYER_BUFFER;
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_60].bufInfo.num_request_preview_buffers = NUM_REQUEST_PREVIEW_BUFFER;
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_60].bufInfo.num_request_callback_buffers = NUM_REQUEST_CALLBACK_BUFFER;
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_60].bufInfo.num_request_video_buffers = NUM_REQUEST_VIDEO_BUFFER;
@@ -332,7 +331,6 @@ status_t  ExynosCamera::m_setConfigInform() {
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_120].bufInfo.num_picture_buffers = VIDEO_MAX_FRAME;
     /* Required stream buffers for HAL */
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_120].bufInfo.num_request_raw_buffers = FPS120_NUM_REQUEST_RAW_BUFFER;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_120].bufInfo.num_request_bayer_buffers = NUM_REQUEST_BAYER_BUFFER;
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_120].bufInfo.num_request_preview_buffers = FPS120_NUM_REQUEST_PREVIEW_BUFFER;
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_120].bufInfo.num_request_callback_buffers = FPS120_NUM_REQUEST_CALLBACK_BUFFER;
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_120].bufInfo.num_request_video_buffers = FPS120_NUM_REQUEST_VIDEO_BUFFER;
@@ -360,7 +358,6 @@ status_t  ExynosCamera::m_setConfigInform() {
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_240].bufInfo.num_picture_buffers = VIDEO_MAX_FRAME;
     /* Required stream buffers for HAL */
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_240].bufInfo.num_request_raw_buffers = FPS240_NUM_REQUEST_RAW_BUFFER;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_240].bufInfo.num_request_bayer_buffers = NUM_REQUEST_BAYER_BUFFER;
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_240].bufInfo.num_request_preview_buffers = FPS240_NUM_REQUEST_PREVIEW_BUFFER;
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_240].bufInfo.num_request_callback_buffers = FPS240_NUM_REQUEST_CALLBACK_BUFFER;
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_240].bufInfo.num_request_video_buffers = FPS240_NUM_REQUEST_VIDEO_BUFFER;
@@ -369,34 +366,6 @@ status_t  ExynosCamera::m_setConfigInform() {
     /* Prepare buffers */
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_240].pipeInfo.prepare[PIPE_FLITE] = FPS240_PIPE_FLITE_PREPARE_COUNT;
     exynosConfig.info[CONFIG_MODE::HIGHSPEED_240].pipeInfo.prepare[PIPE_3AA] = FPS240_PIPE_3AA_PREPARE_COUNT;
-
-    /* Config HIGH_SPEED 480 buffer & pipe info */
-    /* Internal buffers */
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_fastaestable_buffer = NUM_FASTAESTABLE_BUFFERS;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_sensor_buffers = FPS480_NUM_SENSOR_BUFFERS;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_3aa_buffers = FPS480_NUM_3AA_BUFFERS;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_hwdis_buffers = FPS480_NUM_HW_DIS_BUFFERS;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.reprocessing_bayer_hold_count = REPROCESSING_BAYER_HOLD_COUNT;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_reprocessing_buffers = NUM_REPROCESSING_BUFFERS;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_nv21_picture_buffers = NUM_PICTURE_BUFFERS;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_vra_buffers = NUM_VRA_BUFFERS;
-    /* v4l2_reqBuf() values for stream buffers */
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_bayer_buffers = VIDEO_MAX_FRAME;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_preview_buffers = VIDEO_MAX_FRAME;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_preview_cb_buffers = VIDEO_MAX_FRAME;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_recording_buffers = VIDEO_MAX_FRAME;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_picture_buffers = VIDEO_MAX_FRAME;
-    /* Required stream buffers for HAL */
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_request_raw_buffers = FPS480_NUM_REQUEST_RAW_BUFFER;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_request_bayer_buffers = NUM_REQUEST_BAYER_BUFFER;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_request_preview_buffers = FPS480_NUM_REQUEST_PREVIEW_BUFFER;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_request_callback_buffers = FPS480_NUM_REQUEST_CALLBACK_BUFFER;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_request_video_buffers = FPS480_NUM_REQUEST_VIDEO_BUFFER;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_request_jpeg_buffers = FPS480_NUM_REQUEST_JPEG_BUFFER;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].bufInfo.num_batch_buffers = 4;
-    /* Prepare buffers */
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].pipeInfo.prepare[PIPE_FLITE] = FPS480_PIPE_FLITE_PREPARE_COUNT;
-    exynosConfig.info[CONFIG_MODE::HIGHSPEED_480].pipeInfo.prepare[PIPE_3AA] = FPS480_PIPE_3AA_PREPARE_COUNT;
 #endif
 
     m_parameters[m_cameraId]->setConfig(&exynosConfig);
@@ -470,8 +439,10 @@ void ExynosCamera::m_createThreads(void)
     CLOGD("VRA Preview stream thread created");
 
 #ifdef SUPPORT_HFD
-    m_previewStreamHFDThread = new mainCameraThread(this, &ExynosCamera::m_previewStreamHFDPipeThreadFunc, "PreviewHFDThread");
-    CLOGD("HFD Preview stream thread created");
+    if (m_parameters[m_cameraId]->getHfdMode() == true) {
+        m_previewStreamHFDThread = new mainCameraThread(this, &ExynosCamera::m_previewStreamHFDPipeThreadFunc, "PreviewHFDThread");
+        CLOGD("HFD Preview stream thread created");
+    }
 #endif
 
 #ifdef USE_DUAL_CAMERA
@@ -492,9 +463,6 @@ void ExynosCamera::m_createThreads(void)
 
     m_selectBayerThread = new mainCameraThread(this, &ExynosCamera::m_selectBayerThreadFunc, "SelectBayerThreadFunc");
     CLOGD("SelectBayerThread created");
-
-    m_bayerStreamThread = new mainCameraThread(this, &ExynosCamera::m_bayerStreamThreadFunc, "BayerStreamThread");
-    CLOGD("Bayer stream thread created");
 
     m_captureThread = new mainCameraThread(this, &ExynosCamera::m_captureThreadFunc, "CaptureThreadFunc");
     CLOGD("CaptureThread created");
@@ -583,11 +551,6 @@ void ExynosCamera::release()
         m_reprocessingDoneQ = NULL;
     }
 
-    if (m_bayerStreamQ != NULL) {
-        delete m_bayerStreamQ;
-        m_bayerStreamQ = NULL;
-    }
-
     if (m_frameFactoryQ != NULL) {
         delete m_frameFactoryQ;
         m_frameFactoryQ = NULL;
@@ -615,10 +578,7 @@ void ExynosCamera::release()
     }
 #endif
 
-    if (m_frameMgr != NULL) {
-        delete m_frameMgr;
-        m_frameMgr = NULL;
-    }
+    m_deinitFrameFactory();
 
     if (m_streamManager != NULL) {
         delete m_streamManager;
@@ -629,8 +589,6 @@ void ExynosCamera::release()
         delete m_requestMgr;
         m_requestMgr = NULL;
     }
-
-    m_deinitFrameFactory();
 
     for (int i = 0; i < CAMERA_ID_MAX; i++) {
         if (m_parameters[i] != NULL) {
@@ -667,7 +625,7 @@ void ExynosCamera::release()
     }
 
     if (m_ionClient >= 0) {
-        ion_close(m_ionClient);
+        exynos_ion_close(m_ionClient);
         m_ionClient = -1;
     }
 
@@ -678,6 +636,15 @@ void ExynosCamera::release()
     // m_pipeFrameDoneQ
 
     m_vendorSpecificDestructor();
+
+    /* Frame manager must be deleted in the last.
+     * Some frame lists can call frame destructor
+     * which will try to access frameQueue from frame manager.
+     */
+    if (m_frameMgr != NULL) {
+        delete m_frameMgr;
+        m_frameMgr = NULL;
+    }
 
     CLOGI("-OUT-");
 }
@@ -789,6 +756,19 @@ status_t ExynosCamera::setPIPMode(bool enabled)
     m_parameters[m_cameraId]->setPIPMode(enabled);
 
     return NO_ERROR;
+}
+
+bool ExynosCamera::getAvailablePIPMode(void)
+{
+    exynos_camera_state_t state = m_getState();
+
+    if (state == EXYNOS_CAMERA_STATE_CONFIGURED
+        || state == EXYNOS_CAMERA_STATE_START
+        || state == EXYNOS_CAMERA_STATE_RUN) {
+        return false;
+    } else {
+        return true;
+    }
 }
 
 #ifdef USE_DUAL_CAMERA
@@ -916,11 +896,15 @@ status_t ExynosCamera::m_createPreviewFrameFunc(enum Request_Sync_Type syncType)
     ExynosCameraRequestSP_sprt_t request = NULL;
     struct camera2_shot_ext *service_shot_ext = NULL;
     FrameFactoryList previewFactoryAddrList;
-    ExynosCameraFrameFactory *factory = NULL, *subFactory = NULL;
     FrameFactoryListIterator factorylistIter;
     factory_handler_t frameCreateHandler;
     List<ExynosCameraRequestSP_sprt_t>::iterator r;
-    frame_type_t frameType = FRAME_TYPE_PREVIEW, subFrameType = FRAME_TYPE_PREVIEW;
+    ExynosCameraFrameFactory *factory = NULL;
+    frame_type_t frameType = FRAME_TYPE_PREVIEW;
+#ifdef USE_DUAL_CAMERA
+    ExynosCameraFrameFactory *subFactory = NULL;
+    frame_type_t subFrameType = FRAME_TYPE_PREVIEW;
+#endif
     uint32_t waitingListSize;
     uint32_t requiredRequestCount = -1;
 
@@ -1013,9 +997,6 @@ status_t ExynosCamera::m_createPreviewFrameFunc(enum Request_Sync_Type syncType)
                     case FRAME_FACTORY_TYPE_REPROCESSING:
                         frameType = FRAME_TYPE_REPROCESSING;
                         break;
-                    case FRAME_FACTORY_TYPE_JPEG_REPROCESSING:
-                        frameType = FRAME_TYPE_JPEG_REPROCESSING;
-                        break;
                     case FRAME_FACTORY_TYPE_VISION:
                         frameType = FRAME_TYPE_VISION;
                         break;
@@ -1093,7 +1074,7 @@ status_t ExynosCamera::m_createVisionFrameFunc(enum Request_Sync_Type syncType)
     ExynosCameraRequestSP_sprt_t request = NULL;
     struct camera2_shot_ext *service_shot_ext = NULL;
     FrameFactoryList visionFactoryAddrList;
-    ExynosCameraFrameFactory *factory = NULL, *subFactory = NULL;
+    ExynosCameraFrameFactory *factory = NULL;
     FrameFactoryListIterator factorylistIter;
     factory_handler_t frameCreateHandler;
     List<ExynosCameraRequestSP_sprt_t>::iterator r;
@@ -1316,7 +1297,6 @@ status_t ExynosCamera::m_sendJpegStreamResult(ExynosCameraRequestSP_sprt_t reque
     status_t ret = NO_ERROR;
     ExynosCameraStream *stream = NULL;
     camera3_stream_buffer_t *streamBuffer = NULL;
-    camera3_stream_buffer_t *output_buffers;
     ResultRequest resultRequest = NULL;
     camera3_capture_result_t *requestResult = NULL;
 
@@ -1688,7 +1668,7 @@ status_t ExynosCamera::m_sendNotifyShutter(ExynosCameraRequestSP_sprt_t request,
         return INVALID_OPERATION;
     }
 
-    CLOGV("[R%d] SHUTTER frame t(%llu)", requestKey, timeStamp);
+    CLOGV("[R%d] SHUTTER frame t(%llu)", requestKey, (unsigned long long)timeStamp);
 
     notify->type = CAMERA3_MSG_SHUTTER;
     notify->message.shutter.frame_number = requestKey;
@@ -2009,7 +1989,8 @@ status_t ExynosCamera::m_clearRequestList(List<ExynosCameraRequestSP_sprt_t> *li
         r = list->begin()++;
         curRequest = *r;
         if (curRequest != NULL) {
-            CLOGV("remove request key(%d), fcount", curRequest->getKey(), curRequest->getFrameCount());
+            CLOGV("remove request key(%d), fcount(%d)",
+                    curRequest->getKey(), curRequest->getFrameCount());
             curRequest = NULL;
         }
         list->erase(r);
@@ -2084,7 +2065,6 @@ void ExynosCamera::m_checkUpdateResult(ExynosCameraFrameSP_sptr_t frame, uint32_
             SET_STREAM_CONFIG_BIT(targetBit, HAL_STREAM_ID_PREVIEW);
             SET_STREAM_CONFIG_BIT(targetBit, HAL_STREAM_ID_VIDEO);
             SET_STREAM_CONFIG_BIT(targetBit, HAL_STREAM_ID_CALLBACK);
-            SET_STREAM_CONFIG_BIT(targetBit, HAL_STREAM_ID_PREVIEW_VIDEO);
             SET_STREAM_CONFIG_BIT(targetBit, HAL_STREAM_ID_ZSL_OUTPUT);
             SET_STREAM_CONFIG_BIT(targetBit, HAL_STREAM_ID_DEPTHMAP);
             flag = (COMPARE_STREAM_CONFIG_BIT(streamConfigBit, targetBit) > 0) ? true : false;
@@ -2099,7 +2079,6 @@ void ExynosCamera::m_checkUpdateResult(ExynosCameraFrameSP_sptr_t frame, uint32_
             flag &= (COMPARE_STREAM_CONFIG_BIT(streamConfigBit, targetBit) == 0) ? true : false;
             break;
         case FRAME_TYPE_REPROCESSING:
-        case FRAME_TYPE_JPEG_REPROCESSING:
 #ifdef USE_DUAL_CAMERA
         case FRAME_TYPE_REPROCESSING_DUAL_MASTER:
         case FRAME_TYPE_REPROCESSING_DUAL_SLAVE:
@@ -2299,7 +2278,6 @@ status_t ExynosCamera::m_setSetfile(void) {
         yuvRange = YUV_LIMITED_RANGE;
         break;
     case CONFIG_MODE::HIGHSPEED_240:
-    case CONFIG_MODE::HIGHSPEED_480:    /* HACK: We want new sub scenario setfile index */
         m_parameters[m_cameraId]->getPreviewFpsRange(&minFps, &maxFps);
         if (maxFps == 120) {
             setfile = ISS_SUB_SCENARIO_VIDEO_HIGH_SPEED;
@@ -2323,92 +2301,6 @@ status_t ExynosCamera::m_setSetfile(void) {
 
     return NO_ERROR;
 }
-
-#ifdef DEBUG_CLASS_INFO
-void ExynosCamera::m_dumpClassInfo()
-{
-    CLOGD("-IN-");
-
-    char propertyValue[PROPERTY_VALUE_MAX] ={0};
-    property_get(CAMERA_DEBUG_PROPERTY_KEY_FUNCTION_CLASSINFO, propertyValue, "0");
-
-    /* This code allows developer who wants to check class information. */
-    /* They just set system property, camera.debug.function.classinfo, as "1". */
-    /* enable : adb shell setprop camera.debug.function.classinfo 1 */
-    /* disable : adb shell setprop camera.debug.function.classinfo 0 */
-#ifdef DEBUG_PROPERTY_FUNCTION_CLASSINFO
-    if ((strncmp(propertyValue, "1", sizeof(propertyValue)) == 0))
-#endif
-    {
-        typedef struct classInfo {
-            char *name;
-            size_t size;
-        } classInfo_t;
-        classInfo_t info[] = {
-            /* 1. static component : create one time  */
-            /* camera */
-            {"ExynosCamera", sizeof(ExynosCamera)},
-            /* parameter */
-            {"ExynosCameraParameters", sizeof(ExynosCameraParameters)},
-            /* activity */
-            {"ExynosCameraActivityControl", sizeof(ExynosCameraActivityControl)},
-            {"ExynosCameraActivityAutofocus", sizeof(ExynosCameraActivityAutofocus)},
-            /* framefactory */
-            {"ExynosCameraFrameFactoryPreview", sizeof(ExynosCameraFrameFactoryPreview)},
-            {"ExynosCameraFrameReprocessingFactory", sizeof(ExynosCameraFrameReprocessingFactory)},
-            {"ExynosCameraFrameJpegReprocessingFactory", sizeof(ExynosCameraFrameJpegReprocessingFactory)},
-            /* requestMgr */
-            {"ExynosCameraRequestManager", sizeof(ExynosCameraRequestManager)},
-            {"ExynosCameraMetadataConverter", sizeof(ExynosCameraMetadataConverter)},
-            /* stream */
-            {"ExynosCameraStreamManager", sizeof(ExynosCameraStreamManager)},
-            {"ExynosCameraStream", sizeof(ExynosCameraStream)},
-            /* pipe */
-            {"ExynosCameraPipe", sizeof(ExynosCameraPipe)},
-            {"ExynosCameraPipeFlite", sizeof(ExynosCameraPipeFlite)},
-            {"ExynosCameraMCPipe", sizeof(ExynosCameraMCPipe)},
-            {"ExynosCameraPipeJpeg", sizeof(ExynosCameraPipeJpeg)},
-            {"ExynosCameraPipeGSC", sizeof(ExynosCameraPipeGSC)},
-            {"ExynosCameraPipePlugIn", sizeof(ExynosCameraPipePlugIn)},
-            /* bufferMgr */
-            {"ExynosCameraBufferSupplier", sizeof(ExynosCameraBufferSupplier)},
-            {"ExynosCameraBufferManager", sizeof(ExynosCameraBufferManager)},
-            {"InternalExynosCameraBufferManager", sizeof(InternalExynosCameraBufferManager)},
-            {"ServiceExynosCameraBufferManager", sizeof(ServiceExynosCameraBufferManager)},
-            /* frameMgr */
-            {"ExynosCameraFrameManager", sizeof(ExynosCameraFrameManager)},
-            /* frameselector */
-            {"ExynosCameraFrameSelector", sizeof(ExynosCameraFrameSelector)},
-            /* sensorInfo */
-            {"ExynosCameraSensorInfoBase", sizeof(ExynosCameraSensorInfoBase)},
-            /* activity */
-            {"ExynosCameraActivityAutofocus", sizeof(ExynosCameraActivityAutofocus)},
-            {"ExynosCameraActivitySpecialCapture", sizeof(ExynosCameraActivitySpecialCapture)},
-            {"ExynosCameraActivityUCTL", sizeof(ExynosCameraActivityUCTL)},
-            {"ExynosCameraActivityFlash", sizeof(ExynosCameraActivityFlash)},
-            /* etc */
-            {"ExynosCameraNode", sizeof(ExynosCameraNode)},
-            {"mainCameraThread", sizeof(mainCameraThread)},
-            {"frame_queue_t", sizeof(frame_queue_t)},
-            {"buffer_queue_t", sizeof(buffer_queue_t)},
-
-            /* 2. dynamic component : create / delete each scenario */
-            /* frame */
-            {"ExynosCameraFrame", sizeof(ExynosCameraFrame)},
-            /* request */
-            {"ExynosCameraRequest", sizeof(ExynosCameraRequest)},
-            /* meta */
-            {"camera2_shot_ext", sizeof(struct camera2_shot_ext)},
-        };
-
-        for(int i = 0; i < (sizeof(info) / sizeof(classInfo_t)) ; i++) {
-            CLOGD("class info name:%s size:%zu", info[i].name , info[i].size);
-        }
-    }
-
-    CLOGD("-OUT-");
-}
-#endif
 
 status_t ExynosCamera::m_setupPipeline(ExynosCameraFrameFactory *factory)
 {
@@ -2584,8 +2476,10 @@ status_t ExynosCamera::m_setupPipeline(ExynosCameraFrameFactory *factory)
         /* Setting OutputFrameQ/FrameDoneQ to Pipe */
         factory->setOutputFrameQToPipe(m_pipeFrameDoneQ[pipeId], pipeId);
 #ifdef SUPPORT_HFD
-        pipeId = PIPE_HFD;
-        factory->setOutputFrameQToPipe(m_pipeFrameDoneQ[pipeId], pipeId);
+        if (m_parameters[m_cameraId]->getHfdMode() == true) {
+            pipeId = PIPE_HFD;
+            factory->setOutputFrameQToPipe(m_pipeFrameDoneQ[pipeId], pipeId);
+        }
 #endif
     }
 
@@ -3004,7 +2898,7 @@ status_t ExynosCamera::m_setDstBuffer(uint32_t pipeId,
                                        ExynosCameraFrameSP_sptr_t newFrame,
                                        ExynosCameraBuffer *buffer,
                                        int nodeIndex,
-                                       int dstPipeId)
+                                       __unused int dstPipeId)
 {
     status_t ret = OK;
 
@@ -3162,7 +3056,6 @@ bool ExynosCamera::m_captureThreadFunc()
     ExynosCameraFrameSP_sptr_t frame = NULL;
     ExynosCameraRequestSP_sprt_t request = NULL;
     ExynosCameraFrameFactory *factory = NULL;
-    ExynosCameraFrameEntity *entity = NULL;
     uint32_t pipeId = 0;
     int retryCount = 1;
 
@@ -3181,12 +3074,9 @@ bool ExynosCamera::m_captureThreadFunc()
         goto FUNC_EXIT;
     }
 
-    entity = frame->getFirstEntityNotComplete();
-    pipeId = (entity == NULL) ? -1 : entity->getPipeId();
+    CLOGV("[F%d T%d]frame frameCount", frame->getFrameCount(), frame->getFrameType());
 
-    CLOGI("[F%d T%d P%d] frame frameCount",
-            frame->getFrameCount(), frame->getFrameType(), pipeId);
-
+    pipeId = frame->getFirstEntity()->getPipeId();
     m_captureStreamThread->run(PRIORITY_DEFAULT);
 
     if (frame->getStreamRequested(STREAM_TYPE_CAPTURE) == false
@@ -3209,10 +3099,7 @@ bool ExynosCamera::m_captureThreadFunc()
         } else
 #endif
         {
-            if (frame->getFrameType() == FRAME_TYPE_JPEG_REPROCESSING)
-                factory = m_frameFactory[FRAME_FACTORY_TYPE_JPEG_REPROCESSING];
-            else
-                factory = m_frameFactory[FRAME_FACTORY_TYPE_REPROCESSING];
+            factory = m_frameFactory[FRAME_FACTORY_TYPE_REPROCESSING];
         }
 
         if (factory == NULL) {
@@ -3298,7 +3185,7 @@ status_t ExynosCamera::m_getBayerServiceBuffer(ExynosCameraFrameSP_sptr_t frame,
 
     if (frame->getStreamRequested(STREAM_TYPE_RAW)) {
         m_captureZslSelector->setWaitTime(200000000);
-        bayerFrame = m_captureZslSelector->selectDynamicFrames(1, retryCount);
+        bayerFrame = m_captureZslSelector->selectDynamicFrames(1, m_getBayerPipeId(), false, retryCount, dstPos);
         if (bayerFrame == NULL) {
             CLOGE("bayerFrame is NULL");
             return INVALID_OPERATION;
@@ -3493,6 +3380,7 @@ retry_thread_loop:
     }
 }
 
+#ifdef SUPPORT_HFD
 bool ExynosCamera::m_previewStreamHFDPipeThreadFunc(void)
 {
     status_t ret = NO_ERROR;
@@ -3522,6 +3410,7 @@ retry_thread_loop:
         return false;
     }
 }
+#endif
 
 #ifdef USE_DUAL_CAMERA
 bool ExynosCamera::m_previewStreamSyncPipeThreadFunc(void)
@@ -3685,24 +3574,50 @@ status_t ExynosCamera::m_setFactoryAddr(ExynosCameraRequestSP_dptr_t request)
 bool ExynosCamera::m_reprocessingFrameFactoryStartThreadFunc(void)
 {
     status_t ret = 0;
-    ExynosCameraFrameFactory *factory;
-    ExynosCameraFrameFactory *factoryList[FRAME_FACTORY_TYPE_MAX] = {NULL, };
+    ExynosCameraFrameFactory *factory = NULL;
 
-    /* gethering the active factory */
-    factoryList[FRAME_FACTORY_TYPE_REPROCESSING] = m_frameFactory[FRAME_FACTORY_TYPE_REPROCESSING];
+    factory = m_frameFactory[FRAME_FACTORY_TYPE_REPROCESSING];
+    if (factory == NULL) {
+        CLOGE("Can't start FrameFactory!!!! FrameFactory is NULL!!");
+
+        return false;
+    } else if (factory->isCreated() == false) {
+        CLOGE("Reprocessing FrameFactory is NOT created!");
+        return false;
+    } else if (factory->isRunning() == true) {
+        CLOGW("Reprocessing FrameFactory is already running");
+        return false;
+    }
+
+    /* Set buffer manager */
+    ret = m_setupReprocessingPipeline(factory);
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to setupReprocessingPipeline. ret %d",
+                 ret);
+        return false;
+    }
+
+    ret = factory->initPipes();
+    if (ret < 0) {
+        CLOGE("Failed to initPipes. ret %d",
+                 ret);
+        return false;
+    }
+
+    ret = m_startReprocessingFrameFactory(factory);
+    if (ret < 0) {
+        CLOGE("Failed to startReprocessingFrameFactory");
+        /* TODO: Need release buffers and error exit */
+        return false;
+    }
+
 #ifdef USE_DUAL_CAMERA
-    if (m_parameters[m_cameraId]->getDualMode() == true)
-        factoryList[FRAME_FACTORY_TYPE_REPROCESSING_DUAL] = m_frameFactory[FRAME_FACTORY_TYPE_REPROCESSING_DUAL];
-#endif
-    if (m_parameters[m_cameraId]->getNumOfMcscOutputPorts() < 5)
-        factoryList[FRAME_FACTORY_TYPE_JPEG_REPROCESSING] = m_frameFactory[FRAME_FACTORY_TYPE_JPEG_REPROCESSING];
-
-    for (int i = 0; i < FRAME_FACTORY_TYPE_MAX; i++) {
-        factory = factoryList[i];
-        if (factory == NULL)
-            continue;
-
-        if (factory->isCreated() == false) {
+    if (m_parameters[m_cameraId]->getDualMode() == true) {
+        factory = m_frameFactory[FRAME_FACTORY_TYPE_REPROCESSING_DUAL];
+        if (factory == NULL) {
+            CLOGE("Can't start FrameFactory!!!! FrameFactory is NULL!!");
+            return false;
+        } else if (factory->isCreated() == false) {
             CLOGE("Reprocessing FrameFactory is NOT created!");
             return false;
         } else if (factory->isRunning() == true) {
@@ -3732,6 +3647,7 @@ bool ExynosCamera::m_reprocessingFrameFactoryStartThreadFunc(void)
             return false;
         }
     }
+#endif
 
     return false;
 }
@@ -4084,7 +4000,6 @@ bool ExynosCamera::m_monitorThreadFunc(void)
     int *threadState;
     uint64_t *timeInterval;
     int *pipeCountRenew, resultCountRenew;
-    int camId = getCameraId();
     int ret = NO_ERROR;
     int loopCount = 0;
     int dtpStatus = 0;
@@ -4206,6 +4121,7 @@ bool ExynosCamera::m_monitorThreadFunc(void)
         if (resultCountRenew > ERROR_RESULT_DALAY_COUNT) {
             CLOGE("Device Error Detected. Probably there was not result callback about %.2f seconds. resultCountRenew(%d)",
                     (float)MONITOR_THREAD_INTERVAL / 1000000 * (float)ERROR_RESULT_DALAY_COUNT, resultCountRenew);
+            m_requestMgr->dump();
             goto ERROR;
         }
 
@@ -4216,7 +4132,7 @@ bool ExynosCamera::m_monitorThreadFunc(void)
     }
 
     factory->getThreadInterval(&timeInterval, pipeIdErrorCheck);
-    CLOGV("Thread IntervalTime [%lld]", *timeInterval);
+    CLOGV("Thread IntervalTime [%lld]", (long long)(*timeInterval));
 
     return true;
 
@@ -4229,6 +4145,13 @@ ERROR:
     ret = m_transitState(EXYNOS_CAMERA_STATE_ERROR);
     if (ret != NO_ERROR) {
         CLOGE("Failed to transitState into ERROR. ret %d", ret);
+    }
+
+    if (m_parameters[m_cameraId]->getSamsungCamera() == true) {
+        ret = factory->setControl(V4L2_CID_IS_CAMERA_TYPE, IS_COLD_RESET, PIPE_3AA);
+        if (ret < 0) {
+            CLOGE("PIPE_3AA V4L2_CID_IS_CAMERA_TYPE fail, ret(%d)", ret);
+        }
     }
 
     return false;
@@ -4296,7 +4219,7 @@ bool ExynosCamera::m_dumpThreadFunc(void)
         pipeId = PIPE_3AA_REPROCESSING;
     }
 
-    nodeIndex = factory->getNodeType(PIPE_MCSC_JPEG_REPROCESSING);
+    nodeIndex = factory->getNodeType(PIPE_MCSC3_REPROCESSING);
 
     ret = frame->getDstBuffer(pipeId, &buffer, nodeIndex);
     if (ret != NO_ERROR) {
@@ -4458,14 +4381,6 @@ status_t ExynosCamera::m_checkRestartStream(ExynosCameraRequestSP_sprt_t request
             CLOGE("m_restartStreamInternal failed [%d]", ret);
             return ret;
         }
-
-#ifdef SUPPORT_RESTART_TRANSITION_HIGHSPEED
-        m_parameters[m_cameraId]->updateHWParameter();
-        m_setBuffersThread->run(PRIORITY_DEFAULT);
-        if (m_captureStreamExist) {
-            m_startPictureBufferThread->run(PRIORITY_DEFAULT);
-        }
-#endif
 
         m_requestMgr->registerToServiceList(request);
         m_parameters[m_cameraId]->setRestartStream(false);

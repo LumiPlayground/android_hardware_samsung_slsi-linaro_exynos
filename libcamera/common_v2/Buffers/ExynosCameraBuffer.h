@@ -58,8 +58,13 @@ namespace android {
 #define EXYNOS_CAMERA_BUFFER_ION_FLAG_CACHED_SYNC_FORCE (ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC | ION_FLAG_SYNC_FORCE)
 #define EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_CACHED    (670 + EXYNOS_CAMERA_BUFFER_WARNING_TIME_MARGIN)  /* 0.67ms per 1MB */
 
+#ifdef ION_RESERVED_FLAG_FOR_JUNGFRAU
+#define EXYNOS_CAMERA_BUFFER_ION_MASK_RESERVED          (EXYNOS_ION_HEAP_CAMERA)
+#define EXYNOS_CAMERA_BUFFER_ION_FLAG_RESERVED          (0)
+#else
 #define EXYNOS_CAMERA_BUFFER_ION_MASK_RESERVED          (ION_HEAP_EXYNOS_CONTIG_MASK)
 #define EXYNOS_CAMERA_BUFFER_ION_FLAG_RESERVED          (ION_EXYNOS_VIDEO_MASK)
+#endif
 #define EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_RESERVED  (50)  /* 0.05ms */
 
 #define EXYNOS_CAMERA_BUFFER_GRALLOC_WARNING_TIME       (3300 + EXYNOS_CAMERA_BUFFER_WARNING_TIME_MARGIN)  /* 3.3ms per 1MB */
@@ -191,7 +196,7 @@ struct ExynosCameraBuffer {
         for (int i = 0; i < EXYNOS_CAMERA_BUFFER_MAX_PLANES; i++) {
             if (fd[i]  != other.fd[i]
             || size[i] != other.size[i]
-            || bytesPerLine[i] != bytesPerLine[i]
+            || bytesPerLine[i] != other.bytesPerLine[i]
             || addr[i] != other.addr[i]) {
                 ret = false;
                 break;

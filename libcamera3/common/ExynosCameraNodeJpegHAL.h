@@ -150,7 +150,7 @@ private:
     enum EXYNOS_CAMERA_NODE_LOCATION   m_nodeLocation;
     ExynosCameraBuffer  m_srcBuffer;
     ExynosCameraBuffer  m_dstBuffer;
-    exif_attribute_t    m_exifInfo;
+    //exif_attribute_t    m_exifInfo;
     debug_attribute_t   m_debugInfo;
 };
 

@@ -22,6 +22,10 @@
 #include "ExynosCameraInterface.h"
 #include "ExynosCameraAutoTimer.h"
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraVendorTags.h"
+#endif
+
 namespace android {
 
 static int HAL_camera_device_open(
@@ -460,7 +464,7 @@ char *HAL_camera_device_get_parameters(struct camera_device *dev)
     CameraParameters parms = obj(dev)->getParameters();
     str = parms.flatten();
 #endif
-    return strdup(str.string());
+    return strdup(str.c_str());
 }
 
 static void HAL_camera_device_put_parameters(
@@ -565,6 +569,17 @@ static int HAL_open_legacy(__unused const struct hw_module_t* module, __unused c
 static void HAL_get_vendor_tag_ops(__unused vendor_tag_ops_t* ops)
 {
     ALOGV("INFO(%s):", __FUNCTION__);
+
+#ifdef SAMSUNG_TN_FEATURE
+    SecCameraVendorTags::Ops = ops;
+
+    ops->get_all_tags = SecCameraVendorTags::get_ext_all_tags;
+    ops->get_tag_count = SecCameraVendorTags::get_ext_tag_count;
+    ops->get_tag_type = SecCameraVendorTags::get_ext_tag_type;
+    ops->get_tag_name = SecCameraVendorTags::get_ext_tag_name;
+    ops->get_section_name = SecCameraVendorTags::get_ext_section_name;
+    ops->reserved[0] = NULL;
+#endif
 }
 
 }; /* namespace android */

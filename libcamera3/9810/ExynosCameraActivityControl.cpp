@@ -56,6 +56,16 @@ ExynosCameraActivityControl::~ExynosCameraActivityControl()
     }
 }
 
+#ifdef OIS_CAPTURE
+void ExynosCameraActivityControl::setOISCaptureMode(bool oisMode)
+{
+    if (oisMode)
+        m_specialCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_OIS);
+    else
+        m_specialCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_NONE);
+}
+#endif
+
 void ExynosCameraActivityControl::activityBeforeExecFunc(int pipeId, void *args)
 {
     switch(pipeId) {
@@ -174,7 +184,6 @@ bool ExynosCameraActivityControl::m_checkSensorOnThisPipe(int pipeId, void *args
         break;
     }
 
-done:
     return flagCheckSensor;
 }
 }; /* namespace android */

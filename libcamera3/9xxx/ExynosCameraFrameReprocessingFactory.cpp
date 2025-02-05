@@ -96,6 +96,7 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
     int yuvHeight[ExynosCameraParameters::YUV_MAX] = {0};
     int bayerFormat = m_parameters->getBayerFormat(PIPE_3AA_REPROCESSING);
     int yuvFormat[ExynosCameraParameters::YUV_MAX] = {0};
+    camera_pixel_size yuvPixelSize[ExynosCameraParameters::YUV_MAX] = {CAMERA_PIXEL_SIZE_8BIT};
     int dsWidth = MAX_VRA_INPUT_WIDTH;
     int dsHeight = MAX_VRA_INPUT_HEIGHT;
     int dsFormat = m_parameters->getHwVraInputFormat();
@@ -123,7 +124,7 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
     m_parameters->getPreviewBayerCropSize(&bnsSize, &bayerCropSize, false);
 
     CLOGI(" MaxPreviewSize(%dx%d), HwPreviewSize(%dx%d)", maxPreviewW, maxPreviewH, hwPreviewW, hwPreviewH);
-    CLOGI(" MaxPixtureSize(%dx%d), HwPixtureSize(%dx%d)", maxPictureW, maxPictureH, hwPictureW, hwPictureH);
+    CLOGI(" MaxPictureSize(%dx%d), HwPictureSize(%dx%d)", maxPictureW, maxPictureH, hwPictureW, hwPictureH);
     CLOGI(" MaxThumbnailSize(%dx%d)", maxThumbnailW, maxThumbnailH);
     CLOGI(" PreviewBayerCropSize(%dx%d)", bayerCropSize.w, bayerCropSize.h);
     CLOGI("DS Size %dx%d Format %x Buffer count %d",
@@ -133,6 +134,22 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
         yuvIndex = i % ExynosCameraParameters::YUV_MAX;
         m_parameters->getSize(HW_INFO_HW_YUV_SIZE, (uint32_t *)&yuvWidth[yuvIndex], (uint32_t *)&yuvHeight[yuvIndex], i);
         yuvFormat[yuvIndex] = m_configurations->getYuvFormat(i);
+        yuvPixelSize[yuvIndex] = m_configurations->getYuvPixelSize(i);
+
+#ifdef SAMSUNG_TN_FEATURE
+        if (m_configurations->getModeValue(CONFIGURATION_YUV_STALL_PORT) == yuvIndex) {
+            if ((yuvWidth[yuvIndex] == 0 && yuvHeight[yuvIndex] == 0)
+#ifdef SAMSUNG_HIFI_CAPTURE
+                || (m_configurations->getMode(CONFIGURATION_LIGHT_CONDITION_ENABLE_MODE) == true)
+#endif
+            ) {
+                m_parameters->getSize(HW_INFO_HW_PICTURE_SIZE, (uint32_t *)&yuvWidth[yuvIndex], (uint32_t *)&yuvHeight[yuvIndex]);
+                yuvFormat[yuvIndex] = V4L2_PIX_FMT_NV21;
+            }
+        }
+        CLOGI("YUV_STALL[%d] Size %dx%d Format %x PixelSizeNum %d",
+                i, yuvWidth[yuvIndex], yuvHeight[yuvIndex], yuvFormat[yuvIndex], yuvPixelSize[yuvIndex]);
+#endif
     }
 
     /*
@@ -228,6 +245,28 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
 
             /* set v4l2 video node buffer count */
             pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_vra_buffers;
+
+            /* Set capture node default info */
+            SET_CAPTURE_DEVICE_BASIC_INFO();
+        }
+
+        if (m_parameters->isUse3aaDNG()) {
+            /* 3AG */
+            nodeType = getNodeType(PIPE_3AG_REPROCESSING);
+            perFramePos = 0;
+            // TODO: need to remove perFramePos from the SET_CAPTURE_DEVICE_BASIC_INFO
+            bayerFormat = m_parameters->getBayerFormat(PIPE_3AG_REPROCESSING);
+
+            /* set v4l2 buffer size */
+            tempRect.fullW = hwPictureW;
+            tempRect.fullH = hwPictureH;
+            tempRect.colorFormat = bayerFormat;
+
+            /* set v4l2 video node bytes per plane */
+            pipeInfo[nodeType].bytesPerPlane[0] = getBayerLineSize(tempRect.fullW, bayerFormat);
+
+            /* set v4l2 video node buffer count */
+            pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
 
             /* Set capture node default info */
             SET_CAPTURE_DEVICE_BASIC_INFO();
@@ -438,6 +477,9 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
         tempRect.fullH = yuvHeight[yuvIndex];
         tempRect.colorFormat = yuvFormat[yuvIndex];
 
+        /* set v4l2 format pixel size */
+        pipeInfo[nodeType].pixelSize = yuvPixelSize[yuvIndex];
+
         /* set v4l2 video node buffer count */
         pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
         /* pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW; */
@@ -454,6 +496,9 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
         tempRect.fullW = yuvWidth[yuvIndex];
         tempRect.fullH = yuvHeight[yuvIndex];
         tempRect.colorFormat = yuvFormat[yuvIndex];
+
+        /* set v4l2 format pixel size */
+        pipeInfo[nodeType].pixelSize = yuvPixelSize[yuvIndex];
 
         /* set v4l2 video node buffer count */
         pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
@@ -473,6 +518,9 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
         tempRect.fullW = yuvWidth[yuvIndex];
         tempRect.fullH = yuvHeight[yuvIndex];
         tempRect.colorFormat = yuvFormat[yuvIndex];
+
+        /* set v4l2 format pixel size */
+        pipeInfo[nodeType].pixelSize = yuvPixelSize[yuvIndex];
 
         /* set v4l2 video node buffer count */
         pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
@@ -669,7 +717,7 @@ status_t ExynosCameraFrameReprocessingFactory::startPipes(void)
 
     /* VRA Reprocessing */
     if ((m_flagMcscVraOTF == HW_CONNECTION_MODE_M2M) ||
-			(m_flag3aaVraOTF == HW_CONNECTION_MODE_M2M)) {    
+			(m_flag3aaVraOTF == HW_CONNECTION_MODE_M2M)) {
         ret = m_pipes[INDEX(PIPE_VRA_REPROCESSING)]->start();
         if (ret != NO_ERROR) {
             CLOGE("VRA start fail, ret(%d)", ret);
@@ -764,6 +812,26 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         }
     }
 
+#ifdef SAMSUNG_TN_FEATURE
+    if (m_pipes[INDEX(PIPE_PP_UNI_REPROCESSING)]->isThreadRunning() == true) {
+        ret = m_pipes[INDEX(PIPE_PP_UNI_REPROCESSING)]->stopThread();
+        if (ret != NO_ERROR) {
+            CLOGE("PIPE_PP_UNI_REPROCESSING stopThread fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            funcRet |= ret;
+        }
+    }
+
+    if (m_pipes[INDEX(PIPE_PP_UNI_REPROCESSING2)]->isThreadRunning() == true) {
+        ret = m_pipes[INDEX(PIPE_PP_UNI_REPROCESSING2)]->stopThread();
+        if (ret != NO_ERROR) {
+            CLOGE("PIPE_PP_UNI_REPROCESSING2 stopThread fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            funcRet |= ret;
+        }
+    }
+#endif
+
     if (m_pipes[INDEX(PIPE_GSC_REPROCESSING2)]->isThreadRunning() == true) {
         ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING2)]->stopThread();
         if (ret != NO_ERROR) {
@@ -830,6 +898,24 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
             funcRet |= ret;
         }
     }
+
+#ifdef SAMSUNG_TN_FEATURE
+    /* UNI Reprocessing stop */
+    ret = m_pipes[INDEX(PIPE_PP_UNI_REPROCESSING)]->stop();
+    if (ret != NO_ERROR) {
+        CLOGE("PIPE_PP_UNI_REPROCESSING stop fail, ret(%d)", ret);
+        /* TODO: exception handling */
+        funcRet |= ret;
+    }
+
+    /* UNI2 Reprocessing stop */
+    ret = m_pipes[INDEX(PIPE_PP_UNI_REPROCESSING2)]->stop();
+    if (ret != NO_ERROR) {
+        CLOGE("PIPE_PP_UNI_REPROCESSING2 stop fail, ret(%d)", ret);
+        /* TODO: exception handling */
+        funcRet |= ret;
+    }
+#endif
 
     /* GSC2 Reprocessing stop */
     ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING2)]->stop();
@@ -911,6 +997,12 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
         yuvFormat[yuvIndex] = m_configurations->getYuvFormat(i);
     }
 
+#ifdef SAMSUNG_HIFI_CAPTURE
+    if (m_configurations->getDynamicMode(DYNAMIC_HIFI_CAPTURE_MODE)) {
+        zoomRatio = 1.0f;
+    }
+#endif
+
     memset(&node_group_info_3aa, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_isp, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_mcsc, 0x0, sizeof(camera2_node_group));
@@ -931,20 +1023,28 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
             perframePosition++;
         }
 
+        nodePipeId = PIPE_3AG_REPROCESSING;
+        if (m_request[INDEX(nodePipeId)] == true) {
+            node_group_info_temp->capture[perframePosition].request = m_request[INDEX(nodePipeId)];
+            node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
+            node_group_info_temp->capture[perframePosition].pixelformat = m_parameters->getBayerFormat(nodePipeId);
+            perframePosition++;
+        }
+
         nodePipeId = PIPE_3AP_REPROCESSING;
         node_group_info_temp->capture[perframePosition].request = m_request[INDEX(nodePipeId)];
         node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
         node_group_info_temp->capture[perframePosition].pixelformat = m_parameters->getBayerFormat(nodePipeId);
         perframePosition++;
-    }
 
-    /* VRA */
-    if (m_flag3aaVraOTF == HW_CONNECTION_MODE_M2M) {
-        nodePipeId = PIPE_3AF_REPROCESSING;
-        node_group_info_temp->capture[perframePosition].request = m_request[INDEX(nodePipeId)];
-        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
-        node_group_info_temp->capture[perframePosition].pixelformat = m_parameters->getHwVraInputFormat();
-        perframePosition++;
+        /* VRA */
+         if (m_flag3aaVraOTF == HW_CONNECTION_MODE_M2M) {
+             nodePipeId = PIPE_3AF_REPROCESSING;
+             node_group_info_temp->capture[perframePosition].request = m_request[INDEX(nodePipeId)];
+             node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
+             node_group_info_temp->capture[perframePosition].pixelformat = m_parameters->getHwVraInputFormat();
+             perframePosition++;
+         }
     }
 
     /* ISP for Reprocessing */

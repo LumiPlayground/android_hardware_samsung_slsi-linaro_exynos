@@ -260,7 +260,7 @@ status_t ExynosCameraPipeHFD::m_run(void)
             facesStr.rect.x2 = frameShotExt.hfd.faceRectangles[index][X2];
             facesStr.rect.y2 = frameShotExt.hfd.faceRectangles[index][Y2];
             facesStr.isRot = frameShotExt.hfd.is_rot[index];
-            facesStr.isYaw = frameShotExt.hfd.is_yaw[index];
+            facesStr.YawType = (VRA_YawType)frameShotExt.hfd.is_yaw[index];
             facesStr.rot = frameShotExt.hfd.rot[index];
             facesStr.mirrorX = frameShotExt.hfd.mirror_x[index];
             facesStr.hwRotAndMirror = frameShotExt.hfd.hw_rot_mirror[index];
@@ -274,7 +274,7 @@ status_t ExynosCameraPipeHFD::m_run(void)
                     facesStr.rect.x2,
                     facesStr.rect.y2,
                     facesStr.isRot,
-                    facesStr.isYaw,
+                    facesStr.YawType,
                     facesStr.rot,
                     facesStr.mirrorX,
                     facesStr.hwRotAndMirror);
@@ -318,7 +318,7 @@ status_t ExynosCameraPipeHFD::m_run(void)
         frameShotExt.hfd.faceRectangles[index][X2] = facesStr.rect.x2;
         frameShotExt.hfd.faceRectangles[index][Y2] = facesStr.rect.y2;
         frameShotExt.hfd.is_rot[index] = facesStr.isRot;
-        frameShotExt.hfd.is_yaw[index] = facesStr.isYaw;
+        frameShotExt.hfd.is_yaw[index] = facesStr.YawType;
         frameShotExt.hfd.rot[index] = facesStr.rot;
         frameShotExt.hfd.mirror_x[index] = facesStr.mirrorX;
         frameShotExt.hfd.hw_rot_mirror[index] = facesStr.hwRotAndMirror;

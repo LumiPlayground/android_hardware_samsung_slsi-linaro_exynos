@@ -109,6 +109,62 @@ status_t ExynosCameraPipe::create(int32_t *sensorIds)
     return NO_ERROR;
 }
 
+#ifdef SAMSUNG_COMPANION
+status_t ExynosCameraPipe::precreate(int32_t *sensorIds)
+{
+    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+    int ret = 0;
+
+    if (sensorIds == NULL) {
+        ALOGE("ERR(%s[%d]): Pipe need sensorId", __FUNCTION__, __LINE__);
+        return BAD_VALUE;
+    }
+
+    m_mainNode = new ExynosCameraNode();
+    ret = m_mainNode->create("main", m_cameraId);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]): mainNode create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+
+    ret = m_mainNode->open(FIMC_IS_VIDEO_SS0_NUM);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]): mainNode open fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+
+    CLOGI("INFO(%s[%d]):precreate() is succeed (%d) prepare (%d)", __FUNCTION__, __LINE__, getPipeId(), m_prepareBufferCount);
+
+    return NO_ERROR;
+}
+
+status_t ExynosCameraPipe::postcreate(int32_t *sensorIds)
+{
+    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+    int ret = 0;
+
+    if (sensorIds == NULL) {
+        ALOGE("ERR(%s[%d]): Pipe need sensorId", __FUNCTION__, __LINE__);
+        return BAD_VALUE;
+    }
+
+    ret = m_mainNode->setInput(sensorIds[OUTPUT_NODE]);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]): mainNode setInput fail, sensorId(%d), ret(%d)", __FUNCTION__, __LINE__, sensorIds[0], ret);
+        return ret;
+    }
+
+    m_mainThread = ExynosCameraThreadFactory::createThread(this, &ExynosCameraPipe::m_mainThreadFunc, "mainThread");
+
+    m_inputFrameQ = new frame_queue_t;
+
+    m_prepareBufferCount = 0;
+    CLOGI("INFO(%s[%d]):postcreate() is succeed (%d) prepare (%d)", __FUNCTION__, __LINE__, getPipeId(), m_prepareBufferCount);
+
+    return NO_ERROR;
+}
+#endif
+
 status_t ExynosCameraPipe::destroy(void)
 {
     CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);

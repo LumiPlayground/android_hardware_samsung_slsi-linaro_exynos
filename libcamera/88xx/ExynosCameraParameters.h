@@ -28,6 +28,10 @@
 #include <videodev2_exynos_media.h>
 #include <videodev2_exynos_camera.h>
 
+#ifdef USE_CSC_FEATURE
+#include <SecNativeFeature.h>
+#endif
+
 #include "ExynosCameraConfig.h"
 #include "ExynosCameraSensorInfoBase.h"
 #include "ExynosCameraCounter.h"
@@ -42,6 +46,26 @@
 
 #ifdef BOARD_CAMERA_USES_DUAL_CAMERA
 #include "ExynosCameraFusionInclude.h"
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraParameters.h"
+#endif
+#if 0//def SUPPORT_SW_VDIS
+#include "SecCameraSWVdis.h"
+#endif /*SUPPORT_SW_VDIS*/
+#ifdef SUPPORT_SW_VDIS
+#include "SecCameraSWVdis_3_0.h"
+#endif /*SUPPORT_SW_VDIS*/
+#ifdef SAMSUNG_HYPER_MOTION
+#include "SecCameraHyperMotion.h"
+#endif /*SAMSUNG_HYPER_MOTION*/
+#ifdef SAMSUNG_OIS
+#include "ExynosCameraNode.h"
+#endif
+#ifdef SAMSUNG_DNG
+#include "SecCameraDng.h"
+#include "SecCameraDngThumbnail.h"
 #endif
 
 #include <map>
@@ -183,6 +207,13 @@ struct ExynosConfigInfo {
     uint32_t mode;
 };
 
+struct fast_ctl_capture {
+    uint32_t ready;
+    uint32_t capture_intent;
+    uint32_t capture_count;
+    uint32_t capture_exposureTime;
+};
+
 class IMetadata {
 public:
     IMetadata(){};
@@ -211,6 +242,7 @@ public:
     virtual void                        getHwSensorSize(int *w, int *h) = 0;
     virtual bool                        isIspMcscOtf(void) = 0;
     virtual bool                        isTpuMcscOtf(void) = 0;
+    virtual bool                        isMcscVraOtf(void) {return true;};
     virtual bool                        isReprocessing3aaIspOTF(void) = 0;
     virtual bool                        isReprocessingIspMcscOtf(void) = 0;
     virtual bool                        isReprocessingTpuMcscOtf(void) = 0;
@@ -232,6 +264,8 @@ public:
     virtual bool                        getUseDynamicScc(void) = 0;
     virtual bool                        getUseDynamicBayerVideoSnapShot(void) = 0;
     virtual int                         getHWVdisFormat(void) = 0;
+    virtual void                        getHwVraInputSize(__unused int *w, __unused int *h) {return;};
+    virtual int                         getHwVraInputFormat(void) {return 0;};
     virtual uint32_t                    getBnsScaleRatio(void) = 0;
     virtual bool                        needGSCForCapture(int camId) = 0;
     virtual bool                        getSetFileCtlMode(void) = 0;
@@ -344,24 +378,7 @@ public:
     virtual struct ExynosSensorInfoBase     *getSensorStaticInfo() = 0;
 };
 
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-class IVendorLibrary {
-public:
-    IVendorLibrary(){};
-    virtual ~IVendorLibrary(){};
-
-    virtual status_t               setLibraryManager(sp<ExynosCameraSFLMgr> manager) = 0;
-    virtual sp<ExynosCameraSFLMgr> getLibraryManager() = 0;
-    virtual bool                   getVendorMode(SFLIBRARY_MGR::SFLType mode) = 0;
-
-};
-#endif
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-class ExynosCameraParameters : public IMetadata, public IHWConfig, public IModeConfig, public IModeVendorConfig, public IActivityController, public IJpegConfig, public ISensorStaticInfo, public IVendorLibrary {
-#else
-class ExynosCameraParameters : public IMetadata, public IHWConfig, public IModeConfig, public IModeVendorConfig, public IActivityController, public IJpegConfig, public ISensorStaticInfo{
-#endif
+class ExynosCameraParameters : public IMetadata, public IHWConfig, public IModeConfig, public IModeVendorConfig, public IActivityController, public IJpegConfig, public ISensorStaticInfo {
 public:
     ExynosCameraParameters(){};
     virtual ~ExynosCameraParameters(){};
@@ -379,12 +396,14 @@ public:
     virtual void                        getVideoSize(int *w, int *h) = 0;
     virtual void                        getHwVideoSize(int *w, int *h) = 0;
     virtual void                        getPictureSize(int *w, int *h) = 0;
+    virtual void                        getYuvSize(int *w, int *h, int index) = 0;
     virtual bool                        getHWVdisMode(void) = 0;
     virtual status_t                    getPictureBayerCropSize(ExynosRect *srcRect, ExynosRect *dstRect) = 0;
     virtual void                        getHwSensorSize(int *w, int *h) = 0;
     virtual status_t                    getPictureBdsSize(ExynosRect *dstRect) = 0;
     virtual bool                        isIspMcscOtf(void) = 0;
     virtual bool                        isTpuMcscOtf(void) = 0;
+    virtual bool                        isMcscVraOtf(void) {return true;};
     virtual bool                        isReprocessing3aaIspOTF(void) = 0;
     virtual bool                        isReprocessingIspMcscOtf(void) = 0;
     virtual bool                        isReprocessingTpuMcscOtf(void) = 0;
@@ -407,6 +426,8 @@ public:
     virtual bool                        getUseDynamicScc(void) = 0;
     virtual bool                        getUseDynamicBayerVideoSnapShot(void) = 0;
     virtual int                         getHWVdisFormat(void) = 0;
+    virtual void                        getHwVraInputSize(__unused int *w, __unused int *h) {return;};
+    virtual int                         getHwVraInputFormat(void) {return 0;};
     virtual uint32_t                    getBnsScaleRatio(void) = 0;
     virtual bool                        needGSCForCapture(int camId) = 0;
     virtual bool                        getSetFileCtlMode(void) = 0;
@@ -415,6 +436,7 @@ public:
     virtual bool                        getSetFileCtlISP(void) = 0;
     virtual bool                        getSetFileCtlSCP(void) = 0;
     virtual uint64_t                    getCaptureExposureTime(void) = 0;
+    virtual int32_t                     getLongExposureShotCount(void) = 0;
 
 //class Interface ModeConfig
     virtual bool                        getHdrMode(void) = 0;
@@ -509,21 +531,57 @@ public:
                                             ExynosRect          *thumbnailRect,
                                             camera2_shot_t      *shot) = 0;
 
-#ifdef GED_DNG
+#ifdef DEBUG_RAWDUMP
+    virtual bool                        checkBayerDumpEnable(void) = 0;
+#endif/* DEBUG_RAWDUMP */
+#ifdef SAMSUNG_DNG
     virtual bool                        getDNGCaptureModeOn(void) = 0;
+    virtual dng_thumbnail_t             *createDngThumbnailBuffer(int size) = 0;
+    virtual dng_thumbnail_t             *putDngThumbnailBuffer(dng_thumbnail_t *buf) = 0;
+    virtual bool                        getUseDNGCapture(void) = 0;
+    virtual bool                        getCheckMultiFrame(void) = 0;
 #endif
 
+#ifdef RAWDUMP_CAPTURE
+    virtual bool                        getRawCaptureModeOn(void) = 0;
+#endif
+#ifdef SAMSUNG_LLS_DEBLUR
+    virtual int                         getLDCaptureMode(void) = 0;
+    virtual int                         getLDCaptureCount(void) = 0;
+#endif
+#ifdef SAMSUNG_LENS_DC
+    virtual bool                        getLensDCEnable(void) = 0;
+#endif
+#ifdef FLASHED_LLS_CAPTURE
+    virtual bool                        getFlashedLLSCapture() = 0;
+#endif
     virtual bool                        getOutPutFormatNV21Enable(void) = 0;
+#ifdef SAMSUNG_JQ
+    virtual int                         getJpegQtableStatus(void) = 0;
+    virtual void                        setJpegQtableStatus(int state) = 0;
+    virtual bool                        getJpegQtableOn(void) = 0;
+    virtual void                        getJpegQtable(unsigned char* qtable) = 0;
+#endif
+    virtual status_t                    getDepthMapSize(int *depthMapW, int *depthMapH) = 0;
+#ifdef SUPPORT_DEPTH_MAP
+    virtual bool                        getUseDepthMap(void) = 0;
+    virtual status_t                    checkUseDepthMap(void) = 0;
+    virtual void                        m_setUseDepthMap(bool useDepthMap) = 0;
+    virtual bool                        getDepthCallbackOnPreview(void) = 0;
+    virtual bool                        getDepthCallbackOnCapture(void) = 0;
+#endif
 //Sensor Static Info
     virtual struct ExynosSensorInfoBase             *getSensorStaticInfo() = 0;
-
-//Vendor library
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    virtual status_t               setLibraryManager(sp<ExynosCameraSFLMgr> manager) = 0;
-    virtual sp<ExynosCameraSFLMgr> getLibraryManager() = 0;
-    virtual bool                   getVendorMode(SFLIBRARY_MGR::SFLType mode) = 0;
+    virtual int                         getFrameSkipCount(void) = 0;
+    virtual bool                        msgTypeEnabled(int32_t msgType) = 0;
+#ifdef SAMSUNG_HYPER_MOTION
+    virtual bool                        getHyperMotionMode(void) = 0;
+    virtual void                        getHyperMotionCropSize(int inputW, int inputH, int outputW, int outputH,
+                                                                    int *cropX, int *corpY, int *cropW, int *cropH) = 0;
 #endif
-
+#ifdef SAMSUNG_QUICK_SWITCH
+    virtual int                         getQuickSwitchCmd(void) = 0;
+#endif
 };
 
 

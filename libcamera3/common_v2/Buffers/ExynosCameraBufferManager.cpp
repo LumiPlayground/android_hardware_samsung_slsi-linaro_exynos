@@ -1722,13 +1722,16 @@ ExynosCameraFence::~ExynosCameraFence()
 {
     /* delete sp<Fence> addr */
     m_fence = 0;
+#ifdef FORCE_CLOSE_ACQUIRE_FD
     static uint64_t closeCnt = 0;
-    if(m_acquireFence >= ACQUIRE_FD_THRESHOLD) {
-        if (closeCnt++ % 1000 == 0) {
+    if(m_acquireFence >= FORCE_CLOSE_ACQUIRE_FD_THRESHOLD) {
+        if(closeCnt++ % 1000 == 0) {
             CLOGW2("Attempt to close acquireFence[%d], %ld th close.",
                      m_acquireFence, (long)closeCnt);
         }
+        ::close(m_acquireFence);
     }
+#endif
 }
 
 int ExynosCameraFence::getFenceType(void)

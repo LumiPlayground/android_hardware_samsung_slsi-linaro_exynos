@@ -54,21 +54,10 @@ status_t ExynosCameraFrameSelector::manageFrameHoldList(ExynosCameraFrame *frame
 #ifdef USE_FRAME_REFERENCE_COUNT
     frame->incRef();
 #endif
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    sp<ExynosCameraSFLMgr> sflMgr = NULL;
-    sflMgr = m_parameters->getLibraryManager();
-#endif
-
     if (m_parameters->getHdrMode() == true ||
             m_parameters->getShotMode() == SHOT_MODE_RICH_TONE) {
         ret = m_manageHdrFrameHoldList(frame, pipeID, isSrc, dstPos);
     }
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    else if(sflMgr->getRunEnable(sflMgr->getType())) {
-        ret = m_manageMultiFrameHoldList(frame, pipeID, isSrc, dstPos);
-    }
-#endif //endif CAMERA_VENDOR_TURNKEY_FEATURE
     else {
         ret = m_manageNormalFrameHoldList(frame, pipeID, isSrc, dstPos);
     }
@@ -120,6 +109,12 @@ status_t ExynosCameraFrameSelector::m_manageNormalFrameHoldList(ExynosCameraFram
      */
         m_pushQ(&m_frameHoldList, newFrame, true);
 
+#ifdef FLASHED_LLS_CAPTURE
+        if (m_llsStep != 0)
+            ALOGI("INFO(%s[%d]):m_frameHoldList.getSizeOfProcessQ(%d), m_frameHoldCount(%d)", __FUNCTION__, __LINE__,
+                m_frameHoldList.getSizeOfProcessQ(), m_frameHoldCount);
+#endif
+
     /*
     } else {
         ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
@@ -157,17 +152,11 @@ status_t ExynosCameraFrameSelector::m_manageNormalFrameHoldList(ExynosCameraFram
                 ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
                 return INVALID_OPERATION;
             } else {
-                ret = m_bufMgr->putBuffer(buffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
-                if (ret < 0) {
-                    ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, buffer.index);
-                    m_bufMgr->printBufferState();
-                    m_bufMgr->printBufferQState();
-                }
                 /*
                  Frames in m_frameHoldList and m_hdrFrameHoldList are locked when they are inserted
                  on the list. So we need to use m_LockedFrameComplete() to remove those frames.
                  */
-                m_LockedFrameComplete(oldFrame);
+                m_LockedFrameComplete(oldFrame, pipeID, isSrc, dstPos);
                 oldFrame = NULL;
             }
         }
@@ -182,10 +171,6 @@ ExynosCameraFrame* ExynosCameraFrameSelector::selectFrames(int count, int pipeID
     ExynosCameraActivityFlash *m_flashMgr = NULL;
     ExynosCameraActivityAutofocus *afMgr = m_activityControl->getAutoFocusMgr();     // shoud not be a NULL
     ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_activityControl->getSpecialCaptureMgr();
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    sp<ExynosCameraSFLMgr> sflMgr = NULL;
-    sflMgr = m_parameters->getLibraryManager();
-#endif
 
     m_reprocessingCount = count;
 
@@ -200,27 +185,18 @@ ExynosCameraFrame* ExynosCameraFrameSelector::selectFrames(int count, int pipeID
     } else
 #endif
 
-    if ((m_flashMgr->getNeedCaptureFlash() == true && m_parameters->getSeriesShotCount() == 0)) {
+    if ((m_flashMgr->getNeedCaptureFlash() == true && m_parameters->getSeriesShotCount() == 0)
+#ifdef FLASHED_LLS_CAPTURE
+        || (m_isFlashedLLSCapture && m_llsStep == 3)
+#endif
+    ) {
         selectedFrame = m_selectFlashFrame(pipeID, isSrc, tryCount, dstPos);
 
         if (selectedFrame == NULL) {
             ALOGE("ERR(%s[%d]):select Flash Frame Fail!", __FUNCTION__, __LINE__);
             selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
         }
-    }
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    else if(sflMgr->getRunEnable(sflMgr->getType()) && (sflMgr->getType() == SFLIBRARY_MGR::HDR)) {
-        selectedFrame = m_selectHdrFrame(pipeID, isSrc, tryCount, dstPos);
-
-        if (selectedFrame == NULL) {
-            ALOGE("ERR(%s[%d]):select HDR Frame Fail!", __FUNCTION__, __LINE__);
-            selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
-        }
-    } else if(sflMgr->getRunEnable(sflMgr->getType())) {
-        selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
-    }
-#endif
-    else if (m_parameters->getHdrMode() == true ||
+    } else if (m_parameters->getHdrMode() == true ||
             m_parameters->getShotMode() == SHOT_MODE_RICH_TONE) {
         selectedFrame = m_selectHdrFrame(pipeID, isSrc, tryCount, dstPos);
 
@@ -276,11 +252,14 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectNormalFrame(__unused int p
     ExynosCameraFrame *selectedFrame = NULL;
 
     ret = m_waitAndpopQ(&m_frameHoldList, &selectedFrame, false, tryCount);
-    if (isCanceled == true) {
-        ALOGD("DEBUG(%s[%d]):isCanceled", __FUNCTION__, __LINE__);
-        return NULL;
-    } else if( ret < 0 || selectedFrame == NULL ) {
+    if (ret < 0 || selectedFrame == NULL) {
         ALOGD("DEBUG(%s[%d]):getFrame Fail ret(%d)", __FUNCTION__, __LINE__, ret);
+        return NULL;
+    } else if (isCanceled == true) {
+        ALOGD("DEBUG(%s[%d]):isCanceled", __FUNCTION__, __LINE__);
+        if (selectedFrame != NULL) {
+            m_LockedFrameComplete(selectedFrame, pipeID, isSrc, dstPos);
+        }
         return NULL;
     }
     ALOGD("DEBUG(%s[%d]):Frame Count(%d)", __FUNCTION__, __LINE__, selectedFrame->getFrameCount());
@@ -288,125 +267,11 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectNormalFrame(__unused int p
     return selectedFrame;
 }
 
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-status_t ExynosCameraFrameSelector::m_manageMultiFrameHoldList(ExynosCameraFrame *newFrame, int pipeID, bool isSrc, int32_t dstPos)
+ExynosCameraFrame* ExynosCameraFrameSelector::m_selectFlashFrameV2(int pipeID, bool isSrc, int tryCount, int32_t dstPos)
 {
-    int ret = 0;
-    ExynosCameraFrame *oldFrame = NULL;
-    ExynosCameraBuffer buffer;
-    sp<ExynosCameraSFLMgr> sflMgr = NULL;
-    uint32_t curSelectCount = 0;
-    uint32_t maxSelectCount = 0;
-    uint32_t bestFcount = 0;
-    uint32_t curFcount = 0;
-    struct CommandInfo cmdinfo;
-    sp<ExynosCameraSFLInterface> library = NULL;
-    bool flag = true;
-
-    sflMgr = m_parameters->getLibraryManager();
-    library = sflMgr->getLibrary(sflMgr->getType());
-
-    memset(&cmdinfo, 0x00, sizeof(cmdinfo));
-    makeSFLCommand(&cmdinfo, SFL::GET_CURSELECTCNT, SFL::TYPE_CAPTURE, SFL::POS_SRC);
-    library->processCommand(&cmdinfo, (void*)&curSelectCount);
-
-    makeSFLCommand(&cmdinfo, SFL::GET_MAXSELECTCNT, SFL::TYPE_CAPTURE, SFL::POS_SRC);
-    library->processCommand(&cmdinfo, (void*)&maxSelectCount);
-
-    switch(library->getType()) {
-        case SFLIBRARY_MGR::HDR:
-        case SFLIBRARY_MGR::NIGHT:
-            if (maxSelectCount > curSelectCount) {
-                curSelectCount++;
-                makeSFLCommand(&cmdinfo, SFL::SET_CURSELECTCNT, SFL::TYPE_CAPTURE, SFL::POS_SRC);
-                library->processCommand(&cmdinfo, (void*)&curSelectCount);
-
-                ALOGD("DEBUG(%s[%d]): select Frame(%d) maxCount(%d) curCount(%d)", __FUNCTION__, __LINE__, newFrame->getFrameCount(), maxSelectCount, curSelectCount);
-                m_pushQ(&m_frameHoldList, newFrame, true);
-                flag = false;
-            }
-            break;
-        case SFLIBRARY_MGR::ANTISHAKE:
-            if (maxSelectCount > curSelectCount) {
-                ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
-                if( ret != NO_ERROR ) {
-                    ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s)", __FUNCTION__, __LINE__, pipeID);
-                }
-
-                makeSFLCommand(&cmdinfo, SFL::GET_BESTFRAMEINFO, SFL::TYPE_CAPTURE, SFL::POS_SRC);
-                library->processCommand(&cmdinfo, (void*)&bestFcount);
-
-                if (m_isFrameMetaTypeShotExt() == true) {
-                    camera2_shot_ext *shot_ext = NULL;
-                    shot_ext = (camera2_shot_ext *)(buffer.addr[buffer.planeCount-1]);
-                    if (shot_ext != NULL)
-                        curFcount = shot_ext->shot.dm.request.frameCount;
-                    else
-                        ALOGE("ERR(%s[%d]):selectedBuffer is null", __FUNCTION__, __LINE__);
-                } else {
-                    camera2_stream *shot_stream = NULL;
-                    shot_stream = (camera2_stream *)(buffer.addr[buffer.planeCount-1]);
-                    if (shot_stream != NULL)
-                        curFcount = shot_stream->fcount;
-                    else
-                        ALOGE("ERR(%s[%d]):selectedBuffer is null", __FUNCTION__, __LINE__);
-                }
-
-                if (bestFcount != 0 && (bestFcount+1) <= curFcount) {
-                    ALOGD("DEBUG(%s[%d]): select driver : bestFrame(%d) fcount(%d)", __FUNCTION__, __LINE__, bestFcount, curFcount);
-                    curSelectCount++;
-                    makeSFLCommand(&cmdinfo, SFL::SET_CURSELECTCNT, SFL::TYPE_CAPTURE, SFL::POS_SRC);
-                    library->processCommand(&cmdinfo, (void*)&curSelectCount);
-
-                    m_pushQ(&m_frameHoldList, newFrame, true);
-                    flag = false;
-                } else {
-                    ALOGD("DEBUG(%s[%d]): not match select driver : bestFrame(%d) fcount(%d)", __FUNCTION__, __LINE__, bestFcount, curFcount);
-                }
-            }
-            break;
-        case SFLIBRARY_MGR::OIS:
-        case SFLIBRARY_MGR::PANORAMA:
-        case SFLIBRARY_MGR::FLAWLESS:
-            if (maxSelectCount > curSelectCount) {
-                curSelectCount++;
-                makeSFLCommand(&cmdinfo, SFL::SET_CURSELECTCNT, SFL::TYPE_CAPTURE, SFL::POS_SRC);
-                library->processCommand(&cmdinfo, (void*)&curSelectCount);
-
-                ALOGD("DEBUG(%s[%d]): select Frame(%d) maxCount(%d) curCount(%d)", __FUNCTION__, __LINE__, newFrame->getFrameCount(), maxSelectCount, curSelectCount);
-                m_pushQ(&m_frameHoldList, newFrame, true);
-                flag = false;
-            }
-            break;
-        default:
-            ALOGE("ERR(%s[%d]): get Library failed, type(%d)", __FUNCTION__, __LINE__, library->getType());
-            break;
-    }
-
-    if (flag == true) {
-        ret = m_getBufferFromFrame(newFrame, pipeID, isSrc, &buffer, dstPos);
-        if( ret != NO_ERROR ) {
-            ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s)", __FUNCTION__, __LINE__, pipeID);
-        }
-        if (m_bufMgr == NULL) {
-            ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
-            return INVALID_OPERATION;
-        } else {
-            ret = m_bufMgr->putBuffer(buffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
-            if (ret < 0) {
-                ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, buffer.index);
-                m_bufMgr->printBufferState();
-                m_bufMgr->printBufferQState();
-            }
-
-            m_frameComplete(newFrame, false);
-            oldFrame = NULL;
-        }
-    }
-
-    return ret;
+    /* m_selectFlashFrameV2 is implemented by MCD */
+    return m_selectFlashFrame(pipeID, isSrc, tryCount, dstPos);
 }
-#endif
 
 status_t ExynosCameraFrameSelector::m_waitAndpopQ(ExynosCameraList<ExynosCameraFrame *> *list, ExynosCameraFrame** outframe, bool unlockflag, int tryCount)
 {
@@ -475,6 +340,42 @@ status_t ExynosCameraFrameSelector::clearList(int pipeID, bool isSrc, int32_t ds
 
     isCanceled = false;
 
+    return NO_ERROR;
+}
+
+#ifdef FLASHED_LLS_CAPTURE
+void ExynosCameraFrameSelector::setFlashedLLSCaptureStatus(bool isLLSCapture)
+{
+    m_isFlashedLLSCapture = isLLSCapture;
+}
+
+bool ExynosCameraFrameSelector::getFlashedLLSCaptureStatus()
+{
+    return m_isFlashedLLSCapture;
+}
+#endif
+
+status_t ExynosCameraFrameSelector::m_releaseBuffer(ExynosCameraFrame *frame, int pipeID, bool isSrc, int32_t dstPos)
+{
+    int ret = 0;
+    ExynosCameraBuffer bayerBuffer;
+
+    ret = m_getBufferFromFrame(frame, pipeID, isSrc, &bayerBuffer, dstPos);
+    if( ret != NO_ERROR ) {
+        ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", &bayerBuffer);
+    }
+    if (m_bufMgr == NULL) {
+        ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
+        return INVALID_OPERATION;
+    } else {
+        ret = m_bufMgr->putBuffer(bayerBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_NONE);
+        if (ret < 0) {
+            ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, bayerBuffer.index);
+            m_bufMgr->printBufferState();
+            m_bufMgr->printBufferQState();
+        }
+    }
     return NO_ERROR;
 }
 }

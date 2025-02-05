@@ -50,67 +50,95 @@ static int PREVIEW_SIZE_LUT_3M3[][SIZE_OF_LUT] =
 {
     /* Binning   = OFF
        BNS ratio = 1.0
-       BDS       = 1440p */
+       BDS       = OFF */
 
     /* 16:9 (Single, Dual) */
     { SIZE_RATIO_16_9,
-     (4032 + 0) ,(2268 + 0),   /* [sensor ] */
-      4032      , 2268      ,   /* [bns    ] */
-      4032      , 2268      ,   /* [bcrop  ] */
-      2688      , 1512      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2340      ,   /* [bcrop  ] */
+      4160      , 2340      ,   /* [bds    ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
       1920      , 1080      ,   /* [target ] */
+#else
+      2560      , 1440      ,   /* [target ] */
+#endif
     },
     /* 4:3 (Single, Dual) */
     { SIZE_RATIO_4_3,
-     (4032 + 0) ,(3024 + 0),   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 3024      ,   /* [bcrop  ] */
-      2688      , 2016      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 3120      ,   /* [bcrop  ] */
+      4160      , 3120      ,   /* [bds    ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
       1440      , 1080      ,   /* [target ] */
+#else
+      1920      , 1440      ,   /* [target ] */
+#endif
     },
     /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-     (3024 + 0),(3024 + 0),   /* [sensor ] */
-      3024      , 3024      ,   /* [bns    ] */
-      3024      , 3024      ,   /* [bcrop  ] */
-      2016      , 2016      ,   /* [bds    ] */
-      1080      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3120      , 3120      ,   /* [bcrop  ] */
+      3120      , 3120      ,   /* [bds    ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1088      , 1088      ,   /* [target ] */
+#else
+      1440      , 1440      ,   /* [target ] */
+#endif
     },
     /* 3:2 (Single, Dual) */
     { SIZE_RATIO_3_2,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 2688      ,   /* [bcrop  ] */
-      2688      , 1792      ,   /* [bds    ] */
-      1616      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2804      ,   /* [bcrop  ] */
+      4160      , 2804      ,   /* [bds    ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1616      , 1080      ,   /* [target ] *//* w=1620, Reduced for 16 pixel align */
+#else
+      2160      , 1440      ,   /* [target ] */
+#endif
     },
     /* 5:4 (Single, Dual) */
     { SIZE_RATIO_5_4,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      3780      , 3024      ,   /* [bcrop  ] */
-      2480      , 1984      ,   /* [bds    ] */
-      1344      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3888      , 3120      ,   /* [bcrop  ] */
+      3888      , 3120      ,   /* [bds    ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1344      , 1080      ,   /* [target ] */ /* w=1350, Reduced for 16 pixel align */
+#else
+      1792      , 1440      ,   /* [target ] */
+#endif
     },
     /* 5:3 (Single, Dual) */
     { SIZE_RATIO_5_3,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4030      , 2418      ,   /* [bcrop  ] */
-      2640      , 1584      ,   /* [bds    ] */
-      1792      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2512      ,   /* [bcrop  ] */
+      4160      , 2512      ,   /* [bds    ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1792      , 1080      ,   /* [target ] *//* w=1800, Reduced for 16 pixel align */
+#else
+      2400      , 1440      ,   /* [target ] */
+#endif
     },
     /* 11:9 (Single, Dual) */
     { SIZE_RATIO_11_9,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      3696      , 3024      ,   /* [bcrop  ] */
-      2464      , 2016      ,   /* [bds    ] */
-      1312      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3808      , 3120      ,   /* [bcrop  ] */
+      3808      , 3120      ,   /* [bds    ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1312      , 1080      ,   /* [target ] *//* w=1320, Reduced for 16 pixel align */
+#else
+      1760      , 1440      ,   /* [target ] */
+#endif
     }
 };
 
-static int PREVIEW_SIZE_LUT_3M3_BNS[][SIZE_OF_LUT] =
+static int PREVIEW_SIZE_LUT_3M3_BNS_15[][SIZE_OF_LUT] =
 {
     /* Binning   = OFF
        BNS ratio = 1.5
@@ -118,59 +146,447 @@ static int PREVIEW_SIZE_LUT_3M3_BNS[][SIZE_OF_LUT] =
 
     /* 16:9 (Single, Dual) */
     { SIZE_RATIO_16_9,
-     (4032 + 0) ,(2268 + 0),   /* [sensor ] */
-      2688      , 1512      ,   /* [bns    ] */
-      2688      , 1512      ,   /* [bcrop  ] */
-      2688      , 1512      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2752      , 1548      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1920      , 1080      ,   /* [bds    ] */
+      1920      , 1080      ,   /* [target ] */
+#else
+      2560      , 1440      ,   /* [bds    ] */
+      2560      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 4:3 (Single, Dual) */
+    { SIZE_RATIO_4_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2752      , 2064      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1440      , 1080      ,   /* [bds    ] */
+      1440      , 1080      ,   /* [target ] */
+#else
+      1920      , 1440      ,   /* [bds    ] */
+      1920      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 1:1 (Single, Dual) */
+    { SIZE_RATIO_1_1,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2080      , 2080      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1088      , 1088      ,   /* [bds    ] */
+      1088      , 1088      ,   /* [target ] */
+#else
+      1440      , 1440      ,   /* [bds    ] */
+      1440      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 3:2 (Single, Dual) */
+    { SIZE_RATIO_3_2,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2800      , 1868      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1616      , 1080      ,   /* [bds    ] *//* w=1620, Reduced for 16 pixel align */
+      1616      , 1080      ,   /* [target ] */
+#else
+      2160      , 1440      ,   /* [bds    ] */
+      2160      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 5:4 (Single, Dual) */
+    { SIZE_RATIO_5_4,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2800      , 1684      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1344      , 1080      ,   /* [bds    ] *//* w=1350, Reduced for 16 pixel align */
+      1344      , 1080      ,   /* [target ] */
+#else
+      1792      , 1440      ,   /* [bds    ] */
+      1792      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 5:3 (Single, Dual) */
+    { SIZE_RATIO_5_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2800      , 1684      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1792      , 1080      ,   /* [bds    ] *//* w=1800, Reduced for 16 pixel align */
+      1792      , 1080      ,   /* [target ] */
+#else
+      2400      , 1440      ,   /* [bds    ] */
+      2400      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 11:9 (Single, Dual) */
+    { SIZE_RATIO_11_9,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2544      , 2080      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1312      , 1080      ,   /* [bds    ] *//* w=1320, Reduced for 16 pixel align */
+      1312      , 1080      ,   /* [target ] */
+#else
+      1760      , 1440      ,   /* [bds    ] */
+      1760      , 1440      ,   /* [target ] */
+#endif
+    }
+};
+
+static int PREVIEW_SIZE_LUT_3M3_BNS_20[][SIZE_OF_LUT] =
+{
+    /* Binning   = OFF
+       BNS ratio = 2.0
+       BDS       = 1080p */
+
+    /* 16:9 (Single, Dual) */
+    { SIZE_RATIO_16_9,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      2104      , 1184      ,   /* [bcrop  ] */
+      1920      , 1080      ,   /* [bds    ] */
       1920      , 1080      ,   /* [target ] */
     },
     /* 4:3 (Single, Dual) */
     { SIZE_RATIO_4_3,
-     (4032 + 0) ,(3024 + 0),   /* [sensor ] */
-      2688      , 2016      ,   /* [bns    ] */
-      2688      , 2016      ,   /* [bcrop  ] */
-      2688      , 2016      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      2104      , 1560      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1440      , 1080      ,   /* [bds    ] */
       1440      , 1080      ,   /* [target ] */
+#else
+      1920      , 1440      ,   /* [bds    ] */
+      1920      , 1440      ,   /* [target ] */
+#endif
     },
     /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-     (4032 + 0),(3024 + 0),   /* [sensor ] */
-      2688      , 2016      ,   /* [bns    ] */
-      2688      , 2016      ,   /* [bcrop  ] */
-      2688      , 2016      ,   /* [bds    ] */
-      1080      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      1560      , 1560      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1088      , 1088      ,   /* [bds    ] */
+      1088      , 1088      ,   /* [target ] */
+#else
+      1440      , 1440      ,   /* [bds    ] */
+      1440      , 1440      ,   /* [target ] */
+#endif
     },
     /* 3:2 (Single, Dual) */
     { SIZE_RATIO_3_2,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      2688      , 1356      ,   /* [bns    ] */
-      2688      , 1356      ,   /* [bcrop  ] */
-      2688      , 1356      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      2104      , 1402      ,   /* [bcrop  ] */
+      1616      , 1080      ,   /* [bds    ] *//* w=1620, Reduced for 16 pixel align */
       1616      , 1080      ,   /* [target ] */
     },
     /* 5:4 (Single, Dual) */
     { SIZE_RATIO_5_4,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      2688      , 1356      ,   /* [bns    ] */
-      2530      , 1356      ,   /* [bcrop  ] */
-      2530      , 1356      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      1952      , 1560      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1344      , 1080      ,   /* [bds    ] *//* w=1350, Reduced for 16 pixel align */
       1344      , 1080      ,   /* [target ] */
+#else
+      1792      , 1440      ,   /* [bds    ] */
+      1792      , 1440      ,   /* [target ] */
+#endif
     },
     /* 5:3 (Single, Dual) */
     { SIZE_RATIO_5_3,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      2688      , 1356      ,   /* [bns    ] */
-      2688      , 1612      ,   /* [bcrop  ] */
-      2688      , 1612      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      2104      , 1264      ,   /* [bcrop  ] */
+      1792      , 1080      ,   /* [bds    ] *//* w=1800, Reduced for 16 pixel align */
       1792      , 1080      ,   /* [target ] */
     },
     /* 11:9 (Single, Dual) */
     { SIZE_RATIO_11_9,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      2688      , 1356      ,   /* [bns    ] */
-      2464      , 1356      ,   /* [bcrop  ] */
-      2464      , 1356      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      1920      , 1560      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1312      , 1080      ,   /* [bds    ] *//* w=1320, Reduced for 16 pixel align */
       1312      , 1080      ,   /* [target ] */
+#else
+      1760      , 1440      ,   /* [bds    ] */
+      1760      , 1440      ,   /* [target ] */
+#endif
+    }
+};
+
+static int PREVIEW_SIZE_LUT_3M3_BDS[][SIZE_OF_LUT] =
+{
+    /* Binning   = OFF
+       BNS ratio = 1.0
+       BDS       = 1440p */
+
+    /* 16:9 (Single, Dual) */
+    { SIZE_RATIO_16_9,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2340      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1920      , 1080      ,   /* [bds    ] */
+      1920      , 1080      ,   /* [target ] */
+#else
+      2560      , 1440      ,   /* [bds    ] */
+      2560      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 4:3 (Single, Dual) */
+    { SIZE_RATIO_4_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 3120      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1440      , 1080      ,   /* [bds    ] */
+      1440      , 1080      ,   /* [target ] */
+#else
+      1920      , 1440      ,   /* [bds    ] */
+      1920      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 1:1 (Single, Dual) */
+    { SIZE_RATIO_1_1,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3120      , 3120      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1488      , 1488      ,   /* [bds    ] */
+      1088      , 1088      ,   /* [target ] */
+#else
+      1440      , 1440      ,   /* [bds    ] */
+      1440      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 3:2 (Single, Dual) */
+    { SIZE_RATIO_3_2,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2804      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1616      , 1080      ,   /* [bds    ] *//* w=1620, Reduced for 16 pixel align */
+      1616      , 1080      ,   /* [target ] */
+#else
+      2160      , 1440      ,   /* [bds    ] */
+      2160      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 5:4 (Single, Dual) */
+    { SIZE_RATIO_5_4,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3888      , 3120      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1344      , 1080      ,   /* [bds    ] *//* w=1350, Reduced for 16 pixel align */
+      1344      , 1080      ,   /* [target ] */
+#else
+      1792      , 1440      ,   /* [bds    ] */
+      1792      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 5:3 (Single, Dual) */
+    { SIZE_RATIO_5_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2512      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1792      , 1080      ,   /* [bds    ] *//* w=1800, Reduced for 16 pixel align */
+      1792      , 1080      ,   /* [target ] */
+#else
+      2400      , 1440      ,   /* [bds    ] */
+      2400      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 11:9 (Single, Dual) */
+    { SIZE_RATIO_11_9,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3808      , 3120      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1312      , 1080      ,   /* [bds    ] *//* w=1320, Reduced for 16 pixel align */
+      1312      , 1080      ,   /* [target ] */
+#else
+      1760      , 1440      ,   /* [bds    ] */
+      1760      , 1440      ,   /* [target ] */
+#endif
+    }
+};
+
+static int PREVIEW_SIZE_LUT_3M3_BDS_DUAL_CAMERA_WIDE[][SIZE_OF_LUT] =
+{
+    /* This LUT is same with PREVIEW_SIZE_LUT_3M3_BDS, except BDS */
+
+    /* Binning   = OFF
+       BNS ratio = 1.0 */
+
+    /* 16:9 (Single, Dual) */
+    { SIZE_RATIO_16_9,
+     (4160 + 0 ),(2340 + 0) ,   /* [sensor ] */
+      4160      , 2340      ,   /* [bns    ] */
+      4160      , 2340      ,   /* [bcrop  ] */
+      2880      , 1620      ,   /* [bds    ] */
+      2496      , 1404      ,   /* [target ] */
+    },
+    /* 4:3 (Single, Dual) */
+    { SIZE_RATIO_4_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 3120      ,   /* [bcrop  ] */
+      2880      , 2160      ,   /* [bds    ] */
+      1920      , 1440      ,   /* [target ] */
+    },
+    /* 1:1 (Single, Dual) */
+    { SIZE_RATIO_1_1,
+     (3120 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      3120      , 3120      ,   /* [bns    ] */
+      3120      , 3120      ,   /* [bcrop  ] */
+      2160      , 2160      ,   /* [bds    ] */
+      1408      , 1408      ,   /* [target ] */
+    },
+    /* 3:2 (Single, Dual) */
+    { SIZE_RATIO_3_2,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2804      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1616      , 1080      ,   /* [bds    ] *//* w=1620, Reduced for 16 pixel align */
+      1616      , 1080      ,   /* [target ] */
+#else
+      2160      , 1440      ,   /* [bds    ] */
+      2160      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 5:4 (Single, Dual) */
+    { SIZE_RATIO_5_4,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3888      , 3120      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1344      , 1080      ,   /* [bds    ] *//* w=1350, Reduced for 16 pixel align */
+      1344      , 1080      ,   /* [target ] */
+#else
+      1792      , 1440      ,   /* [bds    ] */
+      1792      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 5:3 (Single, Dual) */
+    { SIZE_RATIO_5_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2512      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1792      , 1080      ,   /* [bds    ] *//* w=1800, Reduced for 16 pixel align */
+      1792      , 1080      ,   /* [target ] */
+#else
+      2400      , 1440      ,   /* [bds    ] */
+      2400      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 11:9 (Single, Dual) */
+    { SIZE_RATIO_11_9,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3808      , 3120      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1312      , 1080      ,   /* [bds    ] *//* w=1320, Reduced for 16 pixel align */
+      1312      , 1080      ,   /* [target ] */
+#else
+      1760      , 1440      ,   /* [bds    ] */
+      1760      , 1440      ,   /* [target ] */
+#endif
+    }
+};
+
+static int PREVIEW_SIZE_LUT_3M3_BDS_DUAL_CAMERA_TELE[][SIZE_OF_LUT] =
+{
+    /* This LUT is same with PREVIEW_SIZE_LUT_3M3_BDS, except BDS */
+
+    /* Binning   = OFF
+       BNS ratio = 1.0 */
+
+    /* 16:9 (Single, Dual) */
+    { SIZE_RATIO_16_9,
+     (4160 + 0 ),(2340 + 0) ,   /* [sensor ] */
+      4160      , 2340      ,   /* [bns    ] */
+      4160      , 2340      ,   /* [bcrop  ] */
+      2880      , 1620      ,   /* [bds    ] */
+      2880      , 1620      ,   /* [target ] */
+    },
+    /* 4:3 (Single, Dual) */
+    { SIZE_RATIO_4_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 3120      ,   /* [bcrop  ] */
+      2880      , 2160      ,   /* [bds    ] */
+      2176      , 1632      ,   /* [target ] */
+    },
+    /* 1:1 (Single, Dual) */
+    { SIZE_RATIO_1_1,
+     (3120 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      3120      , 3120      ,   /* [bns    ] */
+      3120      , 3120      ,   /* [bcrop  ] */
+      2160      , 2160      ,   /* [bds    ] */
+      1664      , 1664      ,   /* [target ] */
+    },
+    /* 3:2 (Single, Dual) */
+    { SIZE_RATIO_3_2,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2804      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1616      , 1080      ,   /* [bds    ] *//* w=1620, Reduced for 16 pixel align */
+      1616      , 1080      ,   /* [target ] */
+#else
+      2160      , 1440      ,   /* [bds    ] */
+      2160      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 5:4 (Single, Dual) */
+    { SIZE_RATIO_5_4,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3888      , 3120      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1344      , 1080      ,   /* [bds    ] *//* w=1350, Reduced for 16 pixel align */
+      1344      , 1080      ,   /* [target ] */
+#else
+      1792      , 1440      ,   /* [bds    ] */
+      1792      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 5:3 (Single, Dual) */
+    { SIZE_RATIO_5_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2512      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1792      , 1080      ,   /* [bds    ] *//* w=1800, Reduced for 16 pixel align */
+      1792      , 1080      ,   /* [target ] */
+#else
+      2400      , 1440      ,   /* [bds    ] */
+      2400      , 1440      ,   /* [target ] */
+#endif
+    },
+    /* 11:9 (Single, Dual) */
+    { SIZE_RATIO_11_9,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3808      , 3120      ,   /* [bcrop  ] */
+#ifdef LIMIT_SCP_SIZE_UNTIL_FHD_ON_CAPTURE
+      1312      , 1080      ,   /* [bds    ] *//* w=1320, Reduced for 16 pixel align */
+      1312      , 1080      ,   /* [target ] */
+#else
+      1760      , 1440      ,   /* [bds    ] */
+      1760      , 1440      ,   /* [target ] */
+#endif
     }
 };
 
@@ -182,27 +598,27 @@ static int PICTURE_SIZE_LUT_3M3[][SIZE_OF_LUT] =
 
     /* 16:9 (Single, Dual) */
     { SIZE_RATIO_16_9,
-     (4032 + 0),(2268 + 0),   /* [sensor ] */
-      4032      , 2268      ,   /* [bns    ] */
-      4032      , 2268      ,   /* [bcrop  ] */
-      4032      , 2268      ,   /* [bds    ] */
-      4032      , 2268      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2340      ,   /* [bcrop  ] */
+      4160      , 2340      ,   /* [bds    ] */
+      4160      , 2340      ,   /* [target ] */
     },
     /* 4:3 (Single, Dual) */
     { SIZE_RATIO_4_3,
-     (4032 + 0),(3024 + 0),   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 3024      ,   /* [bcrop  ] */
-      4032      , 3024      ,   /* [bds    ] */
-      4032      , 3024      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 3120      ,   /* [bcrop  ] */
+      4160      , 3120      ,   /* [bds    ] */
+      4160      , 3120      ,   /* [target ] */
     },
     /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-     (3024 + 0),(3024 + 0),   /* [sensor ] */
-      3024      , 3024      ,   /* [bns    ] */
-      3024      , 3024      ,   /* [bcrop  ] */
-      3024      , 3024      ,   /* [bds    ] */
-      3024      , 3024      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3120      , 3120      ,   /* [bcrop  ] */
+      3120      , 3120      ,   /* [bds    ] */
+      3120      , 3120      ,   /* [target ] */
     }
 };
 
@@ -210,67 +626,71 @@ static int VIDEO_SIZE_LUT_3M3[][SIZE_OF_LUT] =
 {
     /* Binning   = OFF
        BNS ratio = 1.0
-       BDS       = 1080p */
+       BDS       = OFF */
 
     /* 16:9 (Single) */
     { SIZE_RATIO_16_9,
-     (4032 + 0) ,(2268 + 0) ,   /* [sensor ] */
-      4032      , 2268      ,   /* [bns    ] */
-      4032      , 2268      ,   /* [bcrop  ] */
-      2688      , 1512      ,   /* [bds    ] *//* UHD (3840x2160) special handling in ExynosCameraParameters class */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2340      ,   /* [bcrop  ] */
+      4160      , 2340      ,   /* [bds    ] */
+#if defined(LIMIT_SCP_SIZE_UNTIL_FHD_ON_RECORDING)
       1920      , 1080      ,   /* [target ] */
+#else
+      2560      , 1440      ,   /* [target ] */
+#endif
     },
     /* 4:3 (Single) */
     { SIZE_RATIO_4_3,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 3024      ,   /* [bcrop  ] */
-      2688      , 2016      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 3120      ,   /* [bcrop  ] */
+      4160      , 3120      ,   /* [bds    ] */
       1440      , 1080      ,   /* [target ] */
     },
     /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-     (3024 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      3024      , 3024      ,   /* [bns    ] */
-      3024      , 3024      ,   /* [bcrop  ] */
-      2016      , 2016      ,   /* [bds    ] */
-      1080      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3120      , 3120      ,   /* [bcrop  ] */
+      3120      , 3120      ,   /* [bds    ] */
+      1088      , 1088      ,   /* [target ] *//* w=1080, Increased for 16 pixel align */
     },
     /* 3:2 (Single) */
     { SIZE_RATIO_3_2,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 2688      ,   /* [bcrop  ] */
-      2688      , 1792      ,   /* [bds    ] */
-      1616      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2804      ,   /* [bcrop  ] */
+      4160      , 2804      ,   /* [bds    ] */
+      1616      , 1080      ,   /* [target ] *//* w=1620, Reduced for 16 pixel align */
     },
     /* 5:4 (Single) */
     { SIZE_RATIO_5_4,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      3780      , 3024      ,   /* [bcrop  ] */
-      2480      , 1984      ,   /* [bds    ] */
-      1344      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3888      , 3120      ,   /* [bcrop  ] */
+      3888      , 3120      ,   /* [bds    ] */
+      1344      , 1080      ,   /* [target ] *//* w=1350, Reduced for 16 pixel align */
     },
     /* 5:3 (Single) */
     { SIZE_RATIO_5_3,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4030      , 2418      ,   /* [bcrop  ] */
-      2640      , 1584      ,   /* [bds    ] */
-      1792      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2512      ,   /* [bcrop  ] */
+      4160      , 2512      ,   /* [bds    ] */
+      1792      , 1080      ,   /* [target ] *//* w=1800, Reduced for 16 pixel align */
     },
     /* 11:9 (Single) */
     { SIZE_RATIO_11_9,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      3696      , 3024      ,   /* [bcrop  ] */
-      2464      , 2016      ,   /* [bds    ] */
-      1312      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3808      , 3120      ,   /* [bcrop  ] */
+      3808      , 3120      ,   /* [bds    ] */
+      1312      , 1080      ,   /* [target ] *//* w=1320, Reduced for 16 pixel align */
     }
 };
 
-static int VIDEO_SIZE_LUT_3M3_BNS[][SIZE_OF_LUT] =
+static int VIDEO_SIZE_LUT_3M3_BNS_15[][SIZE_OF_LUT] =
 {
     /* Binning   = OFF
        BNS ratio = 1.5
@@ -278,168 +698,147 @@ static int VIDEO_SIZE_LUT_3M3_BNS[][SIZE_OF_LUT] =
 
     /* 16:9 (Single) */
     { SIZE_RATIO_16_9,
-     (4032 + 0) ,(2268 + 0) ,   /* [sensor ] */
-      2688      , 1512      ,   /* [bns    ] */
-      2688      , 1512      ,   /* [bcrop  ] */
-      2688      , 1512      ,   /* [bds    ] *//* UHD (3840x2160) special handling in ExynosCameraParameters class */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2752      , 1548      ,   /* [bcrop  ] */
+#if defined(USE_BDS_RECORDING)
+#if defined(LIMIT_SCP_SIZE_UNTIL_FHD_ON_RECORDING)
+      1920      , 1080      ,   /* [bds    ] *//* UHD (3840x2160) special handling in ExynosCameraParameters class */
       1920      , 1080      ,   /* [target ] */
+#else
+      2560      , 1440      ,   /* [bds    ] */
+      2560      , 1440      ,   /* [target ] */
+#endif /* LIMIT_SCP_SIZE_UNTIL_FHD_ON_RECORDING */
+#else
+#if defined(LIMIT_SCP_SIZE_UNTIL_FHD_ON_RECORDING)
+      2752      , 1548      ,   /* [bds    ] */
+      1920      , 1080      ,   /* [target ] */
+#else
+      2752      , 1548      ,   /* [bds    ] */
+      2560      , 1440      ,   /* [target ] */
+#endif /* LIMIT_SCP_SIZE_UNTIL_FHD_ON_RECORDING */
+#endif /* USE_BDS_RECORDING */
     },
     /* 4:3 (Single) */
     { SIZE_RATIO_4_3,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      2688      , 2016      ,   /* [bns    ] */
-      2688      , 2016      ,   /* [bcrop  ] */
-      2688      , 2016      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2752      , 2064      ,   /* [bcrop  ] */
+      1440      , 1080      ,   /* [bds    ] */
       1440      , 1080      ,   /* [target ] */
     },
     /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      2688      , 2016      ,   /* [bns    ] */
-      2688      , 2016      ,   /* [bcrop  ] */
-      2688      , 2016      ,   /* [bds    ] */
-      1080      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2080      , 2080      ,   /* [bcrop  ] */
+      1088      , 1088      ,   /* [bds    ] *//* w=1080, Increased for 16 pixel align */
+      1088      , 1088      ,   /* [target ] */
     },
-};
-
-static int VIDEO_SIZE_LUT_60FPS_HIGH_SPEED_3M3[][SIZE_OF_LUT] =
-{
-    /* Binning   = ON
-       BNS ratio = 1.0
-       BDS       = ON */
-
-    /* FHD_60 16:9 (Single) */
-    { SIZE_RATIO_16_9,
-     (1920 + 0)  ,(1080 + 0) ,   /* [sensor ] */
-      1920       , 1080      ,   /* [bns    ] */
-      1920       , 1080      ,   /* [bcrop  ] */
-      1920       , 1080      ,   /* [bds    ] */
-      1920      ,  1080      ,   /* [target ] */
-    },
-};
-
-static int VIDEO_SIZE_LUT_120FPS_HIGH_SPEED_3M3[][SIZE_OF_LUT] =
-{
-    /* Binning   = ON
-       BNS ratio = 1.0
-       BDS       = ON */
-
-    /* HD_120 16:9 (Single) */
-    { SIZE_RATIO_16_9,
-     (1376 + 0)  ,(774 + 0) ,   /* [sensor ] */
-      1376       , 774      ,   /* [bns    ] */
-      1376       , 774      ,   /* [bcrop  ] */
-      1376       , 774      ,   /* [bds    ] */
-      1280      ,  720      ,   /* [target ] */
-    },
-};
-
-static int VTCALL_SIZE_LUT_3M3[][SIZE_OF_LUT] =
-{
-    /* Binning   = 2
-       BNS ratio = 1.0
-       BDS       = ON */
-
-    /* 16:9 (VT_Call) */
-    { SIZE_RATIO_16_9,
-     (2016 + 0) ,(1134 + 0) ,   /* [sensor ] */
-      2016      , 1134      ,   /* [bns    ] */
-      2016      , 1134      ,   /* [bcrop  ] */
-      2016      , 1134      ,   /* [bds    ] */
-      1920      , 1080      ,   /* [target ] */
-    },
-    /* 4:3 (VT_Call) */
-    { SIZE_RATIO_4_3,
-     (2016 + 0) ,(1512 + 0) ,   /* [sensor ] */
-      2016      , 1512      ,   /* [bns    ] */
-      2016      , 1512      ,   /* [bcrop  ] */
-      2016      , 1512      ,   /* [bds    ] */
-       640      ,  480      ,   /* [target ] */
-    },
-    /* 1:1 (VT_Call) */
-    { SIZE_RATIO_1_1,
-     (1504 + 0) ,(1504 + 0) ,   /* [sensor ] */
-      1504      , 1504      ,   /* [bns    ] */
-      1504      , 1504      ,   /* [bcrop  ] */
-      1504      , 1504      ,   /* [bds    ] */
-      1080      , 1080      ,   /* [target ] */
-    },
-    /* 3:2 (VT_Call) */
+    /* 3:2 (Single) */
     { SIZE_RATIO_3_2,
-     (2016 + 0) ,(1134 + 0) ,   /* [sensor ] */
-      2016      , 1134      ,   /* [bns    ] */
-      1680      , 1120      ,   /* [bcrop  ] */
-      1680      , 1120      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2800      , 1868      ,   /* [bcrop  ] */
+      1616      , 1080      ,   /* [bds    ] *//* w=1620, Reduced for 16 pixel align */
       1616      , 1080      ,   /* [target ] */
     },
-    /* 11:9 (VT_Call) */
+    /* 5:4 (Single) */
+    { SIZE_RATIO_5_4,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2608      , 2808      ,   /* [bcrop  ] */
+      1344      , 1080      ,   /* [bds    ] *//* w=1350, Reduced for 16 pixel align */
+      1344      , 1080      ,   /* [target ] */
+    },
+    /* 5:3 (Single) */
+    { SIZE_RATIO_5_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2800      , 1684      ,   /* [bcrop  ] */
+      1792      , 1080      ,   /* [bds    ] *//* w=1800, Reduced for 16 pixel align */
+      1792      , 1080      ,   /* [target ] */
+    },
+    /* 11:9 (Single) */
     { SIZE_RATIO_11_9,
-     (2016 + 0) ,(1134 + 0) ,   /* [sensor ] */
-      2016      , 1134      ,   /* [bns    ] */
-      1232      , 1008      ,   /* [bcrop  ] */
-      1232      , 1008      ,   /* [bds    ] */
-      1232      , 1008      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2800      , 2080      ,   /* [bns    ] */
+      2544      , 2080      ,   /* [bcrop  ] */
+      1312      , 1080      ,   /* [bds    ] *//* w=1320, Reduced for 16 pixel align */
+      1312      , 1080      ,   /* [target ] */
     }
 };
 
-static int LIVE_BROADCAST_SIZE_LUT_3M3[][SIZE_OF_LUT] =
+static int VIDEO_SIZE_LUT_3M3_BNS_20[][SIZE_OF_LUT] =
 {
-    /* Binning   = 2
-       BNS ratio = 1.0
-       BDS       = ON */
+    /* Binning   = OFF
+       BNS ratio = 2.0
+       BDS       = 1080p */
 
-    /* 16:9 */
+    /* 16:9 (Single) */
     { SIZE_RATIO_16_9,
-     (2016 + 0) ,(1134 + 0) ,   /* [sensor ] */
-      2016      , 1134      ,   /* [bns    ] */
-      2016      , 1134      ,   /* [bcrop  ] */
-      2016      , 1134      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      2104      , 1184      ,   /* [bcrop  ] */
+#if defined(USE_BDS_RECORDING)
+      1920      , 1080      ,   /* [bds    ] *//* UHD (3840x2160) special handling in ExynosCameraParameters class */
       1920      , 1080      ,   /* [target ] */
+#else
+      2104      , 1184      ,   /* [bds    ] */
+      1920      , 1080      ,   /* [target ] */
+#endif /* USE_BDS_RECORDING */
     },
-    /* 4:3 */
+    /* 4:3 (Single) */
     { SIZE_RATIO_4_3,
-     (2016 + 0) ,(1512 + 0) ,   /* [sensor ] */
-      2016      , 1512      ,   /* [bns    ] */
-      2016      , 1512      ,   /* [bcrop  ] */
-      2016      , 1512      ,   /* [bds    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      2104      , 1560      ,   /* [bcrop  ] */
+      1440      , 1080      ,   /* [bds    ] */
       1440      , 1080      ,   /* [target ] */
     },
-    /* 1:1 */
+    /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-     (1504 + 0) ,(1504 + 0) ,   /* [sensor ] */
-      1504      , 1504      ,   /* [bns    ] */
-      1504      , 1504      ,   /* [bcrop  ] */
-      1504      , 1504      ,   /* [bds    ] */
-      1080      , 1080      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      1560      , 1560      ,   /* [bcrop  ] */
+      1088      , 1088      ,   /* [bds    ] *//* w=1080, Increased for 16 pixel align */
+      1088      , 1088      ,   /* [target ] */
     },
-
-    /* 11:9 */
+    /* 3:2 (Single) */
+    { SIZE_RATIO_3_2,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      2104      , 1402      ,   /* [bcrop  ] */
+      1616      , 1080      ,   /* [bds    ] *//* w=1620, Reduced for 16 pixel align */
+      1616      , 1080      ,   /* [target ] */
+    },
+    /* 5:4 (Single) */
+    { SIZE_RATIO_5_4,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      1952      , 1560      ,   /* [bcrop  ] */
+      1344      , 1080      ,   /* [bds    ] *//* w=1350, Reduced for 16 pixel align */
+      1344      , 1080      ,   /* [target ] */
+    },
+    /* 5:3 (Single) */
+    { SIZE_RATIO_5_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      2104      , 1264      ,   /* [bcrop  ] */
+      1792      , 1080      ,   /* [bds    ] *//* w=1800, Reduced for 16 pixel align */
+      1792      , 1080      ,   /* [target ] */
+    },
+    /* 11:9 (Single) */
     { SIZE_RATIO_11_9,
-     (2016 + 0) ,(1134 + 0),   /* [sensor ] */
-      2016      , 1134      ,	/* [bns    ] */
-      1232      , 1008      ,	/* [bcrop  ] */
-      1232      , 1008      ,	/* [bds    ] */
-      1232      , 1008      ,	/* [target ] */
-    },
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      2104      , 1560      ,   /* [bns    ] */
+      1920      , 1560      ,   /* [bcrop  ] */
+      1312      , 1080      ,   /* [bds    ] *//* w=1320, Reduced for 16 pixel align */
+      1312      , 1080      ,   /* [target ] */
+    }
 };
 
-static int FAST_AE_STABLE_SIZE_LUT_3M3[][SIZE_OF_LUT] =
-{
-    /* Binning   = ON
-       BNS ratio = 4.0 / FPS = 120
-       BDS       = ON */
-
-    /* FAST_AE 4:3 (Single) */
-    { SIZE_RATIO_4_3,
-     (1376 + 0) , (774 + 0) ,   /* [sensor ] */
-      1376      ,  774      ,   /* [bns    ] */
-      1376      ,  774      ,   /* [bcrop  ] */
-      1376      ,  774      ,   /* [bds    ] */
-      1280      ,  720      ,   /* [target ] */
-    },
-};
-
-static int YUV_SIZE_LUT_3M3[][SIZE_OF_LUT] =
+static int VIDEO_SIZE_LUT_3M3_BDS[][SIZE_OF_LUT] =
 {
     /* Binning   = OFF
        BNS ratio = 1.0
@@ -447,85 +846,267 @@ static int YUV_SIZE_LUT_3M3[][SIZE_OF_LUT] =
 
     /* 16:9 (Single) */
     { SIZE_RATIO_16_9,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 3024      ,   /* [bcrop  ] */
-      4032      , 3024      ,   /* [bds    ] *//* UHD (3840x2160) special handling in ExynosCameraParameters class */
-      4032      , 3024      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2340      ,   /* [bcrop  ] */
+#if defined(LIMIT_SCP_SIZE_UNTIL_FHD_ON_RECORDING)
+      2656      , 1494      ,   /* [bds    ] *//* UHD (3840x2160) special handling in ExynosCameraParameters class */
+      1920      , 1080      ,   /* [target ] */
+#else
+      2560      , 1440      ,   /* [bds    ] *//* UHD (3840x2160) special handling in ExynosCameraParameters class */
+      2560      , 1440      ,   /* [target ] */
+#endif
     },
     /* 4:3 (Single) */
     { SIZE_RATIO_4_3,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 3024      ,   /* [bcrop  ] */
-      4032      , 3024      ,   /* [bds    ] */
-      4032      , 3024      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 3120      ,   /* [bcrop  ] */
+      1984      , 1488      ,   /* [bds    ] */
+      1440      , 1080      ,   /* [target ] */
     },
     /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 3024      ,   /* [bcrop  ] */
-      4032      , 3024      ,   /* [bds    ] */
-      4032      , 3024      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3120      , 3120      ,   /* [bcrop  ] */
+      1488      , 1488      ,   /* [bds    ] *//* w=1080, Increased for 16 pixel align */
+      1088      , 1088      ,   /* [target ] */
     },
     /* 3:2 (Single) */
     { SIZE_RATIO_3_2,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 3024      ,   /* [bcrop  ] */
-      4032      , 3024      ,   /* [bds    ] */
-      4032      , 3024      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2804      ,   /* [bcrop  ] */
+      1616      , 1080      ,   /* [bds    ] *//* w=1620, Reduced for 16 pixel align */
+      1616      , 1080      ,   /* [target ] */
     },
     /* 5:4 (Single) */
     { SIZE_RATIO_5_4,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 3024      ,   /* [bcrop  ] */
-      4032      , 3024      ,   /* [bds    ] */
-      4032      , 3024      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3888      , 3120      ,   /* [bcrop  ] */
+      1344      , 1080      ,   /* [bds    ] *//* w=1350, Reduced for 16 pixel align */
+      1344      , 1080      ,   /* [target ] */
     },
     /* 5:3 (Single) */
     { SIZE_RATIO_5_3,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 3024      ,   /* [bcrop  ] */
-      4032      , 3024      ,   /* [bds    ] */
-      4032      , 3024      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2512      ,   /* [bcrop  ] */
+      1792      , 1080      ,   /* [bds    ] *//* w=1800, Reduced for 16 pixel align */
+      1792      , 1080      ,   /* [target ] */
     },
     /* 11:9 (Single) */
     { SIZE_RATIO_11_9,
-     (4032 + 0) ,(3024 + 0) ,   /* [sensor ] */
-      4032      , 3024      ,   /* [bns    ] */
-      4032      , 3024      ,   /* [bcrop  ] */
-      4032      , 3024      ,   /* [bds    ] */
-      4032      , 3024      ,   /* [target ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3808      , 3120      ,   /* [bcrop  ] */
+      1312      , 1080      ,   /* [bds    ] *//* w=1320, Reduced for 16 pixel align */
+      1312      , 1080      ,   /* [target ] */
     }
 };
 
-static int DEPTH_MAP_SIZE_LUT_3M3[][SIZE_OF_RESOLUTION] =
+static int VIDEO_SIZE_LUT_3M3_BDS_DUAL_CAMERA_WIDE[][SIZE_OF_LUT] =
 {
+    /* This LUT is same with VIDEO_SIZE_LUT_3M3_BDS, except BDS */
+
+    /* Binning   = OFF
+       BNS ratio = 1.0 */
+
+    /* 16:9 (Single) */
     { SIZE_RATIO_16_9,
-        504      ,  282      ,   /* [vci    ] */
+     (4160 + 0 ),(2340 + 0) ,   /* [sensor ] */
+      4160      , 2340      ,   /* [bns    ] */
+      4160      , 2340      ,   /* [bcrop  ] */
+      2880      , 1620      ,   /* [bds    ] *//* UHD (3840x2160) special handling in ExynosCameraParameters class */
+      2496      , 1404      ,   /* [target ] */
     },
+    /* 4:3 (Single) */
     { SIZE_RATIO_4_3,
-        504      ,  378      ,   /* [vci    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 3120      ,   /* [bcrop  ] */
+      2880      , 2160      ,   /* [bds    ] */
+      1920      , 1440      ,   /* [target ] */
     },
+    /* 1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-        376      ,  376      ,   /* [vci    ] */
+     (3120 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      3120      , 3120      ,   /* [bns    ] */
+      3120      , 3120      ,   /* [bcrop  ] */
+      2160      , 2160      ,   /* [bds    ] *//* w=1080, Increased for 16 pixel align */
+      1408      , 1408      ,   /* [target ] */
     },
+    /* 3:2 (Single) */
     { SIZE_RATIO_3_2,
-        504      ,  378      ,   /* [vci    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2804      ,   /* [bcrop  ] */
+      1616      , 1080      ,   /* [bds    ] *//* w=1620, Reduced for 16 pixel align */
+      1616      , 1080      ,   /* [target ] */
     },
+    /* 5:4 (Single) */
     { SIZE_RATIO_5_4,
-        504      ,  378      ,   /* [vci    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3888      , 3120      ,   /* [bcrop  ] */
+      1344      , 1080      ,   /* [bds    ] *//* w=1350, Reduced for 16 pixel align */
+      1344      , 1080      ,   /* [target ] */
     },
+    /* 5:3 (Single) */
     { SIZE_RATIO_5_3,
-        504      ,  378      ,   /* [vci    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2512      ,   /* [bcrop  ] */
+      1792      , 1080      ,   /* [bds    ] *//* w=1800, Reduced for 16 pixel align */
+      1792      , 1080      ,   /* [target ] */
     },
+    /* 11:9 (Single) */
     { SIZE_RATIO_11_9,
-        504      ,  378      ,   /* [vci    ] */
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3808      , 3120      ,   /* [bcrop  ] */
+      1312      , 1080      ,   /* [bds    ] *//* w=1320, Reduced for 16 pixel align */
+      1312      , 1080      ,   /* [target ] */
+    }
+};
+
+static int VIDEO_SIZE_LUT_3M3_BDS_DUAL_CAMERA_TELE[][SIZE_OF_LUT] =
+{
+    /* This LUT is same with VIDEO_SIZE_LUT_3M3_BDS, except BDS */
+
+    /* Binning   = OFF
+       BNS ratio = 1.0 */
+
+    /* 16:9 (Single) */
+    { SIZE_RATIO_16_9,
+     (4160 + 0 ),(2340 + 0) ,   /* [sensor ] */
+      4160      , 2340      ,   /* [bns    ] */
+      4160      , 2340      ,   /* [bcrop  ] */
+      2880      , 1620      ,   /* [bds    ] *//* UHD (3840x2160) special handling in ExynosCameraParameters class */
+      2880      , 1620      ,   /* [target ] */
     },
+    /* 4:3 (Single) */
+    { SIZE_RATIO_4_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 3120      ,   /* [bcrop  ] */
+      2880      , 2160      ,   /* [bds    ] */
+      2176      , 1632      ,   /* [target ] */
+    },
+    /* 1:1 (Single, Dual) */
+    { SIZE_RATIO_1_1,
+     (3120 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      3120      , 3120      ,   /* [bns    ] */
+      3120      , 3120      ,   /* [bcrop  ] */
+      2160      , 2160      ,   /* [bds    ] *//* w=1080, Increased for 16 pixel align */
+      1664      , 1664      ,   /* [target ] */
+    },
+    /* 3:2 (Single) */
+    { SIZE_RATIO_3_2,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2804      ,   /* [bcrop  ] */
+      1616      , 1080      ,   /* [bds    ] *//* w=1620, Reduced for 16 pixel align */
+      1616      , 1080      ,   /* [target ] */
+    },
+    /* 5:4 (Single) */
+    { SIZE_RATIO_5_4,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3888      , 3120      ,   /* [bcrop  ] */
+      1344      , 1080      ,   /* [bds    ] *//* w=1350, Reduced for 16 pixel align */
+      1344      , 1080      ,   /* [target ] */
+    },
+    /* 5:3 (Single) */
+    { SIZE_RATIO_5_3,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      4160      , 2512      ,   /* [bcrop  ] */
+      1792      , 1080      ,   /* [bds    ] *//* w=1800, Reduced for 16 pixel align */
+      1792      , 1080      ,   /* [target ] */
+    },
+    /* 11:9 (Single) */
+    { SIZE_RATIO_11_9,
+     (4160 + 0 ),(3120 + 0) ,   /* [sensor ] */
+      4160      , 3120      ,   /* [bns    ] */
+      3808      , 3120      ,   /* [bcrop  ] */
+      1312      , 1080      ,   /* [bds    ] *//* w=1320, Reduced for 16 pixel align */
+      1312      , 1080      ,   /* [target ] */
+    }
+};
+
+static int VIDEO_SIZE_LUT_HIGH_SPEED_3M3_BNS[][SIZE_OF_LUT] =
+{
+    /* Binning   = ON
+       BNS ratio = 1.0
+       BDS       = ON */
+
+    /* FHD_60 16:9 (Single) */
+    { SIZE_RATIO_16_9,
+     (2648 + 16),(1488 + 12),   /* [sensor ] *//* Sensor binning ratio = 2 */
+      2664      , 1500      ,   /* [bns    ] */
+      2648      , 1490      ,   /* [bcrop  ] */
+      1920      , 1080      ,   /* [bds    ] */
+      1920      , 1080      ,   /* [target ] */
+    },
+    /* HD_120 16:9 (Single) */
+    { SIZE_RATIO_16_9,
+     (1312 + 16),( 736 + 12),   /* [sensor ] *//* Sensor binning ratio = 4 */
+      1328      ,  748      ,   /* [bns    ] */
+      1312      ,  738      ,   /* [bcrop  ] */
+      1280      ,  720      ,   /* [bds    ] */
+      1280      ,  720      ,   /* [target ] */
+    },
+    /* WVGA_300 5:3 (Single) */
+    { SIZE_RATIO_16_9,
+     ( 808 + 16),( 484 + 12),   /* [sensor ] *//* Sensor binning ratio = 6 */
+       824      ,  496      ,   /* [bns    ] */
+       810      ,  486      ,   /* [bcrop  ] */
+       800      ,  480      ,   /* [bds    ] */
+       800      ,  480      ,   /* [target ] */
+    }
+};
+
+static int VTCALL_SIZE_LUT_3M3_BNS[][SIZE_OF_LUT] =
+{
+    /* Binning   = 2
+       BNS ratio = 1.0
+       BDS       = ON */
+
+    /* 16:9 (VT_Call) */
+    { SIZE_RATIO_16_9,
+     (2648 + 16),(1488 + 12),   /* [sensor ] */
+      2664      , 1500      ,   /* [bns    ] */
+      2648      , 1490      ,   /* [bcrop  ] */
+      1920      , 1080      ,   /* [bds    ] */
+      1920      , 1080      ,   /* [target ] */
+    },
+    /* 4:3 (VT_Call) */
+    { SIZE_RATIO_4_3,
+     (2648 + 16),(1488 + 12),   /* [sensor ] */
+      2664      , 1500      ,   /* [bns    ] */
+      1986      , 1490      ,   /* [bcrop  ] */
+       960      ,  720      ,   /* [bds    ] */
+       960      ,  720      ,   /* [target ] */
+    },
+    /* 1:1 (VT_Call) */
+    { SIZE_RATIO_1_1,
+     (2648 + 16),(1488 + 12),   /* [sensor ] */
+      2664      , 1500      ,   /* [bns    ] */
+      1488      , 1488      ,   /* [bcrop  ] */
+       720      ,  720      ,   /* [bds    ] */
+       720      ,  720      ,   /* [target ] */
+    },
+    /* 11:9 (VT_Call) */
+    { SIZE_RATIO_11_9,
+     (2648 + 16),(1488 + 12),   /* [sensor ] */
+      2664      , 1500      ,   /* [bns    ] */
+      1822      , 1490      ,   /* [bcrop  ] */
+       352      ,  288      ,   /* [bds    ] */
+       352      ,  288      ,   /* [target ] */
+    }
 };
 
 static int S5K3M3_PREVIEW_LIST[][SIZE_OF_RESOLUTION] =
@@ -568,11 +1149,7 @@ static int S5K3M3_HIDDEN_PREVIEW_LIST[][SIZE_OF_RESOLUTION] =
     { 1600, 1200, SIZE_RATIO_4_3},
     { 1280,  960, SIZE_RATIO_4_3},
     { 1056,  864, SIZE_RATIO_11_9},
-    {  960,  960, SIZE_RATIO_1_1},  /* for Clip Movie */
-    {  960,  540, SIZE_RATIO_16_9},  /* for GearVR*/
-    {  640,  360, SIZE_RATIO_16_9},  /* for SWIS & GearVR*/
     {  528,  432, SIZE_RATIO_11_9},
-    {  800,  600, SIZE_RATIO_4_3},  /* for GearVR */
     {  800,  480, SIZE_RATIO_5_3},
     {  672,  448, SIZE_RATIO_3_2},
     {  480,  320, SIZE_RATIO_3_2},
@@ -581,16 +1158,15 @@ static int S5K3M3_HIDDEN_PREVIEW_LIST[][SIZE_OF_RESOLUTION] =
 
 static int S5K3M3_PICTURE_LIST[][SIZE_OF_RESOLUTION] =
 {
-    { 4032, 3024, SIZE_RATIO_4_3},
-    { 4032, 2268, SIZE_RATIO_16_9},
-    { 3024, 3024, SIZE_RATIO_1_1},
+    { 4160, 3120, SIZE_RATIO_4_3},
+    { 4160, 2340, SIZE_RATIO_16_9},
+    { 4128, 3096, SIZE_RATIO_4_3},
+    { 4128, 2322, SIZE_RATIO_16_9},
     { 3984, 2988, SIZE_RATIO_4_3},
     { 3264, 2448, SIZE_RATIO_4_3},
     { 3264, 1836, SIZE_RATIO_16_9},
+    { 3120, 3120, SIZE_RATIO_1_1},
     { 2976, 2976, SIZE_RATIO_1_1},
-    { 2880, 2160, SIZE_RATIO_4_3},
-    { 2560, 1440, SIZE_RATIO_16_9},
-    { 2160, 2160, SIZE_RATIO_1_1},
     { 2048, 1152, SIZE_RATIO_16_9},
     { 1920, 1080, SIZE_RATIO_16_9},
     { 1280,  720, SIZE_RATIO_16_9},
@@ -600,8 +1176,6 @@ static int S5K3M3_PICTURE_LIST[][SIZE_OF_RESOLUTION] =
 
 static int S5K3M3_HIDDEN_PICTURE_LIST[][SIZE_OF_RESOLUTION] =
 {
-    { 4128, 3096, SIZE_RATIO_4_3},
-    { 4128, 2322, SIZE_RATIO_16_9},
     { 4096, 3072, SIZE_RATIO_4_3},
     { 4096, 2304, SIZE_RATIO_16_9},
     { 3840, 2160, SIZE_RATIO_16_9},
@@ -614,11 +1188,6 @@ static int S5K3M3_HIDDEN_PICTURE_LIST[][SIZE_OF_RESOLUTION] =
     { 2560, 1920, SIZE_RATIO_4_3},
     { 2448, 2448, SIZE_RATIO_1_1},
     { 2048, 1536, SIZE_RATIO_4_3},
-    { 1440, 1080, SIZE_RATIO_4_3},	/* binning capture */
-    { 1080, 1080, SIZE_RATIO_1_1},	/* binning capture */
-    { 1616, 1080, SIZE_RATIO_3_2},	/* binning capture */
-    { 1232, 1008, SIZE_RATIO_11_9},	/* binning capture */
-    { 1056,  704, SIZE_RATIO_3_2},	/* binning capture */
     {  720,  720, SIZE_RATIO_1_1}, /* dummy size for binning mode */
     {  352,  288, SIZE_RATIO_11_9}, /* dummy size for binning mode */
 };
@@ -636,7 +1205,6 @@ static int S5K3M3_THUMBNAIL_LIST[][SIZE_OF_RESOLUTION] =
 static int S5K3M3_VIDEO_LIST[][SIZE_OF_RESOLUTION] =
 {
     { 1920, 1080, SIZE_RATIO_16_9},
-    { 1440, 1440, SIZE_RATIO_1_1},
     { 1440, 1080, SIZE_RATIO_4_3},
     { 1088, 1088, SIZE_RATIO_1_1},
     { 1280,  720, SIZE_RATIO_16_9},
@@ -659,76 +1227,6 @@ static int S5K3M3_HIDDEN_VIDEO_LIST[][SIZE_OF_RESOLUTION] =
 #ifdef USE_WQHD_RECORDING
     { 2560, 1440, SIZE_RATIO_16_9},
 #endif
-    {  960,  960, SIZE_RATIO_1_1},  /* for Clip Movie */
-    {  864,  480, SIZE_RATIO_16_9}, /* for PLB mode */
-    {  432,  240, SIZE_RATIO_16_9}, /* for PLB mode */
-};
-
-/* For HAL3 */
-static int S5K3M3_YUV_LIST[][SIZE_OF_RESOLUTION] =
-{
-    { 4032, 3024, SIZE_RATIO_4_3},
-    { 4032, 2268, SIZE_RATIO_16_9},
-    { 3024, 3024, SIZE_RATIO_1_1},
-    { 3984, 2988, SIZE_RATIO_4_3},
-    { 3264, 2448, SIZE_RATIO_4_3},
-    { 3264, 1836, SIZE_RATIO_16_9},
-    { 2976, 2976, SIZE_RATIO_1_1},
-    { 2880, 2160, SIZE_RATIO_4_3},
-    { 2560, 1440, SIZE_RATIO_16_9},
-    { 2160, 2160, SIZE_RATIO_1_1},
-    { 2048, 1152, SIZE_RATIO_16_9},
-    { 1920, 1080, SIZE_RATIO_16_9},
-    { 1440, 1080, SIZE_RATIO_4_3},
-    { 1088, 1088, SIZE_RATIO_1_1},
-    { 1280,  720, SIZE_RATIO_16_9},
-    { 1056,  704, SIZE_RATIO_3_2},
-    { 1024,  768, SIZE_RATIO_4_3},
-    {  960,  720, SIZE_RATIO_4_3},
-    {  800,  450, SIZE_RATIO_16_9},
-    {  720,  720, SIZE_RATIO_1_1},
-    {  720,  480, SIZE_RATIO_3_2},
-    {  640,  480, SIZE_RATIO_4_3},
-    {  352,  288, SIZE_RATIO_11_9},
-    {  320,  240, SIZE_RATIO_4_3},
-    {  256,  144, SIZE_RATIO_16_9}, /* DngCreatorTest */
-    {  176,  144, SIZE_RATIO_11_9}, /* RecordingTest */
-};
-
-/* availble Jpeg size (only for  HAL_PIXEL_FORMAT_BLOB) */
-static int S5K3M3_JPEG_LIST[][SIZE_OF_RESOLUTION] =
-{
-    { 4032, 3024, SIZE_RATIO_4_3},
-    { 4032, 2268, SIZE_RATIO_16_9},
-    { 3024, 3024, SIZE_RATIO_1_1},
-    { 3984, 2988, SIZE_RATIO_4_3},
-    { 3264, 2448, SIZE_RATIO_4_3},
-    { 3264, 1836, SIZE_RATIO_16_9},
-    { 2976, 2976, SIZE_RATIO_1_1},
-    { 2880, 2160, SIZE_RATIO_4_3},
-    { 2560, 1440, SIZE_RATIO_16_9},
-    { 2160, 2160, SIZE_RATIO_1_1},
-    { 2048, 1152, SIZE_RATIO_16_9},
-    { 1920, 1080, SIZE_RATIO_16_9},
-    { 1440, 1080, SIZE_RATIO_4_3},
-    { 1088, 1088, SIZE_RATIO_1_1},
-    { 1280,  720, SIZE_RATIO_16_9},
-    { 1056,  704, SIZE_RATIO_3_2},
-    { 1024,  768, SIZE_RATIO_4_3},
-    {  960,  720, SIZE_RATIO_4_3},
-    {  800,  450, SIZE_RATIO_16_9},
-    {  720,  720, SIZE_RATIO_1_1},
-    {  720,  480, SIZE_RATIO_3_2},
-    {  640,  480, SIZE_RATIO_4_3},
-    {  352,  288, SIZE_RATIO_11_9},
-    {  320,  240, SIZE_RATIO_4_3},
-};
-
-
-/* For HAL3 */
-static int S5K3M3_HIGH_SPEED_VIDEO_LIST[][SIZE_OF_RESOLUTION] =
-{
-    { 1280,  720, SIZE_RATIO_16_9},
 };
 
 static int S5K3M3_FPS_RANGE_LIST[][2] =
@@ -736,63 +1234,19 @@ static int S5K3M3_FPS_RANGE_LIST[][2] =
     //{   5000,   5000},
     //{   7000,   7000},
     {  15000,  15000},
-    {  24000,  24000},
+    //{  24000,  24000},
     //{   4000,  30000},
-    {  10000,  30000},
-    {  15000,  30000},
-    {  30000,  30000},
+    //{  10000,  30000},
+    //{  15000,  30000},
+    //{  30000,  30000},
 };
 
 static int S5K3M3_HIDDEN_FPS_RANGE_LIST[][2] =
 {
-    {   5000,   5000},
     {  10000,  24000},
     {  30000,  60000},
     {  60000,  60000},
     {  60000, 120000},
     { 120000, 120000},
 };
-
-/* For HAL3 */
-static int S5K3M3_HIGH_SPEED_VIDEO_FPS_RANGE_LIST[][2] =
-{
-    {  30000, 120000},
-    { 120000, 120000},
-};
-
-static camera_metadata_rational UNIT_MATRIX_3M3_3X3[] =
-{
-    {128, 128}, {0, 128}, {0, 128},
-    {0, 128}, {128, 128}, {0, 128},
-    {0, 128}, {0, 128}, {128, 128}
-};
-
-static camera_metadata_rational COLOR_MATRIX1_3M3_3X3[] =
-{
-    {593, 1024},  {78, 1024},  {-118, 1024},
-    {-491, 1024}, {1412, 1024},{72, 1024},
-    {-137, 1024}, {417, 1024}, {428, 1024}
-};
-
-static camera_metadata_rational COLOR_MATRIX2_3M3_3X3[] =
-{
-    {1032, 1024}, {-174, 1024}, {-276, 1024},
-    {-442, 1024}, {1495, 1024}, {39, 1024},
-    {-76, 1024},  {333, 1024},  {614, 1024}
-};
-
-static camera_metadata_rational FORWARD_MATRIX1_3M3_3X3[] =
-{
-    {893, 1024}, {-200, 1024}, {294, 1024},
-    {317, 1024}, {697, 1024},  {10, 1024},
-    {-16, 1024}, {-557, 1024}, {1418, 1024}
-};
-
-static camera_metadata_rational FORWARD_MATRIX2_3M3_3X3[] =
-{
-    {750, 1024}, {-150, 1024}, {387, 1024},
-    {186, 1024}, {748, 1024},  {90, 1024},
-    {-55, 1024}, {-987, 1024}, {1887, 1024}
-};
-
 #endif

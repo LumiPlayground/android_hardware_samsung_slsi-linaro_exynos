@@ -387,7 +387,20 @@ void ExynosCameraFrameFactory::setRequestBayer(bool enable)
 
 void ExynosCameraFrameFactory::setRequest3AC(bool enable)
 {
+#if 1
     m_request3AC = enable ? 1 : 0;
+#else
+    /* From 74xx, Front will use reprocessing. so, we need to prepare BDS */
+    if (isReprocessing(m_cameraId) == true) {
+        if (m_parameters->getUsePureBayerReprocessing() == true) {
+            m_request3AC = 0;
+        } else {
+            m_request3AC = enable ? 1 : 0;
+        }
+    } else {
+        m_request3AC = 0;
+    }
+#endif
 }
 
 void ExynosCameraFrameFactory::setRequestISPC(bool enable)
@@ -639,7 +652,7 @@ enum NODE_TYPE ExynosCameraFrameFactory::getNodeType(uint32_t pipeId)
     return nodeType;
 }
 
-ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactory::createNewFrameOnlyOnePipe(int pipeId, int frameCnt, uint32_t frameType, ExynosCameraFrameSP_sptr_t refFrame)
+ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactory::createNewFrameOnlyOnePipe(int pipeId, int frameCnt, uint32_t frameType)
 {
     Mutex::Autolock lock(m_frameLock);
     status_t ret = NO_ERROR;
@@ -659,33 +672,6 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactory::createNewFrameOnlyOnePipe(i
     /* set pipe to linkageList */
     newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
     frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
-
-    /* copy frame info to newFrame from refFrame */
-    if (refFrame != NULL) {
-        int zoom = refFrame->getZoom();
-        int output_node_index = OUTPUT_NODE_1;
-        struct camera2_node_group node_group;
-        struct camera2_shot_ext shot;
-
-        /* Node Group Setting */
-        for (int i = 0; i < PERFRAME_NODE_GROUP_MAX; i++) {
-            refFrame->getNodeGroupInfo(&node_group, i);
-            frame->storeNodeGroupInfo(&node_group, i, output_node_index);
-        }
-
-        /* Meta Setting */
-        refFrame->getMetaData(&shot);
-        frame->setMetaData(&shot, output_node_index);
-
-        /* Zoom Setting */
-        frame->setZoom(zoom, output_node_index);
-
-        /* SyncType Setting */
-        frame->setSyncType(refFrame->getSyncType());
-
-        /* FrameType Setting */
-        frame->setFrameType((frame_type_t)refFrame->getFrameType());
-    }
 
     return frame;
 }
@@ -1109,9 +1095,7 @@ void ExynosCameraFrameFactory::m_init(void)
     m_flagReprocessing = false;
     m_supportPureBayerReprocessing = false;
     m_supportSCC = false;
-
-    m_numOfHwChains = 0;
-    m_numOfMcscOutputPorts = 0;
+    m_supportSingleChain = false;
 
     m_setCreate(false);
 }

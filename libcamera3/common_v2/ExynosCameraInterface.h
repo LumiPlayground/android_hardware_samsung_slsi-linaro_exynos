@@ -37,88 +37,28 @@
 
 namespace android {
 
-struct HAL_CameraInfo_t {
-    int camraId;
-    int facing_info;
-    int orientation;
-    int resource_cost;
-    char** conflicting_devices;
-    size_t conflicting_devices_length;
-};
-
-const struct HAL_CameraInfo_t sCameraConfigTotalInfo[] = {
-#ifdef CAMERA_OPEN_ID_REAR_0
-    {
-        CAMERA_OPEN_ID_REAR_0,
-        CAMERA_FACING_BACK,
-        BACK_ROTATION,  /* orientation */
-        51,      /* resoruce_cost               : [0 , 100] */
-        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
-        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
-    },
+typedef enum {
+#if defined(CAMERA_OPEN_ID_REAR_0)
+    CAMERA_INDEX_REAR_0,
 #endif
-#ifdef CAMERA_OPEN_ID_FRONT_1
-    {
-        CAMERA_OPEN_ID_FRONT_1,
-        CAMERA_FACING_FRONT,
-        FRONT_ROTATION,  /* orientation */
-        51,      /* resoruce_cost               : [0 , 100] */
-        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
-        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
-    },
+#if defined(CAMERA_OPEN_ID_FRONT_1)
+    CAMERA_INDEX_FRONT_1,
 #endif
-    {
-        CAMERA_SERVICE_ID_DUAL_REAR_ZOOM,
-        CAMERA_FACING_BACK,
-        BACK_ROTATION,  /* orientation */
-        100,      /* resoruce_cost               : [0 , 100] */
-        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
-        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
-    },
-    {
-        CAMERA_SERVICE_ID_DUAL_REAR_PORTRAIT,
-        CAMERA_FACING_BACK,
-        BACK_ROTATION,  /* orientation */
-        100,      /* resoruce_cost               : [0 , 100] */
-        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
-        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
-    },
-    {
-        CAMERA_SERVICE_ID_DUAL_FRONT_PORTRAIT,
-        CAMERA_FACING_FRONT,
-        FRONT_ROTATION,  /* orientation */
-        100,      /* resoruce_cost               : [0 , 100] */
-        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
-        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
-    },
-    {
-        CAMERA_SERVICE_ID_REAR_2ND,
-        CAMERA_FACING_BACK,
-        BACK_ROTATION,  /* orientation */
-        51,      /* resoruce_cost               : [0 , 100] */
-        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
-        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
-    },
-    {
-        CAMERA_SERVICE_ID_FRONT_2ND,
-        CAMERA_FACING_FRONT,
-        FRONT_ROTATION,  /* orientation */
-        51,      /* resoruce_cost               : [0 , 100] */
-        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
-        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
-    },
-    {
-        CAMERA_SERVICE_ID_IRIS,
-        CAMERA_FACING_FRONT,
-        FRONT_ROTATION,  /* orientation */
-        51,      /* resoruce_cost               : [0 , 100] */
-        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
-        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
-    },
-};
+#if defined(CAMERA_OPEN_ID_REAR_2)
+    CAMERA_INDEX_REAR_2,
+#endif
+    CAMERA_INDEX_DUAL_REAR_ZOOM,
+    CAMERA_INDEX_DUAL_REAR_PORTRAIT,
+    CAMERA_INDEX_DUAL_FRONT_PORTRAIT,
+    CAMERA_INDEX_HIDDEN_REAR_2,
+    CAMERA_INDEX_HIDDEN_FRONT_2,
+    CAMERA_INDEX_IRIS_SECURE,
+    CAMERA_INDEX_ID_MAX,
+} camera_index_t;
 
+static HAL_CameraInfo_t *g_HAL_CameraInfo[MAX_NUM_OF_CAMERA];
 static camera3_device_t *g_cam_device3[MAX_NUM_OF_CAMERA];
-static camera_metadata_t *g_cam_info[MAX_NUM_OF_CAMERA] = {NULL, NULL};
+static camera_metadata_t *g_cam_info[CAMERA_INDEX_ID_MAX] = {NULL, NULL};
 static const camera_module_callbacks_t *g_callbacks = NULL;
 
 //ExynosCameraRequestManager *m_exynosCameraRequestManager[MAX_NUM_OF_CAMERA];
@@ -134,7 +74,7 @@ static inline ExynosCamera *obj(const struct camera3_device *dev)
     return reinterpret_cast<ExynosCamera *>(dev->priv);
 };
 
-static int HAL_getCameraId(int serviceCamId, int *mainCamId, int *subCamId, int *scenario);
+static int HAL_getCameraId(int serviceCamId, int *mainCamId, int *subCamId, int *scenario, int *camInfoIndex);
 
 /**
  * Open camera device
@@ -211,6 +151,9 @@ static int HAL_set_callbacks(const camera_module_callbacks_t *callbacks);
  * Return number of the camera hardware
  */
 static int HAL_getNumberOfCameras();
+#ifdef SAMSUNG_TN_FEATURE
+static int HAL_getNumberOfHiddenCameras();
+#endif
 
 static void HAL_get_vendor_tag_ops(vendor_tag_ops_t* ops);
 

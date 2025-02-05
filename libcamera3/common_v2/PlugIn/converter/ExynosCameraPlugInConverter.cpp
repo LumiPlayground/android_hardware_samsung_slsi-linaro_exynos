@@ -149,10 +149,10 @@ status_t ExynosCameraPlugInConverter::m_init(void)
     m_libName      = NULL;
     m_buildDate    = NULL;
     m_buildTime    = NULL;
-    m_srcCurBufCnt = 1;
-    m_dstCurBufCnt = 1;
-    m_srcMaxBufCnt = 1;
-    m_dstMaxBufCnt = 1;
+    m_curSrcBufCnt = 1;
+    m_curDstBufCnt = 1;
+    m_maxSrcBufCnt = 1;
+    m_maxDstBufCnt = 1;
     strncpy(m_name, "", (PLUGIN_NAME_STR_SIZE - 1));
 
     return NO_ERROR;
@@ -170,14 +170,14 @@ status_t ExynosCameraPlugInConverter::m_create(Map_t *map)
         m_libName      = (Pointer_const_char_t)(*map)[PLUGIN_LIB_NAME];
         m_buildDate    = (Pointer_const_char_t)(*map)[PLUGIN_BUILD_DATE];
         m_buildTime    = (Pointer_const_char_t)(*map)[PLUGIN_BUILD_TIME];
-        m_srcCurBufCnt = (Data_int32_t)(*map)[PLUGIN_PLUGIN_CUR_SRC_BUF_CNT];
-        m_dstCurBufCnt = (Data_int32_t)(*map)[PLUGIN_PLUGIN_CUR_DST_BUF_CNT];
-        m_srcMaxBufCnt = (Data_int32_t)(*map)[PLUGIN_PLUGIN_MAX_SRC_BUF_CNT];
-        m_dstMaxBufCnt = (Data_int32_t)(*map)[PLUGIN_PLUGIN_MAX_DST_BUF_CNT];
+        m_curSrcBufCnt = (Data_int32_t)(*map)[PLUGIN_PLUGIN_CUR_SRC_BUF_CNT];
+        m_curDstBufCnt = (Data_int32_t)(*map)[PLUGIN_PLUGIN_CUR_DST_BUF_CNT];
+        m_maxSrcBufCnt = (Data_int32_t)(*map)[PLUGIN_PLUGIN_MAX_SRC_BUF_CNT];
+        m_maxDstBufCnt = (Data_int32_t)(*map)[PLUGIN_PLUGIN_MAX_DST_BUF_CNT];
     }
 
     CLOGD("pipeId(%d), bufCount(cur[%d, %d], max[%d, %d])",
-            m_pipeId, m_srcCurBufCnt, m_dstCurBufCnt, m_srcMaxBufCnt, m_dstMaxBufCnt);
+            m_pipeId, m_curSrcBufCnt, m_curDstBufCnt, m_maxSrcBufCnt, m_maxDstBufCnt);
 
     return NO_ERROR;
 }
@@ -199,10 +199,10 @@ status_t ExynosCameraPlugInConverter::m_setup(Map_t *map)
         (*map)[PLUGIN_LIB_NAME]               = (Map_data_t)m_libName;
         (*map)[PLUGIN_BUILD_DATE]             = (Map_data_t)m_buildDate;
         (*map)[PLUGIN_BUILD_TIME]             = (Map_data_t)m_buildTime;
-        (*map)[PLUGIN_PLUGIN_CUR_SRC_BUF_CNT] = (Map_data_t)m_srcCurBufCnt;
-        (*map)[PLUGIN_PLUGIN_CUR_DST_BUF_CNT] = (Map_data_t)m_dstCurBufCnt;
-        (*map)[PLUGIN_PLUGIN_MAX_SRC_BUF_CNT] = (Map_data_t)m_srcMaxBufCnt;
-        (*map)[PLUGIN_PLUGIN_MAX_DST_BUF_CNT] = (Map_data_t)m_dstMaxBufCnt;
+        (*map)[PLUGIN_PLUGIN_CUR_SRC_BUF_CNT] = (Map_data_t)m_curSrcBufCnt;
+        (*map)[PLUGIN_PLUGIN_CUR_DST_BUF_CNT] = (Map_data_t)m_curDstBufCnt;
+        (*map)[PLUGIN_PLUGIN_MAX_SRC_BUF_CNT] = (Map_data_t)m_maxSrcBufCnt;
+        (*map)[PLUGIN_PLUGIN_MAX_DST_BUF_CNT] = (Map_data_t)m_maxDstBufCnt;
         break;
     default:
         CLOGE("invalid convert type(%d)!! pipeId(%d)", type, m_pipeId);
@@ -284,9 +284,9 @@ status_t ExynosCameraPlugInConverter::m_convertBufferInfoFromFrame(ExynosCameraF
     memset(&m_dstBufFlipV,      0x0, sizeof(int) * PLUGIN_MAX_BUF);
 
     /* 1. src buffer setting from frame */
-    m_srcCurBufCnt = (Data_int32_t)(*map)[PLUGIN_PLUGIN_CUR_SRC_BUF_CNT];
+    m_curSrcBufCnt = (Data_int32_t)(*map)[PLUGIN_PLUGIN_CUR_SRC_BUF_CNT];
 
-    for (i = 0; i < m_srcCurBufCnt; i++) {
+    for (i = 0; i < m_curSrcBufCnt; i++) {
         ExynosRect rect;
         ExynosCameraBuffer buffer;
 
@@ -356,7 +356,7 @@ status_t ExynosCameraPlugInConverter::m_convertBufferInfoFromFrame(ExynosCameraF
                 m_srcBufRect[i][PLUGIN_ARRAY_RECT_FULL_H]);
     }
 
-    (*map)[PLUGIN_SRC_BUF_CNT]         = (Map_data_t)m_srcCurBufCnt;
+    (*map)[PLUGIN_SRC_BUF_CNT]         = (Map_data_t)m_curSrcBufCnt;
     (*map)[PLUGIN_SRC_BUF_PLANE_CNT]   = (Map_data_t)m_srcBufPlaneCnt;
     (*map)[PLUGIN_SRC_BUF_INDEX]       = (Map_data_t)m_srcBufIndex;
     (*map)[PLUGIN_SRC_BUF_SIZE]        = (Map_data_t)m_srcBufSize;
@@ -372,7 +372,7 @@ status_t ExynosCameraPlugInConverter::m_convertBufferInfoFromFrame(ExynosCameraF
     (*map)[PLUGIN_SRC_FRAMECOUNT]      = (Map_data_t)frame->getMetaFrameCount();
 
     /* 2. dst buffer setting from frame */
-    for (i = 0; i < m_dstCurBufCnt; i++) {
+    for (i = 0; i < m_curDstBufCnt; i++) {
         ExynosRect rect;
         ExynosCameraBuffer buffer;
 
@@ -442,7 +442,7 @@ status_t ExynosCameraPlugInConverter::m_convertBufferInfoFromFrame(ExynosCameraF
                 m_dstBufRect[i][PLUGIN_ARRAY_RECT_FULL_H]);
     }
 
-    (*map)[PLUGIN_DST_BUF_CNT]         = (Map_data_t)m_dstCurBufCnt;
+    (*map)[PLUGIN_DST_BUF_CNT]         = (Map_data_t)m_curDstBufCnt;
     (*map)[PLUGIN_DST_BUF_PLANE_CNT]   = (Map_data_t)m_dstBufPlaneCnt;
     (*map)[PLUGIN_DST_BUF_INDEX]       = (Map_data_t)m_dstBufIndex;
     (*map)[PLUGIN_DST_BUF_SIZE]        = (Map_data_t)m_dstBufSize;

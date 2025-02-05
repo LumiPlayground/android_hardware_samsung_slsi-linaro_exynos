@@ -1,20 +1,5 @@
 /*
- * Video for Linux Two header file for samsung
- *
- * Copyright 2012, Samsung Electronics Co. LTD
- *
- * This header file contains several v4l2 APIs to be proposed to v4l2
- * community and until bein accepted, will be used restrictly in Samsung's
- * camera interface driver FIMC.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- */
-
-/*
- * Copyright 2012, Samsung Electronics Co. LTD
+ * Copyright (C) 2020 Samsung Electronics Co. Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +8,7 @@
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed toggle an "AS IS" BASIS,
+ * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
@@ -200,6 +185,7 @@ enum scenario_mode {
 #define V4L2_CID_IS_DVFS_UNLOCK			(V4L2_CID_FIMC_IS_BASE + 22)
 #define V4L2_CID_IS_DVFS_CLUSTER0		(V4L2_CID_FIMC_IS_BASE + 23)
 #define V4L2_CID_IS_DVFS_CLUSTER1		(V4L2_CID_FIMC_IS_BASE + 24)
+#define V4L2_CID_IS_PREVIEW_STATE		(V4L2_CID_FIMC_IS_BASE + 25)
 #define V4L2_CID_IS_FORCE_DONE			(V4L2_CID_FIMC_IS_BASE + 50)
 #define V4L2_CID_IS_SET_SETFILE			(V4L2_CID_FIMC_IS_BASE + 51)
 #define V4L2_CID_IS_S_BNS				(V4L2_CID_FIMC_IS_BASE + 52)
@@ -213,9 +199,11 @@ enum scenario_mode {
 /* HACK: For fast OIS Capture */
 #define V4L2_CID_IS_INTENT      (V4L2_CID_FIMC_IS_BASE + 60)
 #define V4L2_CID_IS_CAMERA_TYPE  (V4L2_CID_FIMC_IS_BASE + 61)
+#define V4L2_CID_IS_CAPTURE_EXPOSURETIME (V4L2_CID_FIMC_IS_BASE + 67)
+#define V4L2_CID_IS_FAST_CAPTURE_CONTROL (V4L2_CID_FIMC_IS_BASE + 68)
 enum is_fw_boot_mode {
     IS_COLD_BOOT = 0,  /* FrontCamera, 3rd-Party Camera */
-    IS_WARM_BOOT,      /* RearCamera */
+    IS_WARM_BOOT,      /* SamsungCamera & RearCamera */
     IS_COLD_RESET,     /* Reset for camera using warm boot mode */
 };
 

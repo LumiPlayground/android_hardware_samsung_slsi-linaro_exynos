@@ -25,7 +25,11 @@
 
 /* #define DUMP_GMV_INPUT */
 
+#ifdef CAMERA_GED_FEATURE
 #define DUMP_GMV_INPUT_PATH "/data/dump"
+#else
+#define DUMP_GMV_INPUT_PATH "/data/camera"
+#endif
 
 #define GMV_LIBRARY_PATH "/vendor/lib/libgmv.so"
 

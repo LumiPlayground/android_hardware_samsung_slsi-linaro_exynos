@@ -366,18 +366,18 @@ static int VTCALL_SIZE_LUT_IMX333_2L2[][SIZE_OF_LUT] =
     },
     /* 4:3 (VT_Call) */
     { SIZE_RATIO_4_3,
-     (2016 + 0) ,(1512 + 0) ,   /* [sensor ] */
-      2016      , 1512      ,   /* [bns    ] */
-      2016      , 1512      ,   /* [bcrop  ] */
-      2016      , 1512      ,   /* [bds    ] */
-       640      ,  480      ,   /* [target ] */
+     (2016 + 0) ,(1134 + 0) ,   /* [sensor ] */
+      2016      , 1134      ,   /* [bns    ] */
+      1504      , 1128      ,   /* [bcrop  ] */
+      1504      , 1128      ,   /* [bds    ] */
+      1440      , 1080      ,   /* [target ] */
     },
     /* 1:1 (VT_Call) */
     { SIZE_RATIO_1_1,
-     (1504 + 0) ,(1504 + 0) ,   /* [sensor ] */
-      1504      , 1504      ,   /* [bns    ] */
-      1504      , 1504      ,   /* [bcrop  ] */
-      1504      , 1504      ,   /* [bds    ] */
+     (2016 + 0) ,(1134 + 0) ,   /* [sensor ] */
+      2016      , 1134      ,   /* [bns    ] */
+      1120      , 1120      ,   /* [bcrop  ] */
+      1120      , 1120      ,   /* [bds    ] */
       1080      , 1080      ,   /* [target ] */
     },
     /* 3:2 (VT_Call) */
@@ -423,18 +423,18 @@ static int LIVE_BROADCAST_SIZE_LUT_IIMX333_2L2[][SIZE_OF_LUT] =
     /* 1:1 */
     { SIZE_RATIO_1_1,
      (2016 + 0) ,(1134 + 0),   /* [sensor ] */
-      2016      , 1134      ,	/* [bns    ] */
-      1120      , 1120      ,	/* [bcrop  ] */
-      1120      , 1120      ,	/* [bds    ] */
-      1080      , 1080      ,	/* [target ] */
+      2016      , 1134      ,   /* [bns    ] */
+      1120      , 1120      ,   /* [bcrop  ] */
+      1120      , 1120      ,   /* [bds    ] */
+      1080      , 1080      ,   /* [target ] */
     },
     /* 11:9 */
     { SIZE_RATIO_11_9,
      (2016 + 0) ,(1134 + 0),   /* [sensor ] */
-      2016      , 1134      ,	/* [bns    ] */
-      1232      , 1008      ,	/* [bcrop  ] */
-      1232      , 1008      ,	/* [bds    ] */
-      1232      , 1008      ,	/* [target ] */
+      2016      , 1134      ,   /* [bns    ] */
+      1232      , 1008      ,   /* [bcrop  ] */
+      1232      , 1008      ,   /* [bds    ] */
+      1232      , 1008      ,   /* [target ] */
     },
 };
 
@@ -632,11 +632,11 @@ static int IMX333_2L2_HIDDEN_PICTURE_LIST[][SIZE_OF_RESOLUTION] =
     { 2560, 1920, SIZE_RATIO_4_3},
     { 2448, 2448, SIZE_RATIO_1_1},
     { 2048, 1536, SIZE_RATIO_4_3},
-    { 1440, 1080, SIZE_RATIO_4_3},	/* binning capture */
-    { 1080, 1080, SIZE_RATIO_1_1},	/* binning capture */
-    { 1616, 1080, SIZE_RATIO_3_2},	/* binning capture */
-    { 1232, 1008, SIZE_RATIO_11_9},	/* binning capture */
-    { 1056,  704, SIZE_RATIO_3_2},	/* binning capture */
+    { 1440, 1080, SIZE_RATIO_4_3},  /* binning capture */
+    { 1080, 1080, SIZE_RATIO_1_1},  /* binning capture */
+    { 1616, 1080, SIZE_RATIO_3_2},  /* binning capture */
+    { 1232, 1008, SIZE_RATIO_11_9}, /* binning capture */ 
+    { 1056,  704, SIZE_RATIO_3_2},  /* binning capture */
     {  720,  720, SIZE_RATIO_1_1}, /* dummy size for binning mode */
     {  352,  288, SIZE_RATIO_11_9}, /* dummy size for binning mode */
 };
@@ -762,7 +762,6 @@ static int IMX333_2L2_FPS_RANGE_LIST[][2] =
 
 static int IMX333_2L2_HIDDEN_FPS_RANGE_LIST[][2] =
 {
-    {   5000,   5000},
     {  10000,  24000},
     {  30000,  60000},
     {  60000,  60000},

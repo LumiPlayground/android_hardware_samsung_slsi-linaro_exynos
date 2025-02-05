@@ -50,6 +50,10 @@ public:
     virtual status_t        instantOff(void);
 
     virtual void            dump(void);
+#ifdef SAMSUNG_COMPANION
+    virtual status_t        precreate(int32_t *sensorIds);
+    virtual status_t        postcreate(int32_t *sensorIds);
+#endif
 
     virtual status_t        setMapBuffer(ExynosCameraBuffer *srcBuf = NULL, ExynosCameraBuffer *dstBuf = NULL);
     virtual status_t        setMapBuffer(List<ExynosCameraBuffer>   *srcBufList = NULL, List<ExynosCameraBuffer> *dstBufList = NULL);

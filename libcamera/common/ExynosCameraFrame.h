@@ -350,6 +350,9 @@ public:
     int             getJpegSize(void);
 
     int64_t         getTimeStamp(void);
+#ifdef  SAMSUNG_TIMESTAMP_BOOT
+    int64_t         getTimeStampBoot(void);
+#endif
     void            getFpsRange(uint32_t *min, uint32_t *max);
 
     void            setIspDone(bool done);

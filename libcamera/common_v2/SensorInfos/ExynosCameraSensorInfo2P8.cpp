@@ -67,7 +67,7 @@ ExynosSensorS5K2P8Base::ExynosSensorS5K2P8Base()
     maxWBK = 10000;
     maxNumDetectedFaces = 16;
     maxNumFocusAreas = 2;
-    maxNumMeteringAreas = 1;
+    maxNumMeteringAreas = 0;
     maxBasicZoomLevel = MAX_BASIC_ZOOM_LEVEL;
     maxZoomLevel = MAX_ZOOM_LEVEL;
     maxZoomRatio = MAX_ZOOM_RATIO;
@@ -129,8 +129,7 @@ ExynosSensorS5K2P8Base::ExynosSensorS5K2P8Base()
         | FOCUS_MODE_EDOF
         | FOCUS_MODE_CONTINUOUS_VIDEO
         | FOCUS_MODE_CONTINUOUS_PICTURE
-        | FOCUS_MODE_TOUCH
-        | FOCUS_MODE_MANUAL;
+        | FOCUS_MODE_TOUCH;
 
     sceneModeList =
           SCENE_MODE_AUTO
@@ -148,6 +147,9 @@ ExynosSensorS5K2P8Base::ExynosSensorS5K2P8Base()
         | SCENE_MODE_PARTY
         | SCENE_MODE_SPORTS
         | SCENE_MODE_CANDLELIGHT
+#ifdef SAMSUNG_COMPANION
+        | SCENE_MODE_HDR
+#endif
         ;
 
     whiteBalanceList =

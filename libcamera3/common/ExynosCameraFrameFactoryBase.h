@@ -63,6 +63,17 @@ typedef enum frame_factory_state {
     FRAME_FACTORY_STATE_MAX     = 4,
 } frame_factory_state_t;
 
+enum FRAME_FACTORY_TYPE {
+    FRAME_FACTORY_TYPE_REPROCESSING = 0,
+    FRAME_FACTORY_TYPE_CAPTURE_PREVIEW,
+#ifdef USE_DUAL_CAMERA
+    FRAME_FACTORY_TYPE_PREVIEW_DUAL,
+    FRAME_FACTORY_TYPE_REPROCESSING_DUAL,
+#endif
+    FRAME_FACTORY_TYPE_VISION,
+    FRAME_FACTORY_TYPE_MAX,
+};
+
 class ExynosCamera;
 class ExynosCameraRequest;
 class ExynosCameraFrameFactory;
@@ -101,8 +112,10 @@ public:
     virtual status_t        stopPipes(void) = 0;
     virtual status_t        startInitialThreads(void) = 0;
 
+    virtual status_t        fastenAeStable(int32_t numFrames, ExynosCameraBuffer *buffers);
     virtual status_t        sensorStandby(bool flagStandby);
     virtual bool            isSensorStandby(void);
+
     virtual status_t        setStopFlag(void);
     virtual status_t        stopPipe(uint32_t pipeId);
     virtual status_t        startThread(uint32_t pipeId);

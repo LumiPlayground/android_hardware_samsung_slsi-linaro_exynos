@@ -31,6 +31,10 @@
 #include "videodev2_exynos_media.h"
 #include "ExynosCameraBuffer.h"
 
+#ifdef SAMSUNG_SENSOR_LISTENER
+#include "sensor_listener_wrapper.h"
+#endif
+
 #define ROUND_OFF(x, dig)           (floor((x) * pow(10.0f, dig)) / pow(10.0f, dig))
 #define GET_MAX_NUM(a, b, c) \
     ((a) < (b) ? \
@@ -44,11 +48,6 @@
             obj = NULL; \
         } \
     } while(0)
-
-#define MAKE_STRING(s)  (#s)
-
-/* [CameraId]_[Bufffer Manager Name]_[FramcCount]_[Buffer Index]_[Batch Index]_[YYYYMMDD]_[HHMMSS].dump */
-#define DEBUG_DUMP_NAME "/data/camera/CAM%d_%s_F%d_I%d_B%d_%02d%02d%02d_%02d%02d%02d.dump"
 
 namespace android {
 
@@ -131,7 +130,7 @@ void setMetaCtlCaptureExposureTime(struct camera2_shot_ext *shot_ext, uint32_t e
 void getMetaCtlCaptureExposureTime(struct camera2_shot_ext *shot_ext, uint32_t *exposureTime);
 
 #ifdef SUPPORT_DEPTH_MAP
-void setMetaCtlDisparityMode(struct camera2_shot_ext *shot_ext, enum camera2_disparity_mode disparity_mode);
+void setMetaCtlDisparityMode(struct camera2_shot_ext *shot_ext, enum companion_disparity_mode disparity_mode);
 #endif
 
 void setMetaCtlWbLevel(struct camera2_shot_ext *shot_ext, int32_t wbLevel);
@@ -214,6 +213,10 @@ void getStreamFrameCount(struct camera2_stream *shot_stream, uint32_t *fcount);
 
 status_t setMetaDmSensorTimeStamp(struct camera2_shot_ext *shot_ext, uint64_t timeStamp);
 nsecs_t getMetaDmSensorTimeStamp(struct camera2_shot_ext *shot_ext);
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+status_t setMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext, uint64_t timeStamp);
+nsecs_t getMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext);
+#endif
 
 void setMetaNodeLeaderRequest(struct camera2_shot_ext* shot_ext, int value);
 void setMetaNodeLeaderVideoID(struct camera2_shot_ext* shot_ext, int value);
@@ -240,7 +243,6 @@ int getPlaneSizeFlite(int width, int height);
 int getBayerLineSize(int width, int bayerFormat);
 int getBayerPlaneSize(int width, int height, int bayerFormat);
 
-bool directDumpToFile(ExynosCameraBuffer *buffer, uint32_t cameraId, uint32_t frameCount);
 bool dumpToFile(char *filename, char *srcBuf, unsigned int size);
 bool dumpToFile2plane(char *filename, char *srcBuf, char *srcBuf1, unsigned int size, unsigned int size1);
 status_t readFromFile(char *filename, char *dstBuf, uint32_t size);
@@ -278,12 +280,15 @@ void convertingYUYVtoRGB888(char *dstBuf, char *srcBuf, int width, int height);
 
 void checkAndroidVersion(void);
 
-int  getFliteNodenum(int cameraId);
+int  getFliteNodenum(int cameraId,
+                    bool flagUseCompanion,
+                    bool flagQuickSwitchFlag);
 
 int  getFliteCaptureNodenum(int cameraId, int fliteOutputNode);
 
 #ifdef SUPPORT_DEPTH_MAP
-int  getDepthVcNodeNum(int cameraId);
+int  getDepthVcNodeNum(int cameraId,
+                      bool flagUseCompanion);
 #endif
 
 int calibratePosition(int w, int new_w, int pos);
@@ -324,6 +329,8 @@ void stopThreadAndInputQ(THREAD thread, int qCnt, THREADQ inputQ, ...)
     }
     va_end(list);
 };
+
+void setPreviewProperty(bool on);
 
 }; /* namespace android */
 

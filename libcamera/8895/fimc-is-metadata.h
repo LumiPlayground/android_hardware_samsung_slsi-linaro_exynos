@@ -52,7 +52,6 @@ struct rational {
 #define CAMERA2_MAX_AVAILABLE_MODE          21
 #define CAMERA2_MAX_FACES                   16
 #define CAMERA2_MAX_VENDER_LENGTH           400
-#define CAMERA2_MAX_IPC_VENDER_LENGTH       912
 #define CAPTURE_NODE_MAX                    5
 
 #define CAMERA2_MAX_PDAF_MULTIROI_COLUMN    13
@@ -786,7 +785,6 @@ enum aa_capture_intent {
     AA_CAPTURE_INTENT_STILL_CAPTURE_OIS_MULTI,
     AA_CAPTURE_INTENT_STILL_CAPTURE_OIS_BEST,
     AA_CAPTRUE_INTENT_STILL_CAPTURE_COMP_BYPASS,
-    AA_CAPTRUE_INTENT_STILL_CAPTURE_RAWDUMP = AA_CAPTRUE_INTENT_STILL_CAPTURE_COMP_BYPASS,
     AA_CAPTRUE_INTENT_STILL_CAPTURE_OIS_DEBLUR,
     AA_CAPTRUE_INTENT_STILL_CAPTURE_DEBLUR_DYNAMIC_SHOT,
     AA_CAPTRUE_INTENT_STILL_CAPTURE_OIS_DYNAMIC_SHOT,
@@ -1468,16 +1466,9 @@ struct camera2_as_udm {
 
 struct camera2_ipc_udm {
     uint32_t    vsLength;
-#ifdef TARGET_SOC_EXYNOS8895
     uint32_t    vendorSpecific[CAMERA2_MAX_VENDER_LENGTH];
-#else
-    uint32_t    vendorSpecific[CAMERA2_MAX_IPC_VENDER_LENGTH];
-#endif
 };
 
-/** \brief
-        User-defined metadata for rta debug info.
- */
 struct camera2_rta_udm {
     uint32_t vsLength;
     uint32_t vendorSpecific[100];
@@ -1510,7 +1501,7 @@ struct camera2_sensor_uctl {
     uint64_t    exposureTime;
     uint32_t    frameDuration;
     uint32_t    sensitivity;
-    uint32_t    CtrlFrameDuration;
+    uint32_t    ctrlFrameDuration;
 };
 
 struct camera2_sensor_udm {
@@ -1564,7 +1555,7 @@ enum companion_wdr_mode {
     COMPANION_WDR_OFF = 1,
     COMPANION_WDR_ON = 2,
     COMPANION_WDR_AUTO = 3,
-    COMPANION_WDR_AUTO_LIKE = 4,
+    COMPANION_WDR_AUTO_LIKE = 4,    
     TOTALCOUNT_COMPANION_WDR,
     COMPANION_WDR_UNKNOWN,
 };
@@ -1694,12 +1685,6 @@ struct camera2_fd_udm {
 */
 };
 
-struct camera2_ni_udm {
-    uint32_t    currentFrameNoiseIndex; // Noise Index for N
-    uint32_t    nextFrameNoiseIndex; /* Noise Index for N+1 */
-    uint32_t    nextNextFrameNoiseIndex; /* Noise Index for N+2 */
-};
-
 enum camera2_drc_mode {
     DRC_OFF = 1,
     DRC_ON,
@@ -1772,8 +1757,7 @@ struct camera2_udm {
     float                        zoomRatio;
     enum camera_flash_mode       flashMode;
     enum camera_op_mode          opMode;
-    struct camera2_ni_udm        ni;
-    uint32_t                     reserved[5];
+    uint32_t                     reserved[8];
 };
 
 struct camera2_shot {

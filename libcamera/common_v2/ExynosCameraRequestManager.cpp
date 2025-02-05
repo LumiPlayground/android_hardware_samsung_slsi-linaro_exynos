@@ -459,9 +459,27 @@ ExynosCamera3Request::ExynosCamera3Request(camera3_capture_request_t* request, C
     memcpy(m_request, request, sizeof(camera3_capture_request_t));
     memset(m_streamIdList, 0x00, sizeof(m_streamIdList));
 
+    /* Deep copy the input buffer object, because the Camera sevice can reuse it
+       in successive request with different contents.
+    */
+    if(request->input_buffer != NULL) {
+        ALOGD("DEBUG(%s[%d]):Allocating input buffer (%p)", __FUNCTION__, __LINE__, request->input_buffer);
+        m_request->input_buffer = new camera3_stream_buffer_t();
+        memcpy(m_request->input_buffer, request->input_buffer, sizeof(camera3_stream_buffer_t));
+    }
+
     m_key = m_request->frame_number;
     m_numOfOutputBuffers = request->num_output_buffers;
     m_isNeedInternalFrame = false;
+
+    /* Deep copy the output buffer objects as well */
+    camera3_stream_buffer_t* newOutputBuffers = NULL;
+    if((request != NULL) && (request->output_buffers != NULL) && (m_numOfOutputBuffers > 0)) {
+        newOutputBuffers = new camera3_stream_buffer_t[m_numOfOutputBuffers];
+        memcpy(newOutputBuffers, request->output_buffers, sizeof(camera3_stream_buffer_t) * m_numOfOutputBuffers);
+    }
+    /* Nasty casting to assign a value to const pointer */
+    *(camera3_stream_buffer_t**)(&m_request->output_buffers) = newOutputBuffers;
 
     for (int i = 0; i < m_numOfOutputBuffers; i++) {
         stream = static_cast<ExynosCameraStream *>(request->output_buffers[i].stream->priv);
@@ -528,6 +546,7 @@ status_t ExynosCamera3Request::m_init()
     m_resultList.clear();
     m_numOfCompleteBuffers = 0;
     m_numOfDuplicateBuffers = 0;
+    m_pipelineDepth = 0;
 
     for (int i = 0 ; i < EXYNOS_REQUEST_RESULT::CALLBACK_MAX ; i++) {
         m_resultStatus[i] = false;
@@ -539,6 +558,13 @@ status_t ExynosCamera3Request::m_init()
 status_t ExynosCamera3Request::m_deinit()
 {
     status_t ret = NO_ERROR;
+
+    if (m_request->input_buffer != NULL) {
+        delete m_request->input_buffer;
+    }
+    if (m_request->output_buffers != NULL) {
+        delete[] m_request->output_buffers;
+    }
 
     if (m_request != NULL) {
         delete m_request;
@@ -724,7 +750,7 @@ camera3_stream_buffer_t* ExynosCamera3Request::getInputBuffer()
 
 uint64_t ExynosCamera3Request::getSensorTimestamp()
 {
-    return m_resultShot.shot.dm.sensor.timeStamp;
+    return m_resultShot.shot.udm.sensor.timeStampBoot;
 }
 
 uint32_t ExynosCamera3Request::getNumOfOutputBuffer()
@@ -1262,6 +1288,20 @@ bool ExynosCamera3Request::getNeedInternalFrame(void)
     return m_isNeedInternalFrame;
 }
 
+void ExynosCamera3Request::increasePipelineDepth(void)
+{
+    m_pipelineDepth++;
+}
+
+void ExynosCamera3Request::updatePipelineDepth(void)
+{
+    const uint8_t pipelineDepth = m_pipelineDepth;
+
+    m_resultShot.shot.dm.request.pipelineDepth = m_pipelineDepth;
+    m_resultMeta.update(ANDROID_REQUEST_PIPELINE_DEPTH, &pipelineDepth, 1);
+    ALOGV("DEBUG(%s):ANDROID_REQUEST_PIPELINE_DEPTH(%d)", __FUNCTION__, pipelineDepth);
+}
+
 status_t ExynosCamera3Request::m_setCallbackDone(EXYNOS_REQUEST_RESULT::TYPE reqType, bool flag, Mutex *lock)
 {
     status_t ret = NO_ERROR;
@@ -1373,6 +1413,7 @@ ExynosCameraRequestManager::ExynosCameraRequestManager(int cameraId, ExynosCamer
         m_defaultRequestTemplate[i] = NULL;
 
     m_factoryMap.clear();
+    m_zslFactoryMap.clear();
 
     m_callbackSequencer = new ExynosCameraCallbackSequencer();
 
@@ -1404,6 +1445,7 @@ ExynosCameraRequestManager::~ExynosCameraRequestManager()
     }
 
     m_factoryMap.clear();
+    m_zslFactoryMap.clear();
 
     if (m_callbackSequencer != NULL) {
         delete m_callbackSequencer;
@@ -1435,7 +1477,7 @@ ExynosCameraMetadataConverter* ExynosCameraRequestManager::getMetaDataConverter(
     return m_converter;
 }
 
-status_t ExynosCameraRequestManager::setRequestsInfo(int key, ExynosCamera3FrameFactory *factory)
+status_t ExynosCameraRequestManager::setRequestsInfo(int key, ExynosCamera3FrameFactory *factory, ExynosCamera3FrameFactory *zslFactory)
 {
     status_t ret = NO_ERROR;
     if (factory == NULL) {
@@ -1445,10 +1487,24 @@ status_t ExynosCameraRequestManager::setRequestsInfo(int key, ExynosCamera3Frame
         ret = INVALID_OPERATION;
         return ret;
     }
+    /* zslFactory can be NULL. In this case, use factory insted.
+       (Same frame factory for both normal capture and ZSL input)
+    */
+    if (zslFactory == NULL) {
+        zslFactory = factory;
+    }
 
     ret = m_pushFactory(key ,factory, &m_factoryMap, &m_factoryMapLock);
     if (ret < 0) {
         CLOGE("ERR(%s[%d]):m_pushFactory is failed key(%d) factory(%p)",
+            __FUNCTION__, __LINE__, key, factory);
+
+        ret = INVALID_OPERATION;
+        return ret;
+    }
+    ret = m_pushFactory(key ,zslFactory, &m_zslFactoryMap, &m_zslFactoryMapLock);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):m_pushFactory is failed key(%d) zslFactory(%p)",
             __FUNCTION__, __LINE__, key, factory);
 
         ret = INVALID_OPERATION;
@@ -1787,7 +1843,7 @@ status_t ExynosCameraRequestManager::m_getFactory(int key, ExynosCamera3FrameFac
     return ret;
 }
 
-status_t ExynosCameraRequestManager::registerServiceRequest(camera3_capture_request_t *request)
+ExynosCameraRequest* ExynosCameraRequestManager::registerServiceRequest(camera3_capture_request_t *request)
 {
     status_t ret = NO_ERROR;
     ExynosCameraRequest *obj = NULL;
@@ -1802,6 +1858,7 @@ status_t ExynosCameraRequestManager::registerServiceRequest(camera3_capture_requ
     int32_t streamID = 0;
     int32_t factoryID = 0;
     bool needDummyStream = true;
+    bool isZslInput = false;
 
     if (request->settings == NULL) {
         meta = m_previousMeta;
@@ -1815,6 +1872,9 @@ status_t ExynosCameraRequestManager::registerServiceRequest(camera3_capture_requ
             __FUNCTION__, __LINE__, captureIntent);
     }
 
+    /* Check whether the input buffer (ZSL input) is specified.
+       Use zslFramFactory in the following section if ZSL input is used
+    */
     obj = new ExynosCamera3Request(request, m_previousMeta);
     bufferCnt = obj->getNumOfInputBuffer();
     inputbuffer = obj->getInputBuffer();
@@ -1822,12 +1882,15 @@ status_t ExynosCameraRequestManager::registerServiceRequest(camera3_capture_requ
         stream = static_cast<ExynosCameraStream*>(inputbuffer[i].stream->priv);
         stream->getID(&streamID);
         factoryID = streamID % HAL_STREAM_ID_MAX;
-        ret = m_getFactory(factoryID, &factory, &m_factoryMap, &m_factoryMapLock);
-        if (ret < 0) {
-            CLOGD("DEBUG(%s[%d]):m_getFactory is failed captureIntent(%d) streamID(%d)",
+
+        /* Stream ID validity */
+        if(factoryID == HAL_STREAM_ID_ZSL_INPUT) {
+            isZslInput = true;
+        } else {
+            /* Ignore input buffer */
+            CLOGE("ERR(%s[%d]):Invalid input streamID. captureIntent(%d) streamID(%d)",
                     __FUNCTION__, __LINE__, captureIntent, streamID);
         }
-        obj->pushFrameFactory(streamID, factory);
     }
 
     bufferCnt = obj->getNumOfOutputBuffer();
@@ -1852,7 +1915,16 @@ status_t ExynosCameraRequestManager::registerServiceRequest(camera3_capture_requ
             needDummyStream = false;
         }
 
-        ret = m_getFactory(factoryID, &factory, &m_factoryMap, &m_factoryMapLock);
+        /* Choose appropirate frame factory depends on input buffer is specified or not */
+        if(isZslInput == true) {
+            ret = m_getFactory(factoryID, &factory, &m_zslFactoryMap, &m_zslFactoryMapLock);
+            CLOGD("DEBUG(%s[%d]):ZSL framefactory for streamID(%d)",
+                    __FUNCTION__, __LINE__, streamID);
+        } else {
+            ret = m_getFactory(factoryID, &factory, &m_factoryMap, &m_factoryMapLock);
+            CLOGV("DEBUG(%s[%d]):Normal framefactory for streamID(%d)",
+                    __FUNCTION__, __LINE__, streamID);
+        }
         if (ret < 0) {
             CLOGD("DEBUG(%s[%d]):m_getFactory is failed captureIntent(%d) streamID(%d)",
                     __FUNCTION__, __LINE__, captureIntent, streamID);
@@ -1865,6 +1937,7 @@ status_t ExynosCameraRequestManager::registerServiceRequest(camera3_capture_requ
     /* attach dummy stream to this request if this request needs dummy stream */
     obj->setNeedInternalFrame(needDummyStream);
 #endif
+
     obj->getServiceShot(&shot_ext);
     meta = obj->getServiceMeta();
     m_converter->initShotData(&shot_ext);
@@ -1893,11 +1966,14 @@ status_t ExynosCameraRequestManager::registerServiceRequest(camera3_capture_requ
     ret = m_pushBack(obj, &m_serviceRequests[EXYNOS_REQUEST_TYPE::PREVIEW], &m_requestLock);
     if (ret < 0){
         CLOGE("ERR(%s[%d]):request m_pushBack is failed request(%d)", __FUNCTION__, __LINE__, obj->getFrameCount());
+
+        delete obj;
+        return NULL;
     }
 
     m_callbackSequencer->pushFrameCount(obj->getKey());
 
-    return ret;
+    return obj;
 }
 
 status_t ExynosCameraRequestManager::getPreviousShot(struct camera2_shot_ext *pre_shot_ext)
@@ -2456,6 +2532,8 @@ status_t ExynosCameraRequestManager::m_callbackPackingOutputBuffers(ExynosCamera
         }
     }
 
+    /* update pipeline depth */
+    callbackRequest->updatePipelineDepth();
     resultMeta = callbackRequest->getResultMeta();
 
     /* construct result for service */
@@ -2499,24 +2577,7 @@ status_t ExynosCameraRequestManager::m_increasePipelineDepth(RequestInfoMap *map
     while (requestIter != map->end()) {
         request = requestIter->second;
 
-        /* 1. Get result shot_ext structure from request */
-        ret = request->getResultShot(&shot_ext);
-        if (ret < 0) {
-            CLOGE("ERR(%s[%d]):getResultShot failed", __FUNCTION__, __LINE__);
-            goto func_exit;
-        }
-
-        /* 2. Increase the pipeline depth */
-        shot_ext.shot.dm.request.pipelineDepth += 1;
-
-        /* 3. Set result shot_ext structure into request */
-        ret = request->setResultShot(&shot_ext);
-        if (ret < 0) {
-            CLOGE("ERR(%s[%d]):setResultShot failed", __FUNCTION__, __LINE__);
-            goto func_exit;
-        }
-
-        /* 4. Go to next request */
+        request->increasePipelineDepth();
         requestIter++;
     }
 

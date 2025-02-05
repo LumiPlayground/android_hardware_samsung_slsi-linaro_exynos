@@ -22,6 +22,10 @@
 
 namespace android {
 
+#ifdef SAMSUNG_TN_FEATURE
+ExynosCameraPP *ExynosCameraPipePP::m_ppScenario[PP_SCENARIO_MAX];
+#endif
+
 status_t ExynosCameraPipePP::create(__unused int32_t *sensorIds)
 {
     status_t ret = NO_ERROR;
@@ -126,7 +130,7 @@ void ExynosCameraPipePP::m_init(int32_t *nodeNums, bool isPreviewFactory)
     m_scenario = PP_SCENARIO_NONE;
 }
 
-void ExynosCameraPipePP::connectScenario(int32_t scenario)
+void ExynosCameraPipePP::connectPPScenario(int32_t scenario)
 {
     status_t ret = NO_ERROR;
 
@@ -170,7 +174,7 @@ void ExynosCameraPipePP::extControl(int scenario, int controlType, void *data)
     }
 }
 
-void ExynosCameraPipePP::startScenario(void)
+void ExynosCameraPipePP::startPPScenario(void)
 {
     status_t ret = NO_ERROR;
 
@@ -187,7 +191,7 @@ void ExynosCameraPipePP::startScenario(void)
     }
 }
 
-void ExynosCameraPipePP::stopScenario(bool suspendFlag)
+void ExynosCameraPipePP::stopPPScenario(bool suspendFlag)
 {
     status_t ret = NO_ERROR;
 
@@ -204,7 +208,7 @@ void ExynosCameraPipePP::stopScenario(bool suspendFlag)
     }
 }
 
-int ExynosCameraPipePP::getScenario(void)
+int ExynosCameraPipePP::getPPScenario(void)
 {
     int scenario = PP_SCENARIO_NONE;
 

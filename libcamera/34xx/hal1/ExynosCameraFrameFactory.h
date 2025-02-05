@@ -25,6 +25,8 @@
 #include "ExynosCameraPipeFlite.h"
 #include "ExynosCameraPipeVRA.h"
 #include "ExynosCameraPipeGSC.h"
+#include "ExynosCameraPipeSTK_PICTURE.h"
+#include "ExynosCameraPipeSTK_PREVIEW.h"
 #include "ExynosCameraPipeJpeg.h"
 #include "ExynosCameraFrameManager.h"
 
@@ -70,11 +72,17 @@ public:
     virtual ~ExynosCameraFrameFactory();
 
     virtual status_t        create(bool active = true) = 0;
+#ifdef SAMSUNG_COMPANION
+    virtual status_t        precreate(void);
+    virtual status_t        postcreate(void);
+#endif
 
     virtual status_t        setFrameManager(ExynosCameraFrameManager *manager);
     virtual status_t        getFrameManager(ExynosCameraFrameManager **manager);
     virtual status_t        destroy(void);
     virtual bool            isCreated(void);
+
+    virtual status_t        fastenAeStable(int32_t numFrames, ExynosCameraBuffer *buffers);
 
     virtual ExynosCameraFrame *createNewFrameOnlyOnePipe(int pipeId, int frameCnt=-1);
     virtual ExynosCameraFrame *createNewFrameVideoOnly(void);

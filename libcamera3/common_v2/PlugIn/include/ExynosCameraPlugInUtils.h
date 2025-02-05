@@ -34,7 +34,7 @@
 
 namespace android {
 
-#define PLUGIN_FILE_DUMP_PATH "/data/misc/cameraserver/"
+#define PLUGIN_FILE_DUMP_PATH "/data/camera/"
 typedef struct PlugInBuffer {
     int size;
     int fd;

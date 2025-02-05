@@ -430,6 +430,14 @@ status_t ExynosCameraPipe3AA::m_putBuffer(void)
             return INVALID_OPERATION;
         }
 
+#ifdef SR_CAPTURE
+        /* setfile setting */
+        int yuvRange = 0;
+        m_parameters->getSetfileYuvRange(m_reprocessing, &m_setfile, &yuvRange);
+        ALOGV("INFO(%s[%d]):setfile(%d),m_reprocessing(%d)", __FUNCTION__, __LINE__, m_setfile, m_reprocessing);
+        setMetaSetfile(shot_ext, m_setfile);
+#endif
+
         CLOGV("DEBUG(%s[%d]):frameCount(%d), rCount(%d)",
                 __FUNCTION__, __LINE__,
                 newFrame->getFrameCount(), getMetaDmRequestFrameCount(shot_ext));

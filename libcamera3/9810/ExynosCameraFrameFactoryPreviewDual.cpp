@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraFrameFactoryPreviewDual"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraFrameFactoryPreviewDual.h"
 
@@ -74,6 +74,13 @@ status_t ExynosCameraFrameFactoryPreviewDual::startInitialThreads(void)
                 return ret;
             }
         }
+
+#ifdef USE_CIP_M2M_HW
+        ret = startThread(PIPE_CIP);
+        if (ret != NO_ERROR) {
+            return ret;
+        }
+#endif
 
         // HACK: ToDo remove
         if (m_flagDcpMcscOTF == HW_CONNECTION_MODE_M2M) {
@@ -168,6 +175,18 @@ status_t ExynosCameraFrameFactoryPreviewDual::stopPipes(void)
             funcRet |= ret;
         }
     }
+
+#ifdef USE_CIP_M2M_HW
+    if (m_pipes[PIPE_CIP] != NULL
+        && m_pipes[PIPE_CIP]->isThreadRunning() == true) {
+        ret = m_pipes[PIPE_CIP]->stopThread();
+        if (ret != NO_ERROR) {
+            CLOGE("CIP stopThread fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            funcRet |= ret;
+        }
+    }
+#endif
 
     if (m_pipes[PIPE_SYNC] != NULL
         && m_pipes[PIPE_SYNC]->isThreadRunning() == true) {
@@ -310,6 +329,17 @@ status_t ExynosCameraFrameFactoryPreviewDual::stopPipes(void)
         CLOGE("PIPE_GSC stopThreadAndWait fail, ret(%d)", ret);
     }
 
+#ifdef USE_CIP_M2M_HW
+    if (m_pipes[PIPE_CIP] != NULL) {
+        ret = m_pipes[PIPE_CIP]->stop();
+        if (ret != NO_ERROR) {
+            CLOGE("CIP stop fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            funcRet |= ret;
+        }
+    }
+#endif
+
     if (m_pipes[PIPE_SYNC] != NULL) {
         ret = m_pipes[PIPE_SYNC]->stop();
         if (ret != NO_ERROR) {
@@ -399,6 +429,16 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryPreviewDual::createNewFrame(u
             frame->addSiblingEntity(NULL, newEntity[pipeId]);
             requestEntityCount++;
         }
+
+#ifdef USE_CIP_M2M_HW
+        /* set CIP pipe to linkageList */
+        pipeId = PIPE_CIP;
+        if (m_request[pipeId] == true) {
+            newEntity[pipeId] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_ONLY, ENTITY_BUFFER_FIXED);
+            frame->addSiblingEntity(NULL, newEntity[pipeId]);
+            requestEntityCount++;
+        }
+#endif
 
         /* set MCSC pipe to linkageList */
         pipeId = PIPE_MCSC;
@@ -566,6 +606,14 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_constructPipes(void)
         m_pipes[pipeId] = (ExynosCameraPipe*)new ExynosCameraMCPipe(m_cameraId, m_parameters, m_flagReprocessing, &m_deviceInfo[pipeId]);
         m_pipes[pipeId]->setPipeId(pipeId);
         m_pipes[pipeId]->setPipeName("PIPE_DCP");
+
+#ifdef USE_CIP_M2M_HW
+        /* CIP */
+        pipeId = PIPE_CIP;
+        m_pipes[pipeId] = (ExynosCameraPipe*)new ExynosCameraPipePP(m_cameraId, m_parameters, m_flagReprocessing, m_nodeNums[pipeId]);
+        m_pipes[pipeId]->setPipeId(pipeId);
+        m_pipes[pipeId]->setPipeName("PIPE_CIP");
+#endif
     } else if (m_parameters->getDualPreviewMode() == DUAL_PREVIEW_MODE_SW) {
         /* Fusion Pipe for Dual */
         pipeId = PIPE_FUSION;
@@ -606,6 +654,15 @@ status_t ExynosCameraFrameFactoryPreviewDual::startPipes(void)
             return INVALID_OPERATION;
         }
     }
+
+#ifdef USE_CIP_M2M_HW
+    ret = m_pipes[PIPE_CIP]->start();
+    if (ret != NO_ERROR) {
+        CLOGE("CIP start fail, ret(%d)", ret);
+        /* TODO: exception handling */
+        return INVALID_OPERATION;
+    }
+#endif
 
     if (m_flagIspDcpOTF == HW_CONNECTION_MODE_M2M) {
         ret = m_pipes[PIPE_DCP]->start();
@@ -696,6 +753,9 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_setDeviceInfo(void)
     enum NODE_TYPE nodeType = INVALID_NODE;
     bool flagStreamLeader = true;
     int nodeDcps0 = -1, nodeDcps1 = -1, nodeDcpc0 = -1, nodeDcpc1 = -1, nodeDcpc2 = -1, nodeDcpc3 = -1, nodeDcpc4 = -1;
+#if defined(USE_CIP_HW) || defined(USE_CIP_M2M_HW)
+    int nodeCips0 = -1, nodeCips1 = -1;
+#endif /* USE_CIP_HW */
 
     m_initDeviceInfo(PIPE_FLITE);
     m_initDeviceInfo(PIPE_3AA);
@@ -717,6 +777,10 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_setDeviceInfo(void)
     nodeDcpc2 = FIMC_IS_VIDEO_DCP2C_NUM;
     nodeDcpc3 = FIMC_IS_VIDEO_DCP3C_NUM;
     nodeDcpc4 = FIMC_IS_VIDEO_DCP4C_NUM;
+#if defined(USE_CIP_HW) || defined(USE_CIP_M2M_HW)
+    nodeCips0 = FIMC_IS_VIDEO_CIP0S_NUM;
+    nodeCips1 = FIMC_IS_VIDEO_CIP1S_NUM;
+#endif /* USE_CIP_HW */
     nodeMcsc = FIMC_IS_VIDEO_M0S_NUM;
     nodeMcscp0 = FIMC_IS_VIDEO_M0P_NUM;
     nodeMcscp1 = FIMC_IS_VIDEO_M1P_NUM;
@@ -727,6 +791,12 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_setDeviceInfo(void)
     /*
      * FLITE
      */
+    bool flagQuickSwitchFlag = false;
+
+#ifdef SAMSUNG_QUICK_SWITCH
+    flagQuickSwitchFlag = m_parameters->getQuickSwitchFlag();
+#endif
+
     if (m_flagFlite3aaOTF == HW_CONNECTION_MODE_M2M) {
         pipeId = PIPE_FLITE;
     } else {
@@ -736,7 +806,7 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_setDeviceInfo(void)
     /* FLITE */
     nodeType = getNodeType(PIPE_FLITE);
     m_deviceInfo[pipeId].pipeId[nodeType]  = PIPE_FLITE;
-    m_deviceInfo[pipeId].nodeNum[nodeType] = getFliteNodenum(m_cameraId);
+    m_deviceInfo[pipeId].nodeNum[nodeType] = getFliteNodenum(m_cameraId, false, flagQuickSwitchFlag);
     m_deviceInfo[pipeId].bufferManagerType[nodeType] = BUFFER_MANAGER_ION_TYPE;
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "FLITE", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[nodeType], false, flagStreamLeader, m_flagReprocessing);
@@ -893,12 +963,37 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_setDeviceInfo(void)
         m_deviceInfo[pipeId].bufferManagerType[nodeType] = BUFFER_MANAGER_ION_TYPE;
         strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "DCPC4_SLAVE_DS", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
         m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_DCPS0)], true, flagStreamLeader, m_flagReprocessing);
+
+#ifdef USE_CIP_M2M_HW
+        previousPipeId = pipeId;
+        pipeId = PIPE_CIP;
+#endif
+
+#if defined(USE_CIP_HW) || defined(USE_CIP_M2M_HW)
+        /* CIPS0 */
+        nodeType = getNodeType(PIPE_CIPS0);
+        m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_CIPS0;
+        m_deviceInfo[pipeId].nodeNum[nodeType] = nodeCips0;
+        m_deviceInfo[pipeId].bufferManagerType[nodeType] = BUFFER_MANAGER_ION_TYPE;
+        strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "CIPS0_MASTER", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+        m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_CIPS0)], true, flagStreamLeader, m_flagReprocessing);
+
+        /* CIPS1 */
+        nodeType = getNodeType(PIPE_CIPS1);
+        m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_CIPS1;
+        m_deviceInfo[pipeId].nodeNum[nodeType] = nodeCips1;
+        m_deviceInfo[pipeId].bufferManagerType[nodeType] = BUFFER_MANAGER_ION_TYPE;
+        strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "CIPS1_SLAVE", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+        m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_CIPS1)], true, flagStreamLeader, m_flagReprocessing);
+#endif /* USE_CIP_HW */
     }
 
     /*
      * MCSC
      */
+#ifndef USE_CIP_M2M_HW
     previousPipeId = pipeId;
+#endif
 
     if (m_parameters->getDualPreviewMode() == DUAL_PREVIEW_MODE_HW) {
         mcscSrcPipeId = PIPE_DCPC0;
@@ -1313,11 +1408,6 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_initPipes(uint32_t frameRate)
             pipeId = PIPE_DCP;
         }
 
-#ifdef SUPPORT_VOTF_SERIALIZATION
-        /* Do serialized Q/DQ operation to guarantee the virtual OTF sequence limitation */
-        m_pipes[INDEX(pipeId)]->needSerialization(true);
-#endif
-
         /* DCPS0 */
         nodeType = getNodeType(PIPE_DCPS0);
 
@@ -1436,6 +1526,64 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_initPipes(uint32_t frameRate)
 
         /* Set capture node default info */
         SET_CAPTURE_DEVICE_BASIC_INFO();
+
+#ifdef USE_CIP_M2M_HW
+        /* setup pipe info to DCP pipe */
+        ret = m_pipes[pipeId]->setupPipe(pipeInfo, m_sensorIds[pipeId]);
+        if (ret != NO_ERROR) {
+            CLOGE("DCP setupPipe fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+
+        /* clear pipeInfo for next setupPipe */
+        for (int i = 0; i < MAX_NODE; i++)
+            pipeInfo[i] = nullPipeInfo;
+
+        pipeId = PIPE_CIP;
+#endif
+
+#if defined(USE_CIP_HW) || defined(USE_CIP_M2M_HW)
+        /* CIPS0 */
+        nodeType = getNodeType(PIPE_CIPS0);
+        perFramePos = PERFRAME_BACK_CIPS0_POS;
+
+        /* set v4l2 buffer size */
+        tempRect.fullW = bdsSize.w;
+        tempRect.fullH = bdsSize.h;
+        tempRect.colorFormat = V4L2_PIX_FMT_NV16M;
+
+        pipeInfo[nodeType].pixelSize = CAMERA_PIXEL_SIZE_8BIT;
+
+        /* set v4l2 video node bytes per plane */
+        pipeInfo[nodeType].bytesPerPlane[0] = ROUND_UP(tempRect.fullW * 2, CAMERA_16PX_ALIGN);
+
+        /* set v4l2 video node buffer count */
+        pipeInfo[nodeType].bufInfo.count = NUM_DCP_BUFFERS;
+
+        /* Set capture node default info */
+        SET_CAPTURE_DEVICE_BASIC_INFO();
+
+        /* CIPS1 */
+        nodeType = getNodeType(PIPE_CIPS1);
+        perFramePos = PERFRAME_BACK_CIPS1_POS;
+
+        /* set v4l2 buffer size */
+        tempRect.fullW = bdsSize.w;
+        tempRect.fullH = bdsSize.h;
+        tempRect.colorFormat = V4L2_PIX_FMT_NV16M;
+
+        pipeInfo[nodeType].pixelSize = CAMERA_PIXEL_SIZE_8BIT;
+
+        /* set v4l2 video node bytes per plane */
+        pipeInfo[nodeType].bytesPerPlane[0] = ROUND_UP(tempRect.fullW * 2, CAMERA_TPU_CHUNK_ALIGN_W);
+
+        /* set v4l2 video node buffer count */
+        pipeInfo[nodeType].bufInfo.count = NUM_DCP_BUFFERS;
+
+        /* Set capture node default info */
+        SET_CAPTURE_DEVICE_BASIC_INFO();
+#endif /* USE_CIP_HW */
 
         /* setup pipe info to DCP pipe */
         if (m_flagDcpMcscOTF == HW_CONNECTION_MODE_M2M) {
@@ -1600,6 +1748,9 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_fillNodeGroupInfo(ExynosCameraFr
     camera2_node_group node_group_info_3aa;
     camera2_node_group node_group_info_isp;
     camera2_node_group node_group_info_dcp;
+#ifdef USE_CIP_M2M_HW
+    camera2_node_group node_group_info_cip;
+#endif
     camera2_node_group node_group_info_mcsc;
     camera2_node_group node_group_info_vra;
     camera2_node_group *node_group_info_temp;
@@ -1620,6 +1771,9 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_fillNodeGroupInfo(ExynosCameraFr
     memset(&node_group_info_3aa, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_isp, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_dcp, 0x0, sizeof(camera2_node_group));
+#ifdef USE_CIP_M2M_HW
+    memset(&node_group_info_cip, 0x0, sizeof(camera2_node_group));
+#endif
     memset(&node_group_info_mcsc, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_vra, 0x0, sizeof(camera2_node_group));
 
@@ -1783,6 +1937,28 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_fillNodeGroupInfo(ExynosCameraFr
             node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
             perframePosition++;
         }
+
+#ifdef USE_CIP_M2M_HW
+        pipeId = PIPE_CIP;
+        perframePosition = 0;
+        node_group_info_temp = &node_group_info_cip;
+#endif
+
+#if defined(USE_CIP_HW) || defined(USE_CIP_M2M_HW)
+        nodePipeId = PIPE_CIPS0;
+        if (m_request[nodePipeId] == true) {
+            node_group_info_temp->capture[perframePosition].request = m_request[nodePipeId];
+            node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
+            perframePosition++;
+        }
+
+        nodePipeId = PIPE_CIPS1;
+        if (m_request[nodePipeId] == true) {
+            node_group_info_temp->capture[perframePosition].request = m_request[nodePipeId];
+            node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(nodePipeId)] - FIMC_IS_VIDEO_BAS_NUM;
+            perframePosition++;
+        }
+#endif
     }
 
     /* MCSC */
@@ -1870,6 +2046,14 @@ status_t ExynosCameraFrameFactoryPreviewDual::m_fillNodeGroupInfo(ExynosCameraFr
                 &node_group_info_dcp);
         frame->storeNodeGroupInfo(&node_group_info_dcp, PERFRAME_INFO_DCP);
     }
+
+#ifdef USE_CIP_M2M_HW
+    updateNodeGroupInfo(
+            PIPE_CIP,
+            m_parameters,
+            &node_group_info_cip);
+    frame->storeNodeGroupInfo(&node_group_info_cip, PERFRAME_INFO_CIP);
+#endif
 
     if (m_flagIspMcscOTF == HW_CONNECTION_MODE_M2M
         || m_flagDcpMcscOTF == HW_CONNECTION_MODE_M2M) {

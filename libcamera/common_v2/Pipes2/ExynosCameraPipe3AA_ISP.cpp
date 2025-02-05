@@ -769,6 +769,12 @@ status_t ExynosCameraPipe3AA_ISP::setControl(int cid, int value)
         }
     }
 
+#ifdef OIS_CAPTURE
+    /* HACK: CAPTURE_INTENT must be delivered to 3AA_OUTPUT node only */
+    if (cid == V4L2_CID_IS_INTENT)
+        return ret;
+#endif
+
     return ret;
 }
 
@@ -1370,6 +1376,9 @@ status_t ExynosCameraPipe3AA_ISP::m_getBuffer(void)
         shot_ext_dst->dis_bypass = shot_ext_src->dis_bypass;
         shot_ext_dst->dnr_bypass = shot_ext_src->dnr_bypass;
         shot_ext_dst->fd_bypass = shot_ext_src->fd_bypass;
+#ifdef SAMSUNG_COMPANION
+        shot_ext_dst->shot.uctl.companionUd.wdr_mode = shot_ext_src->shot.uctl.companionUd.wdr_mode;
+#endif
         shot_ext_dst->shot.dm.request.frameCount = shot_ext_src->shot.dm.request.frameCount;
         shot_ext_dst->shot.magicNumber= shot_ext_src->shot.magicNumber;
     }

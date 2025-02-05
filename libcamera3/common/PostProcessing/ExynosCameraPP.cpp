@@ -233,8 +233,11 @@ status_t ExynosCameraPP::m_draw(ExynosCameraImage *srcImage,
                                 ExynosCameraImage *dstImage)
 {
     // we can debuging srcImage and dstImage.
-    m_printImage("draw():[SRC]", getNumOfSrcImage(), srcImage);
-    m_printImage("draw():[DST]", getNumOfDstImage(), dstImage);
+    char tempStr[EXYNOS_CAMERA_NAME_STR_SIZE];
+    snprintf(tempStr, EXYNOS_CAMERA_NAME_STR_SIZE, "draw():[SRC]");
+    m_printImage(tempStr, getNumOfSrcImage(), srcImage);
+    snprintf(tempStr, EXYNOS_CAMERA_NAME_STR_SIZE, "draw():[DST]");
+    m_printImage(tempStr, getNumOfDstImage(), dstImage);
 
     return NO_ERROR;
 }
@@ -422,7 +425,7 @@ status_t ExynosCameraPP::start(void)
     return ret;
 }
 
-status_t ExynosCameraPP::stop(bool suspendFlag)
+status_t ExynosCameraPP::stop(__unused bool suspendFlag)
 {
     status_t ret = NO_ERROR;
 

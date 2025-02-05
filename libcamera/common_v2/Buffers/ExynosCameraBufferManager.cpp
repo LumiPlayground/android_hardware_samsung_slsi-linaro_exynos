@@ -99,6 +99,11 @@ void ExynosCameraBufferManager::init(void)
     m_defaultAllocator = NULL;
     m_isCreateDefaultAllocator = false;
     memset((void *)m_buffer, 0, (VIDEO_MAX_FRAME) * sizeof(struct ExynosCameraBuffer));
+    for (int bufIndex = 0; bufIndex < VIDEO_MAX_FRAME; bufIndex++) {
+        for (int planeIndex = 0; planeIndex < EXYNOS_CAMERA_BUFFER_MAX_PLANES; planeIndex++) {
+            m_buffer[bufIndex].fd[planeIndex] = -1;
+        }
+    }
     m_hasMetaPlane = false;
     memset(m_name, 0x00, sizeof(m_name));
     strncpy(m_name, "none", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
@@ -201,19 +206,28 @@ status_t ExynosCameraBufferManager::alloc(void)
         goto func_exit;
     }
 
-    /* allocate image buffer */
-    if (m_alloc(m_indexOffset, m_reqBufCount + m_indexOffset) != NO_ERROR) {
-        CLOGE("ERR(%s[%d]):m_alloc failed", __FUNCTION__, __LINE__);
-        ret = INVALID_OPERATION;
-        goto func_exit;
-    }
-
     if (m_hasMetaPlane == true) {
         if (m_defaultAlloc(m_indexOffset, m_reqBufCount + m_indexOffset, m_hasMetaPlane) != NO_ERROR) {
             CLOGE("ERR(%s[%d]):m_defaultAlloc failed", __FUNCTION__, __LINE__);
             ret = INVALID_OPERATION;
             goto func_exit;
         }
+    }
+
+    /* allocate image buffer */
+    if (m_alloc(m_indexOffset, m_reqBufCount + m_indexOffset) != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):m_alloc failed", __FUNCTION__, __LINE__);
+
+        if (m_hasMetaPlane == true) {
+            CLOGD("DEBUG(%s[%d]):Free metadata plane. bufferCount %d",
+                    __FUNCTION__, __LINE__, m_reqBufCount);
+            if (m_defaultFree(m_indexOffset, m_reqBufCount + m_indexOffset, m_hasMetaPlane) != NO_ERROR) {
+                CLOGE("ERR(%s[%d]):m_defaultFree failed", __FUNCTION__, __LINE__);
+            }
+        }
+
+        ret = INVALID_OPERATION;
+        goto func_exit;
     }
 
     m_allocatedBufCount = m_reqBufCount;
@@ -806,6 +820,12 @@ status_t ExynosCameraBufferManager::updateStatus(
         enum EXYNOS_CAMERA_BUFFER_POSITION   position,
         enum EXYNOS_CAMERA_BUFFER_PERMISSION permission)
 {
+    if (bufIndex < 0) {
+        CLOGE("ERR(%s[%d]):Invalid buffer index %d",
+                __FUNCTION__, __LINE__, bufIndex);
+        return BAD_VALUE;
+    }
+
     m_buffer[bufIndex].index = bufIndex;
     m_buffer[bufIndex].status.driverReturnValue = driverValue;
     m_buffer[bufIndex].status.position          = position;
@@ -927,6 +947,14 @@ status_t ExynosCameraBufferManager::m_defaultAlloc(int bIndex, int eIndex, bool 
         goto func_exit;
     }
 
+    if (bIndex < 0 || eIndex < 0) {
+        CLOGE("ERR(%s[%d]):Invalid index parameters. bIndex %d eIndex %d",
+                __FUNCTION__, __LINE__,
+                bIndex, eIndex);
+        ret = BAD_VALUE;
+        goto func_exit;
+    }
+
     if (isMetaPlane == true) {
         mapNeeded = true;
     } else {
@@ -1021,9 +1049,9 @@ status_t ExynosCameraBufferManager::m_defaultAlloc(int bIndex, int eIndex, bool 
         }
 
         for (int planeIndex = planeIndexStart; planeIndex < planeIndexEnd; planeIndex++) {
-            if (m_buffer[bufIndex].addr[planeIndex] != NULL) {
-                CLOGE("ERR(%s[%d]):buffer[%d].addr[%d] already allocated",
-                        __FUNCTION__, __LINE__, bufIndex, planeIndex);
+            if (m_buffer[bufIndex].fd[planeIndex] >= 0) {
+                CLOGE("ERR(%s[%d]):buffer[%d].fd[%d] = %d already allocated",
+                        __FUNCTION__, __LINE__, bufIndex, planeIndex, m_buffer[bufIndex].fd[planeIndex]);
                 continue;
             }
 
@@ -1034,10 +1062,51 @@ status_t ExynosCameraBufferManager::m_defaultAlloc(int bIndex, int eIndex, bool 
                     mask,
                     flags,
                     mapNeeded) != NO_ERROR) {
+#if defined(RESERVED_MEMORY_ENABLE) && defined(RESERVED_MEMORY_REALLOC_WITH_ION)
+                if (m_buffer[bufIndex].type == EXYNOS_CAMERA_BUFFER_ION_RESERVED_TYPE) {
+                    CLOGE("ERR(%s[%d]):Realloc with ion:bufIndex(%d), m_reservedMemoryCount(%d),"
+                        " non-cached. so, alloc ion memory instead of reserved memory",
+                        __FUNCTION__, __LINE__, bufIndex, m_reservedMemoryCount);
+
+                    mask  = EXYNOS_CAMERA_BUFFER_ION_MASK_NONCACHED;
+                    flags = EXYNOS_CAMERA_BUFFER_ION_FLAG_NONCACHED;
+                    estimatedBase = EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_NONCACHED;
+                } else if (m_buffer[bufIndex].type == EXYNOS_CAMERA_BUFFER_ION_CACHED_RESERVED_TYPE) {
+                    CLOGE("ERR(%s[%d]):Realloc with ion:bufIndex(%d), m_reservedMemoryCount(%d),"
+                        " cached. so, alloc ion memory instead of reserved memory",
+                        __FUNCTION__, __LINE__, bufIndex, m_reservedMemoryCount);
+
+                    mask  = EXYNOS_CAMERA_BUFFER_ION_MASK_CACHED;
+                    flags = EXYNOS_CAMERA_BUFFER_ION_FLAG_CACHED;
+                    estimatedBase = EXYNOS_CAMERA_BUFFER_ION_WARNING_TIME_CACHED;
+                } else {
+                    CLOGE("ERR(%s[%d]):m_defaultAllocator->alloc(bufIndex=%d, planeIndex=%d, planeIndex=%d) failed",
+                        __FUNCTION__, __LINE__, bufIndex, planeIndex, m_buffer[bufIndex].size[planeIndex]);
+
+                    ret = INVALID_OPERATION;
+                    goto func_exit;                   
+                }
+
+                if (m_defaultAllocator->alloc(
+                        m_buffer[bufIndex].size[planeIndex],
+                        &(m_buffer[bufIndex].fd[planeIndex]),
+                        &(m_buffer[bufIndex].addr[planeIndex]),
+                        mask,
+                        flags,
+                        mapNeeded) != NO_ERROR) {
+                    CLOGE("ERR(%s[%d]):m_defaultAllocator->alloc(bufIndex=%d, planeIndex=%d, planeIndex=%d) failed",
+                        __FUNCTION__, __LINE__, bufIndex, planeIndex, m_buffer[bufIndex].size[planeIndex]);
+                    ret = INVALID_OPERATION;
+                    goto func_exit;
+                }
+
+#else
                 CLOGE("ERR(%s[%d]):m_defaultAllocator->alloc(bufIndex=%d, planeIndex=%d, planeIndex=%d) failed",
                     __FUNCTION__, __LINE__, bufIndex, planeIndex, m_buffer[bufIndex].size[planeIndex]);
+
                 ret = INVALID_OPERATION;
                 goto func_exit;
+#endif
             }
 #ifdef EXYNOS_CAMERA_BUFFER_TRACE
             printBufferInfo(__FUNCTION__, __LINE__, bufIndex, planeIndex);
@@ -1080,7 +1149,7 @@ func_exit:
     EXYNOS_CAMERA_BUFFER_OUT();
 
     if (bufIndex < eIndex) {
-        if (m_defaultFree(0, bufIndex, m_hasMetaPlane) != NO_ERROR) {
+        if (m_defaultFree(0, bufIndex, isMetaPlane) != NO_ERROR) {
             CLOGE("ERR(%s[%d]):m_defaultFree failed", __FUNCTION__, __LINE__);
         }
     }
@@ -1757,7 +1826,7 @@ GrallocExynosCameraBufferManager::GrallocExynosCameraBufferManager()
 #ifdef USE_GRALLOC_BUFFER_COLLECTOR
     m_collectedBufferCount = 0;
 
-    m_stopBufferColletor = false;
+    m_stopBufferCollector = false;
     m_bufferCollector = new grallocBufferThread(this, &GrallocExynosCameraBufferManager::m_bufferCollectorThreadFunc, "GrallocBufferCollector", PRIORITY_DEFAULT);
 #endif
 
@@ -1869,11 +1938,14 @@ status_t GrallocExynosCameraBufferManager::m_alloc(int bIndex, int eIndex)
     CLOGD("DEBUG(%s[%d]):Duration time of buffer allocation(%5d msec)", __FUNCTION__, __LINE__, (int)durationTimeSum);
 
     for (int bufIndex = bIndex; bufIndex < eIndex; bufIndex++) {
+#ifdef USE_GRALLOC_REUSE_SUPPORT
+        m_cancelReuseBuffer(bufIndex, true);
+#else
 #ifdef EXYNOS_CAMERA_BUFFER_TRACE
         CLOGD("DEBUG(%s[%d]):-- dump buffer status --", __FUNCTION__, __LINE__);
         dump();
 #endif
-        if (m_allocator->cancelBuffer(m_handle[bufIndex]) != 0) {
+        if (m_allocator->cancelBuffer(m_handle[bufIndex], &m_lock) != 0) {
             CLOGE("ERR(%s[%d]):could not free [bufIndex=%d]", __FUNCTION__, __LINE__, bufIndex);
             goto func_exit;
         }
@@ -1890,13 +1962,11 @@ status_t GrallocExynosCameraBufferManager::m_alloc(int bIndex, int eIndex)
             ret = INVALID_OPERATION;
             goto func_exit;
         }
+#endif
     }
 
-
 #ifdef USE_GRALLOC_BUFFER_COLLECTOR
-    if (m_collectedBufferCount < MAX_BUFFER_COLLECT_COUNT
-        && m_dequeuedBufCount < (m_allowedMaxBufCount - m_indexOffset - m_minUndequeuedBufCount))
-        m_bufferCollector->run();
+    m_bufferCollector->run();
 #endif
 #ifdef EXYNOS_CAMERA_BUFFER_TRACE
     CLOGI("INFO(%s[%d]):before exit m_alloc m_dequeuedBufCount=%d, m_minUndequeuedBufCount=%d",
@@ -1976,12 +2046,12 @@ status_t GrallocExynosCameraBufferManager::m_putBuffer(int bufIndex)
 
     status_t ret = NO_ERROR;
 
-    if (m_handle[bufIndex] != NULL &&
-        m_buffer[bufIndex].status.position == EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL) {
-        if (m_allocator->enqueueBuffer(m_handle[bufIndex]) != 0) {
-            CLOGE("ERR(%s[%d]):could not enqueue_buffer [bufIndex=%d]",
-                __FUNCTION__, __LINE__, bufIndex);
-            CLOGD("DEBUG(%s[%d]):dump buffer status", __FUNCTION__, __LINE__);
+    if (m_handle[bufIndex] != NULL
+        && m_buffer[bufIndex].status.position == EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL) {
+        ret = m_allocator->enqueueBuffer(m_handle[bufIndex], &m_lock);
+        if (ret != NO_ERROR) {
+            CLOGE("could not enqueue_buffer [bufIndex=%d]",
+                    bufIndex);
             dump();
             goto func_exit;
         }
@@ -2052,8 +2122,8 @@ status_t GrallocExynosCameraBufferManager::m_getBuffer(int *bufIndex, __unused i
             &bufHandle,
             bufferFd,
             (char **)bufferAddr,
-            &isLocked) != NO_ERROR) {
-        CLOGE("ERR(%s[%d]):dequeueBuffer failed", __FUNCTION__, __LINE__);
+            &isLocked, &m_lock) != NO_ERROR) {
+        CLOGE("dequeueBuffer failed");
         ret = INVALID_OPERATION;
         goto func_exit;
     }
@@ -2080,7 +2150,7 @@ status_t GrallocExynosCameraBufferManager::m_getBuffer(int *bufIndex, __unused i
 
     if (isExistedBuffer == false) {
         CLOGI("INFO(%s[%d]):not existedBuffer!", __FUNCTION__, __LINE__);
-        if (m_allocator->cancelBuffer(bufHandle) != 0) {
+        if (m_allocator->cancelBuffer(bufHandle, &m_lock) != 0) {
             CLOGE("ERR(%s[%d]):could not cancelBuffer [bufferIndex=%d]",
                 __FUNCTION__, __LINE__, bufferIndex);
         }
@@ -2149,10 +2219,6 @@ status_t GrallocExynosCameraBufferManager::m_getBuffer(int *bufIndex, __unused i
 #endif
 
 func_exit:
-#ifdef USE_GRALLOC_BUFFER_COLLECTOR
-    if (m_collectedBufferCount < MAX_BUFFER_COLLECT_COUNT && m_dequeuedBufCount < (m_allowedMaxBufCount - m_indexOffset - m_minUndequeuedBufCount))
-        m_bufferCollector->run();
-#endif
     EXYNOS_CAMERA_BUFFER_OUT();
 
     return ret;
@@ -2238,7 +2304,7 @@ status_t GrallocExynosCameraBufferManager::cancelBuffer(int bufIndex)
     }
 #endif
 
-    if (m_allocator->cancelBuffer(m_handle[bufIndex]) != 0) {
+    if (m_allocator->cancelBuffer(m_handle[bufIndex], &m_lock) != 0) {
         CLOGE("ERR(%s[%d]):could not cancel buffer [bufIndex=%d]", __FUNCTION__, __LINE__, bufIndex);
         goto func_exit;
     }
@@ -2292,7 +2358,7 @@ void GrallocExynosCameraBufferManager::deinit(void)
 
 #ifdef USE_GRALLOC_BUFFER_COLLECTOR
     /* declare thread will stop */
-    m_stopBufferColletor = true;
+    m_stopBufferCollector = true;
 #endif
 
     ExynosCameraBufferManager::deinit();
@@ -2301,8 +2367,8 @@ void GrallocExynosCameraBufferManager::deinit(void)
     /* thread stop */
     m_bufferCollector->requestExitAndWait();
 
-    /* after thread end, reset m_stopBufferColletor as default */
-    m_stopBufferColletor = false;
+    /* after thread end, reset m_stopBufferCollector as default */
+    m_stopBufferCollector = false;
 #endif
 
     CLOGD("DEBUG(%s[%d]):OUT..", __FUNCTION__, __LINE__);
@@ -2316,7 +2382,7 @@ status_t GrallocExynosCameraBufferManager::resetBuffers(void)
 
 #ifdef USE_GRALLOC_BUFFER_COLLECTOR
     /* declare thread will stop */
-    m_stopBufferColletor = true;
+    m_stopBufferCollector = true;
 #endif
 
     ret = ExynosCameraBufferManager::resetBuffers();
@@ -2328,8 +2394,8 @@ status_t GrallocExynosCameraBufferManager::resetBuffers(void)
     /* thread stop */
     m_bufferCollector->requestExitAndWait();
 
-    /* after thread end, reset m_stopBufferColletor as default */
-    m_stopBufferColletor = false;
+    /* after thread end, reset m_stopBufferCollector as default */
+    m_stopBufferCollector = false;
 #endif
 
     CLOGD("DEBUG(%s[%d]):OUT..", __FUNCTION__, __LINE__);
@@ -2461,8 +2527,8 @@ bool GrallocExynosCameraBufferManager::m_bufferCollectorThreadFunc(void)
     bool  isLocked = false;
     uint8_t tryCount = 0;
 
-    if (m_stopBufferColletor == true) {
-        CLOGD("DEBUG(%s[%d]):m_stopBufferColletor == true. so, just return. m_collectedBufferCount(%d)",
+    if (m_stopBufferCollector == true) {
+        CLOGD("DEBUG(%s[%d]):m_stopBufferCollector == true. so, just return. m_collectedBufferCount(%d)",
                 __FUNCTION__, __LINE__, m_collectedBufferCount);
         return false;
     }
@@ -2474,7 +2540,7 @@ bool GrallocExynosCameraBufferManager::m_bufferCollectorThreadFunc(void)
         CLOGD("DEBUG(%s[%d]): bufferCollector just return. m_collectedBufferCount(%d) m_dequeuedBufCount(%d)",
                 __FUNCTION__, __LINE__, m_collectedBufferCount, m_dequeuedBufCount);
 #endif
-        return false;
+        goto EXIT;
     }
 
     /* Blocking Function :
@@ -2482,21 +2548,31 @@ bool GrallocExynosCameraBufferManager::m_bufferCollectorThreadFunc(void)
        it will be blocked until the buffer which is being rendered
        is released.
      */
-    ret = m_allocator->dequeueBuffer(&bufHandle,
-            bufferFd,
-            (char **) bufferAddr,
-            &isLocked);
-    if (ret != NO_ERROR) {
+    {  // Autolock scope
+        Mutex::Autolock lock(m_lock);
+        ret = m_allocator->dequeueBuffer(&bufHandle,
+                bufferFd,
+                (char **) bufferAddr,
+                &isLocked, &m_lock);
+    }  // Autolock scope
+    if (ret == NO_INIT) {
+        CLOGW("WARN(%s[%d]):BufferQueue is abandoned!", __FUNCTION__, __LINE__);
+        return false;
+    } else if (ret != NO_ERROR) {
         CLOGE("ERR(%s[%d]):dequeueBuffer failed, dequeue(%d), collected(%d)",
                 __FUNCTION__, __LINE__, m_dequeuedBufCount, m_collectedBufferCount);
-        return false;
+        goto EXIT;
+    } else if (bufHandle == NULL) {
+        CLOGE("ERR(%s[%d]):Buffer handle is NULL, dequeue(%d), collected(%d)",
+                __FUNCTION__, __LINE__, m_dequeuedBufCount, m_collectedBufferCount);
+        goto EXIT;
     }
 
     if (m_indexOffset < 0
             || VIDEO_MAX_FRAME < (m_reqBufCount + m_indexOffset)) {
         CLOGE("ERR(%s[%d]):abnormal value [m_indexOffset=%d, m_reqBufCount=%d]",
                 __FUNCTION__, __LINE__, m_indexOffset, m_reqBufCount);
-        return false;
+        goto EXIT;
     }
 
     for (int index = m_indexOffset; index < m_reqBufCount + m_indexOffset; index++) {
@@ -2514,28 +2590,32 @@ bool GrallocExynosCameraBufferManager::m_bufferCollectorThreadFunc(void)
 
     if (isExistedBuffer == false) {
         CLOGI("INFO(%s[%d]):not existedBuffer!", __FUNCTION__, __LINE__);
-        if (m_allocator->cancelBuffer(bufHandle) != 0) {
+        m_lock.lock();
+        if (m_allocator->cancelBuffer(bufHandle, &m_lock) != 0) {
             CLOGE("ERR(%s[%d]):could not cancelBuffer [bufferIndex=%d]",
                     __FUNCTION__, __LINE__, bufferIndex);
         }
-        return false;
+        m_lock.unlock();
+        goto EXIT;
     }
 
-    if (m_stopBufferColletor == true) {
-        CLOGD("DEBUG(%s[%d]):m_stopBufferColletor == true. so, just cancel. m_collectedBufferCount(%d)",
+    if (m_stopBufferCollector == true) {
+        CLOGD("DEBUG(%s[%d]):m_stopBufferCollector == true. so, just cancel. m_collectedBufferCount(%d)",
                 __FUNCTION__, __LINE__, m_collectedBufferCount);
 
-        if (m_allocator->cancelBuffer(bufHandle) != 0) {
+        m_lock.lock();
+        if (m_allocator->cancelBuffer(bufHandle, &m_lock) != 0) {
             CLOGE("ERR(%s[%d]):could not cancelBuffer [bufferIndex=%d]",
                     __FUNCTION__, __LINE__, bufferIndex);
         }
+        m_lock.unlock();
         return false;
     }
 
     if (bufferIndex < 0 || VIDEO_MAX_FRAME <= bufferIndex) {
         CLOGE("ERR(%s[%d]):abnormal value [bufferIndex=%d]",
                 __FUNCTION__, __LINE__, bufferIndex);
-        return false;
+        goto EXIT;
     }
 
     priv_handle = private_handle_t::dynamicCast(*bufHandle);
@@ -2608,11 +2688,14 @@ bool GrallocExynosCameraBufferManager::m_bufferCollectorThreadFunc(void)
         m_lock.unlock();
     }
 
-    /* Gralloc Dequeue Buffer is Done */
-    if (m_collectedBufferCount < MAX_BUFFER_COLLECT_COUNT) {
-        return true;
+EXIT:
+    while ((m_collectedBufferCount >= MAX_BUFFER_COLLECT_COUNT
+           || m_dequeuedBufCount >= (m_allowedMaxBufCount - m_indexOffset - m_minUndequeuedBufCount))
+           && m_stopBufferCollector == false) {
+        usleep(BUFFER_COLLECTOR_WAITING_TIME);
     }
-    return false;
+
+    return true;
 }
 
 status_t GrallocExynosCameraBufferManager::m_getCollectedBuffer(int *bufIndex)
@@ -3051,6 +3134,48 @@ func_exit:
     return NO_ERROR;
 }
 
+status_t ServiceExynosCameraBufferManager::m_compareFdOfBufferHandle(const buffer_handle_t* handle, const ExynosCameraBuffer* exynosBuf) {
+    bool fdCmp = true;
+    const private_handle_t * privHandle = NULL;
+    int fdCmpPlaneNum = 0;
+
+    if (handle == NULL)
+        return BAD_VALUE;
+    if (exynosBuf == NULL)
+        return BAD_VALUE;
+
+    privHandle = private_handle_t::dynamicCast(*handle);
+    if (privHandle == NULL)
+        return BAD_VALUE;
+
+    fdCmpPlaneNum = (m_hasMetaPlane) ? exynosBuf->planeCount- 1 : exynosBuf->planeCount;
+    switch(fdCmpPlaneNum) {
+        /* Compare each plane's DMA fd */
+        case 3:
+            fdCmp = fdCmp && (exynosBuf->fd[2] == privHandle->fd2);
+        case 2:
+            fdCmp = fdCmp && (exynosBuf->fd[1] == privHandle->fd1);
+        case 1:
+            fdCmp = fdCmp && (exynosBuf->fd[0] == privHandle->fd);
+            break;
+        default:
+            CLOGE("ERR(%s[%d]):Invalid plane count [m_buffer.planeCount=%d, m_hasMetaPlane=%d]",
+                    __FUNCTION__, __LINE__, exynosBuf->planeCount, m_hasMetaPlane);
+            return INVALID_OPERATION;
+    }
+
+    if(fdCmp == true) {
+        return NO_ERROR;
+    } else {
+        CLOGI("INFO(%s[%d]): same handle but different FD : index[%d] handleFd[%d/%d/%d] - bufFd[%d/%d/%d]"
+            , __FUNCTION__, __LINE__
+            , exynosBuf->index
+            , privHandle->fd, privHandle->fd1, privHandle->fd2
+            , exynosBuf->fd[0], exynosBuf->fd[1], exynosBuf->fd[2]);
+        return NAME_NOT_FOUND;
+    }
+}
+
 status_t ServiceExynosCameraBufferManager::m_registerBuffer(buffer_handle_t **handle, int index)
 {
     status_t ret = OK;
@@ -3059,8 +3184,19 @@ status_t ServiceExynosCameraBufferManager::m_registerBuffer(buffer_handle_t **ha
     if (handle == NULL)
         return BAD_VALUE;
 
-    if (m_handleIsLocked[index] == true)
-        return NO_ERROR;
+    const private_handle_t * privHandle = private_handle_t::dynamicCast(**handle);
+    CLOGV("DEBUG(%s[%d]): register handle[%d/%d/%d] - buf[index:%d][%d/%d/%d]"
+        , __FUNCTION__, __LINE__
+            , privHandle->fd, privHandle->fd1, privHandle->fd2
+            , index, m_buffer[index].fd[0], m_buffer[index].fd[1], m_buffer[index].fd[2]);
+
+    if (m_handleIsLocked[index] == true) {
+        /* Check the contents of buffer_handle_t */
+        if(m_compareFdOfBufferHandle(*handle, &m_buffer[index]) == NO_ERROR) {
+            return NO_ERROR;
+        }
+        /* Otherwise, DMA fd shoud be updated on following codes. */
+    }
 
     m_handle[index] = *handle;
 

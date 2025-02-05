@@ -733,28 +733,6 @@ void getMetaCtlWbLevel(struct camera2_shot_ext *shot_ext, int32_t *wbLevel)
     *wbLevel = shot_ext->shot.ctl.aa.vendor_awbValue;
 }
 
-void setMetaCtlStatsRoi(
-struct camera2_shot_ext *shot_ext,
-    int32_t x, int32_t y, int32_t w, int32_t h)
-{
-    shot_ext->shot.uctl.statsRoi[0] = x;
-    shot_ext->shot.uctl.statsRoi[1] = y;
-    shot_ext->shot.uctl.statsRoi[2] = w;
-    shot_ext->shot.uctl.statsRoi[3] = h;
-}
-
-void setMetaCtlMasterCamera(struct camera2_shot_ext *shot_ext, enum aa_cameraMode cameraMode, enum aa_sensorPlace masterCamera)
-{
-    shot_ext->shot.uctl.cameraMode = cameraMode;
-    shot_ext->shot.uctl.masterCamera = masterCamera;
-}
-
-void getMetaCtlMasterCamera(struct camera2_shot_ext *shot_ext, enum aa_cameraMode *cameraMode, enum aa_sensorPlace *masterCamera)
-{
-    *cameraMode   = shot_ext->shot.udm.cameraMode;
-    *masterCamera = shot_ext->shot.udm.masterCamera;
-}
-
 #ifdef USE_FW_ZOOMRATIO
 void setMetaCtlZoom(struct camera2_shot_ext *shot_ext, float data)
 {
@@ -1015,6 +993,21 @@ void setMetaCtlSceneMode(struct camera2_shot_ext *shot_ext, enum aa_mode mode, e
         shot_ext->shot.ctl.edge.strength = default_edge_strength;
         shot_ext->shot.ctl.color.vendor_saturation = 3; /* "3" is default. */
         break;
+#ifdef SAMSUNG_FOOD_MODE
+    case AA_SCENE_MODE_FOOD:
+        shot_ext->shot.ctl.aa.aeMode = AA_AEMODE_MATRIX;
+
+        shot_ext->shot.ctl.aa.awbMode = AA_AWBMODE_WB_AUTO;
+        shot_ext->shot.ctl.aa.vendor_isoMode = AA_ISOMODE_AUTO;
+        shot_ext->shot.ctl.aa.vendor_isoValue = 0;
+        shot_ext->shot.ctl.sensor.sensitivity = 0;
+        shot_ext->shot.ctl.noise.mode = default_noise_mode;
+        shot_ext->shot.ctl.noise.strength = default_noise_strength;
+        shot_ext->shot.ctl.edge.mode = default_edge_mode;
+        shot_ext->shot.ctl.edge.strength = default_edge_strength;
+        shot_ext->shot.ctl.color.vendor_saturation = 3; /* "3" is default. */
+        break;
+#endif
     case AA_SCENE_MODE_AQUA:
         /* set default setting */
         if (shot_ext->shot.ctl.aa.aeMode == AA_AEMODE_OFF)
@@ -1708,20 +1701,48 @@ status_t readFromFile(char *fileName, char *dstBuf, uint32_t size)
 }
 
 status_t getYuvPlaneSize(int format, unsigned int *size,
-                      unsigned int width, unsigned int height)
+                      unsigned int width, unsigned int height,
+                      camera_pixel_size pixelSize)
 {
     unsigned int frame_ratio = 1;
-    unsigned int frame_size = width * height;
+    unsigned int frame_size = 0;
     unsigned int src_bpp = 0;
     unsigned int src_planes = 0;
 
-    if (getV4l2FormatInfo(format, &src_bpp, &src_planes) < 0){
+    if (getV4l2FormatInfo(format, &src_bpp, &src_planes, pixelSize) < 0){
         ALOGE("ERR(%s[%d]): invalid format(%x)", __FUNCTION__, __LINE__, format);
         return BAD_VALUE;
     }
 
+    if (src_bpp == 0) {
+        ALOGE("ERR(%s[%d]): invalid bpp(%d), format %c%c%c%c",
+            __FUNCTION__, __LINE__, src_bpp,
+            v4l2Format2Char(format, 0),
+            v4l2Format2Char(format, 1),
+            v4l2Format2Char(format, 2),
+            v4l2Format2Char(format, 3));
+        return BAD_VALUE;
+    }
+
     src_planes = (src_planes == 0) ? 1 : src_planes;
-    frame_ratio = 8 * (src_planes -1) / (src_bpp - 8);
+    switch (pixelSize) {
+    case CAMERA_PIXEL_SIZE_8BIT:
+        frame_size = width * height;
+        frame_ratio = 8 * (src_planes - 1) / (src_bpp - 8);
+        break;
+    case CAMERA_PIXEL_SIZE_10BIT:
+        frame_size = (width * 2) * height;
+        frame_ratio = 16 * (src_planes - 1) / (src_bpp - 16);
+        break;
+    case CAMERA_PIXEL_SIZE_PACKED_10BIT:
+    case CAMERA_PIXEL_SIZE_8_2BIT:
+        frame_size = ALIGN_UP((unsigned int)((double)(width * 2) * (10.0 / 16.0)), CAMERA_16PX_ALIGN) * height;
+        frame_ratio = 10 * (src_planes - 1) / (src_bpp - 10);
+        break;
+    default:
+        ALOGE("ERR(%s[%d]): invalid pixel size number(%d)", __FUNCTION__, __LINE__, pixelSize);
+        return BAD_VALUE;
+    }
 
     switch (src_planes) {
     case 1:
@@ -1757,9 +1778,23 @@ status_t getYuvPlaneSize(int format, unsigned int *size,
         size[2] = 0;
         break;
     case 2:
-        size[0] = frame_size;
-        size[1] = frame_size / frame_ratio;
-        size[2] = 0;
+        switch (format) {
+        case V4L2_PIX_FMT_NV12M_S10B:
+            size[0] = NV12M_Y_SIZE(width, height) + NV12M_Y_2B_SIZE(width, height);
+            size[1] = NV12M_CBCR_SIZE(width, height) + NV12M_CBCR_2B_SIZE(width, height);
+            size[2] = 0;
+            break;
+        case V4L2_PIX_FMT_NV16M_S10B:
+            size[0] = NV16M_Y_SIZE(width, height) + NV16M_Y_2B_SIZE(width, height);
+            size[1] = NV16M_CBCR_SIZE(width, height) + NV16M_CBCR_2B_SIZE(width, height);
+            size[2] = 0;
+            break;
+        default:
+            size[0] = frame_size;
+            size[1] = frame_size / frame_ratio;
+            size[2] = 0;
+            break;
+        }
         break;
     case 3:
         size[0] = frame_size;
@@ -1776,7 +1811,7 @@ status_t getYuvPlaneSize(int format, unsigned int *size,
 }
 
 status_t getV4l2FormatInfo(unsigned int v4l2_pixel_format,
-                          unsigned int *bpp, unsigned int *planes)
+                          unsigned int *bpp, unsigned int *planes, camera_pixel_size pixelSize)
 {
     switch (v4l2_pixel_format) {
     case V4L2_PIX_FMT_NV12:
@@ -1801,12 +1836,34 @@ status_t getV4l2FormatInfo(unsigned int v4l2_pixel_format,
         *bpp    = 12;
         *planes = 3;
         break;
+    case V4L2_PIX_FMT_NV12M_P010:
+        *planes = 2;
+        if (pixelSize == CAMERA_PIXEL_SIZE_10BIT) {
+            *bpp    = 24;
+        } else if (pixelSize == CAMERA_PIXEL_SIZE_PACKED_10BIT) {
+            *bpp    = 15;
+        } else {
+            *bpp    = 0;
+        }
+        break;
+    case V4L2_PIX_FMT_NV12M_S10B:
+        *bpp    = 15;
+        *planes = 2;
+        break;
     case V4L2_PIX_FMT_YUYV:
     case V4L2_PIX_FMT_YVYU:
     case V4L2_PIX_FMT_UYVY:
     case V4L2_PIX_FMT_VYUY:
-        *bpp    = 16;
         *planes = 1;
+        if (pixelSize == CAMERA_PIXEL_SIZE_8BIT) {
+            *bpp    = 16;
+        } else if (pixelSize == CAMERA_PIXEL_SIZE_10BIT) { /* Y210 format */
+            *bpp    = 32;
+        } else if (pixelSize == CAMERA_PIXEL_SIZE_PACKED_10BIT) { /* Y210 packed format */
+            *bpp    = 20;
+        } else {
+            *bpp    = 0;
+        }
         break;
     case V4L2_PIX_FMT_NV16:
     case V4L2_PIX_FMT_NV61:
@@ -1819,6 +1876,16 @@ status_t getV4l2FormatInfo(unsigned int v4l2_pixel_format,
         *planes = 2;
         break;
     case V4L2_PIX_FMT_NV16M_P210:
+        *planes = 2;
+        if (pixelSize == CAMERA_PIXEL_SIZE_10BIT) {
+            *bpp    = 32;
+        } else if (pixelSize == CAMERA_PIXEL_SIZE_PACKED_10BIT) {
+            *bpp    = 20;
+        } else {
+            *bpp    = 0;
+        }
+        break;
+    case V4L2_PIX_FMT_NV16M_S10B:
         *bpp    = 20;
         *planes = 2;
         break;
@@ -1855,13 +1922,13 @@ status_t getV4l2FormatInfo(unsigned int v4l2_pixel_format,
     return NO_ERROR;
 }
 
-int getYuvPlaneCount(unsigned int v4l2_pixel_format)
+int getYuvPlaneCount(unsigned int v4l2_pixel_format, camera_pixel_size pixelSize)
 {
     int ret = 0;
     unsigned int bpp = 0;
     unsigned int planeCnt = 0;
 
-    ret = getV4l2FormatInfo(v4l2_pixel_format, &bpp, &planeCnt);
+    ret = getV4l2FormatInfo(v4l2_pixel_format, &bpp, &planeCnt, pixelSize);
     if (ret < 0) {
         ALOGE("ERR(%s[%d]): BAD_VALUE", __FUNCTION__, __LINE__);
         return -1;
@@ -1899,6 +1966,12 @@ int getSensorIdFromFile(int camId)
             goto err;
         }
 #if defined(SENSOR_NAME_PATH_SECURE)
+    } else if (camId == CAMERA_ID_SECURE) {
+        fp = fopen(SENSOR_NAME_PATH_SECURE, "r");
+        if (fp == NULL) {
+            ALOGE("ERR(%s[%d]):failed to open sysfs entry", __FUNCTION__, __LINE__);
+            goto err;
+        }
 #endif
 #ifdef USE_DUAL_CAMERA
     } else if (camId == CAMERA_ID_BACK_1) {
@@ -2462,6 +2535,10 @@ int getFliteNodenum(int cameraId)
         fliteNodeNum = FRONT_1_CAMERA_FLITE_NUM;
         break;
 #endif
+    case CAMERA_ID_SECURE:
+        /*HACK : SECURE_CAMERA_FLITE_NUM is not defined, so use FIMC_IS_VIDEO_SS3_NUM */
+        fliteNodeNum = FIMC_IS_VIDEO_SS3_NUM;
+        break;
     default:
         android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Unexpected cameraId(%d), assert!!!!",
             __FUNCTION__, __LINE__, cameraId);
@@ -2538,30 +2615,96 @@ status_t updateYsumBuffer(struct ysum_data *ysumdata, ExynosCameraBuffer *dstBuf
 {
     ExynosVideoMeta *videoMeta = NULL;
 
+    if (ysumdata == NULL) {
+        ALOGE("ysumdata null");
+        return -BAD_VALUE;
+    }
+
+    if (dstBuf == NULL) {
+        ALOGE(" dstBuf null");
+        return -BAD_VALUE;
+    }
+
     if (dstBuf->batchSize > 1) {
         ALOGD("YSUM recording does not support batch mode. only works at 30, 60 fps.");
         return NO_ERROR;
     }
 
-    int ysumPlaneIndex = dstBuf->getMetaPlaneIndex() - 1;
-    if (dstBuf->size[ysumPlaneIndex] != EXYNOS_CAMERA_YSUM_PLANE_SIZE) {
+    int videoMetaPlaneIndex = dstBuf->getMetaPlaneIndex() - 1;
+    if (dstBuf->size[videoMetaPlaneIndex] != EXYNOS_CAMERA_VIDEO_META_PLANE_SIZE) {
         android_printAssert(NULL, LOG_TAG,
-                        "ASSERT(%s):Invalid access to ysum plane. planeIndex %d size %d",
-                        __FUNCTION__, ysumPlaneIndex, dstBuf->size[ysumPlaneIndex]);
+                        "ASSERT(%s):Invalid access to video met plane. planeIndex %d size %d",
+                        __FUNCTION__, videoMetaPlaneIndex, dstBuf->size[videoMetaPlaneIndex]);
         return -BAD_VALUE;
     }
 
-    videoMeta = (ExynosVideoMeta *)dstBuf->addr[ysumPlaneIndex];
+    videoMeta = (ExynosVideoMeta *)dstBuf->addr[videoMetaPlaneIndex];
+
+    if (videoMeta == NULL) {
+        ALOGD("ysum buffer is null");
+        return INVALID_OPERATION;
+    }
 
     videoMeta->eType = VIDEO_INFO_TYPE_YSUM_DATA;
     videoMeta->data.enc.sYsumData.high = ysumdata->higher_ysum_value;
     videoMeta->data.enc.sYsumData.low = ysumdata->lower_ysum_value;
 
-    ALOGV("higher_ysum_value(%d), lower_ysum_value(%d)",
+    ALOGV("%s: higher_ysum(%ud), lower_ysum(%ud)",
+          __FUNCTION__,
           videoMeta->data.enc.sYsumData.high, videoMeta->data.enc.sYsumData.low);
 
     return NO_ERROR;
 }
+
+#ifdef SAMSUNG_HDR10_RECORDING
+status_t updateHDRBuffer(ExynosCameraBuffer *dstBuf)
+{
+    ExynosVideoMeta *videoMeta = NULL;
+    int videoMetaPlaneIndex = dstBuf->getMetaPlaneIndex() - 1;
+
+    if (dstBuf->size[videoMetaPlaneIndex] != EXYNOS_CAMERA_VIDEO_META_PLANE_SIZE) {
+        android_printAssert(NULL, LOG_TAG,
+                        "ASSERT(%s):Invalid access to video meta plane. planeIndex %d size %d",
+                        __FUNCTION__, videoMetaPlaneIndex, dstBuf->size[videoMetaPlaneIndex]);
+        return -BAD_VALUE;
+    }
+
+    videoMeta = (ExynosVideoMeta *)dstBuf->addr[videoMetaPlaneIndex];
+
+    videoMeta->eType = VIDEO_INFO_TYPE_HDR_STATIC;
+    videoMeta->sHdrStaticInfo.mID = 0; /* structure defined by Google, so do not know the meaning of mID. */
+    videoMeta->sHdrStaticInfo.sType1.mR.x = 140;
+    videoMeta->sHdrStaticInfo.sType1.mR.y = 150;
+
+    videoMeta->sHdrStaticInfo.sType1.mG.x = 160;
+    videoMeta->sHdrStaticInfo.sType1.mG.y = 170;
+
+    videoMeta->sHdrStaticInfo.sType1.mB.x = 180;
+    videoMeta->sHdrStaticInfo.sType1.mB.y = 190;
+
+    videoMeta->sHdrStaticInfo.sType1.mW.x = 80;
+    videoMeta->sHdrStaticInfo.sType1.mW.y = 90;
+
+    videoMeta->sHdrStaticInfo.sType1.mMaxDisplayLuminance = 100;
+    videoMeta->sHdrStaticInfo.sType1.mMinDisplayLuminance = 50;
+    videoMeta->sHdrStaticInfo.sType1.mMaxContentLightLevel = 6;
+    videoMeta->sHdrStaticInfo.sType1.mMaxFrameAverageLightLevel = 7;
+
+    ALOGV("mId(%d), mR(x:%d, y:%d), mG(x:%d, y:%d), mB(x:%d, y:%d), mW(x:%d, y:%d)",
+            videoMeta->sHdrStaticInfo.mID,
+            videoMeta->sHdrStaticInfo.sType1.mR.x, videoMeta->sHdrStaticInfo.sType1.mR.y,
+            videoMeta->sHdrStaticInfo.sType1.mG.x, videoMeta->sHdrStaticInfo.sType1.mG.y,
+            videoMeta->sHdrStaticInfo.sType1.mB.x, videoMeta->sHdrStaticInfo.sType1.mB.y,
+            videoMeta->sHdrStaticInfo.sType1.mW.x, videoMeta->sHdrStaticInfo.sType1.mW.y);
+    ALOGV("DisplayLuminance(max: %d, min: %d), MaxContentLightLevel(%d), MaxFrameAverageLightLevel(%d)",
+            videoMeta->sHdrStaticInfo.sType1.mMaxDisplayLuminance,
+            videoMeta->sHdrStaticInfo.sType1.mMinDisplayLuminance,
+            videoMeta->sHdrStaticInfo.sType1.mMaxContentLightLevel,
+            videoMeta->sHdrStaticInfo.sType1.mMaxFrameAverageLightLevel);
+
+    return NO_ERROR;
+}
+#endif /* SAMSUNG_HDR10_RECORDING */
 
 void getV4l2Name(char* colorName, size_t length, int colorFormat)
 {
@@ -2595,6 +2738,7 @@ void setPreviewProperty(bool on)
     }
 }
 
+#ifdef CAMERA_GED_FEATURE
 bool isFastenAeStableSupported(int cameraId)
 {
     bool ret = false;
@@ -2618,6 +2762,7 @@ bool isFastenAeStableSupported(int cameraId)
 
     return ret;
 }
+#endif
 
 }; /* namespace android */
 

@@ -29,6 +29,21 @@
 #include <dirent.h>
 #endif
 
+#ifdef LLS_CAPTURE
+#define MULTI_FRAME_SHOT_PARAMETERS   0xF124
+#endif
+
+#ifdef FLASHED_LLS_CAPTURE
+#define MULTI_FRAME_SHOT_FLASHED_INFO   0xF125
+#endif
+#ifdef LLS_REPROCESSING
+#define MULTI_FRAME_SHOT_BV_INFO        0xF127
+#endif
+
+#ifdef SR_CAPTURE
+#define MULTI_FRAME_SHOT_SR_EXTRA_INFO 0xF126
+#endif
+
 #ifdef TOUCH_AE
 #define AE_RESULT 0xF351
 #endif
@@ -56,7 +71,42 @@ ExynosCamera::ExynosCamera(int cameraId,  __unused camera_device_t *dev)
     m_use_companion = isCompanion(cameraId);
     memset(m_name, 0x00, sizeof(m_name));
 
+#ifdef SAMSUNG_COMPANION
+    m_companionNode = NULL;
+    m_companionThread = NULL;
+    CLOGI("INFO(%s):cameraId(%d), use_companion(%d)", __FUNCTION__, cameraId, m_use_companion);
+
+    if(m_use_companion == true) {
+        m_companionThread = new mainCameraThread(this, &ExynosCamera::m_companionThreadFunc,
+                                                  "companionshotThread", PRIORITY_URGENT_DISPLAY);
+        if (m_companionThread != NULL) {
+            m_companionThread->run();
+            CLOGD("DEBUG(%s): companionThread starts", __FUNCTION__);
+        } else {
+            CLOGE("(%s):failed the m_companionThread.", __FUNCTION__);
+        }
+    }
+#endif
+
+#if defined(SAMSUNG_EEPROM)
+    m_eepromThread = NULL;
+    if ((m_use_companion == false) && (isEEprom(getCameraId()) == true)) {
+        m_eepromThread = new mainCameraThread(this, &ExynosCamera::m_eepromThreadFunc,
+                                                  "cameraeepromThread", PRIORITY_URGENT_DISPLAY);
+        if (m_eepromThread != NULL) {
+            m_eepromThread->run();
+            CLOGD("DEBUG(%s): eepromThread starts", __FUNCTION__);
+        } else {
+            CLOGE("(%s): failed the m_eepromThread", __FUNCTION__);
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_COMPANION
+    m_exynosCameraParameters = new ExynosCameraParameters(m_cameraId, m_use_companion);
+#else
     m_exynosCameraParameters = new ExynosCameraParameters(m_cameraId);
+#endif
     m_cameraSensorId = getSensorId(m_cameraId);
     CLOGD("DEBUG(%s):Parameters(CameraId=%d / m_cameraSensorId=%d) created", __FUNCTION__, m_cameraId, m_cameraSensorId);
 
@@ -83,6 +133,9 @@ ExynosCamera::ExynosCamera(int cameraId,  __unused camera_device_t *dev)
     m_createInternalBufferManager(&m_3aaBufferMgr, "3A1_BUF");
     m_createInternalBufferManager(&m_ispBufferMgr, "ISP_BUF");
     m_createInternalBufferManager(&m_hwDisBufferMgr, "HW_DIS_BUF");
+#ifdef SAMSUNG_DNG
+    m_createInternalBufferManager(&m_fliteBufferMgr, "FLITE_BUF");
+#endif
 
     /* reprocessing Buffer */
     m_createInternalBufferManager(&m_ispReprocessingBufferMgr, "ISP_RE_BUF");
@@ -91,14 +144,23 @@ ExynosCamera::ExynosCamera(int cameraId,  __unused camera_device_t *dev)
     m_createInternalBufferManager(&m_sccBufferMgr, "SCC_BUF");
     m_createInternalBufferManager(&m_gscBufferMgr, "GSC_BUF");
     m_createInternalBufferManager(&m_jpegBufferMgr, "JPEG_BUF");
+#ifdef SUPPORT_SW_VDIS
+    m_createInternalBufferManager(&m_swVDIS_BufferMgr, "VDIS_BUF");
+#endif /*SUPPORT_SW_VDIS*/
 
     m_createInternalBufferManager(&m_postPictureGscBufferMgr, "POSTPICTURE_GSC_BUF");
-
+#ifdef SAMSUNG_LBP
+    m_createInternalBufferManager(&m_lbpBufferMgr, "LBP_BUF");
+#endif
     /* preview Buffer */
     m_scpBufferMgr = NULL;
     m_createInternalBufferManager(&m_previewCallbackBufferMgr, "PREVIEW_CB_BUF");
     m_createInternalBufferManager(&m_highResolutionCallbackBufferMgr, "HIGH_RESOLUTION_CB_BUF");
     m_fdCallbackHeap = NULL;
+#ifdef SR_CAPTURE
+    m_srCallbackHeap = NULL;
+    memset(m_faces_sr, 0, sizeof(camera_face_t) * NUM_OF_DETECTED_FACES);
+#endif
 
     /* recording Buffer */
     m_recordingCallbackHeap = NULL;
@@ -139,7 +201,9 @@ ExynosCamera::ExynosCamera(int cameraId,  __unused camera_device_t *dev)
     m_recordingQ = new frame_queue_t;
     m_recordingQ->setWaitTime(500000000);
     m_postPictureQ = new frame_queue_t(m_postPictureThread);
-
+#ifdef SAMSUNG_DEBLUR
+    m_deblurCaptureQ = new frame_queue_t(m_deblurCaptureThread);
+#endif
     for(int i = 0 ; i < MAX_NUM_PIPES ; i++ ) {
         m_mainSetupQ[i] = new frame_queue_t;
         m_mainSetupQ[i]->setWaitTime(550000000);
@@ -147,7 +211,21 @@ ExynosCamera::ExynosCamera(int cameraId,  __unused camera_device_t *dev)
     m_jpegCallbackQ = new jpeg_callback_queue_t;
     m_postviewCallbackQ = new postview_callback_queue_t;
     m_thumbnailCallbackQ = new thumbnail_callback_queue_t;
-
+#ifdef SAMSUNG_DEBLUR
+    m_detectDeblurCaptureQ = new deblur_capture_queue_t;
+#endif
+#ifdef SAMSUNG_LLS_DEBLUR
+    m_LDCaptureQ = new frame_queue_t(m_LDCaptureThread);
+#endif
+#ifdef SAMSUNG_LBP
+    m_LBPbufferQ = new lbp_queue_t;
+#endif
+#ifdef SAMSUNG_DNG
+    m_dngCaptureQ = new dng_capture_queue_t;
+#endif
+#ifdef SAMSUNG_BD
+    m_BDbufferQ = new bd_queue_t;
+#endif
     for (int threadNum = JPEG_SAVE_THREAD0; threadNum < JPEG_SAVE_THREAD_MAX_COUNT; threadNum++) {
         m_jpegSaveQ[threadNum] = new jpeg_callback_queue_t;
         m_jpegSaveQ[threadNum]->setWaitTime(2000000000);
@@ -163,9 +241,24 @@ ExynosCamera::ExynosCamera(int cameraId,  __unused camera_device_t *dev)
     m_pipeFrameVisionDoneQ->setWaitTime(2000000000);
 
     m_jpegCallbackQ->setWaitTime(1000000000);
+#ifdef SAMSUNG_LLS_DEBLUR
+    m_postviewCallbackQ->setWaitTime(2000000000);
+#else
     m_postviewCallbackQ->setWaitTime(1000000000);
+#endif
     m_thumbnailCallbackQ->setWaitTime(1000000000);
-
+#ifdef SAMSUNG_DEBLUR
+    m_detectDeblurCaptureQ->setWaitTime(1000000000);
+#endif
+#ifdef SAMSUNG_LBP
+    m_LBPbufferQ->setWaitTime(1000000000); //1sec
+#endif
+#ifdef SAMSUNG_DNG
+    m_dngCaptureQ->setWaitTime(1000000000);
+#endif
+#ifdef SAMSUNG_BD
+    m_BDbufferQ->setWaitTime(1000000000); //1sec
+#endif
     memset(&m_frameMetadata, 0, sizeof(camera_frame_metadata_t));
     memset(m_faces, 0, sizeof(camera_face_t) * NUM_OF_DETECTED_FACES);
 
@@ -178,6 +271,10 @@ ExynosCamera::ExynosCamera(int cameraId,  __unused camera_device_t *dev)
     m_flagStartFaceDetection = false;
     m_flagLLSStart = false;
     m_flagLightCondition = false;
+#ifdef SAMSUNG_CAMERA_EXTRA_INFO
+    m_flagFlashCallback = false;
+    m_flagHdrCallback = false;
+#endif
     m_fdThreshold = 0;
     m_captureSelector = NULL;
     m_sccCaptureSelector = NULL;
@@ -194,6 +291,81 @@ ExynosCamera::ExynosCamera(int cameraId,  __unused camera_device_t *dev)
 #endif
     m_skipCount = 0;
 
+#ifdef SAMSUNG_LLV
+#ifdef SAMSUNG_LLV_TUNING
+    m_LLVpowerLevel = UNI_PLUGIN_POWER_CONTROL_OFF;
+    m_checkLLVtuning();
+#endif
+    m_LLVstatus = LLV_UNINIT;
+    m_LLVpluginHandle = uni_plugin_load(LLV_PLUGIN_NAME);
+    if(m_LLVpluginHandle == NULL) {
+        CLOGE("[LLV](%s[%d]): LLV plugin load failed!!", __FUNCTION__, __LINE__);
+    }
+#endif
+
+#ifdef SAMSUNG_OT
+    m_OTstatus = UNI_PLUGIN_OBJECT_TRACKING_IDLE;
+    m_OTstart = OBJECT_TRACKING_IDLE;
+    m_OTisTouchAreaGet = false;
+    m_OTisWait = false;
+    m_OTpluginHandle = uni_plugin_load(OBJECT_TRACKING_PLUGIN_NAME);
+    if(m_OTpluginHandle == NULL) {
+        CLOGE("[OBTR](%s[%d]): Object Tracking plugin load failed!!", __FUNCTION__, __LINE__);
+    }
+#endif
+
+#ifdef SAMSUNG_LBP
+    m_LBPindex = 0;
+    m_LBPCount = 0;
+    m_isLBPlux = false;
+    m_isLBPon = false;
+    m_LBPpluginHandle = uni_plugin_load(BESTPHOTO_PLUGIN_NAME);
+    if(m_LBPpluginHandle == NULL) {
+        CLOGE("[LBP](%s[%d]):Bestphoto plugin load failed!!", __FUNCTION__, __LINE__);
+    }
+#endif
+
+#ifdef SAMSUNG_JQ
+    m_isJpegQtableOn = false;
+    m_JQpluginHandle = uni_plugin_load(JPEG_QTABLE_PLUGIN_NAME);
+    if(m_JQpluginHandle == NULL) {
+        CLOGE("[JQ](%s[%d]):JpegQtable plugin load failed!!", __FUNCTION__, __LINE__);
+    }
+#endif
+
+#ifdef SAMSUNG_BD
+    m_BDpluginHandle = uni_plugin_load(BLUR_DETECTION_PLUGIN_NAME);
+    if(m_BDpluginHandle == NULL) {
+        CLOGE("[BD](%s[%d]):BlurDetection plugin load failed!!", __FUNCTION__, __LINE__);
+    }
+    m_BDstatus = BLUR_DETECTION_IDLE;
+#endif
+
+#ifdef SAMSUNG_DEBLUR
+    m_DeblurpluginHandle = uni_plugin_load(DEBLUR_PLUGIN_NAME);
+    if(m_DeblurpluginHandle == NULL) {
+        CLOGE("[Deblur](%s[%d]):Deblur plugin load failed!!", __FUNCTION__, __LINE__);
+    }
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    m_LLSpluginHandle = uni_plugin_load(LLS_PLUGIN_NAME);
+    if(m_LLSpluginHandle == NULL) {
+        CLOGE("[LDC](%s[%d]):LLS plugin load failed!!", __FUNCTION__, __LINE__);
+    }
+#endif
+
+#ifdef SAMSUNG_HLV
+    m_HLV = NULL;
+    m_HLVprocessStep = HLV_PROCESS_DONE;
+#endif
+
+#ifdef SAMSUNG_DOF
+    m_lensmoveCount = 0;
+    m_AFstatus = ExynosCameraActivityAutofocus::AUTOFOCUS_STATE_NONE;
+    m_currentSetStart = false;
+    m_flagMetaDataSet = false;
+#endif
 #ifdef FPS_CHECK
     for (int i = 0; i < DEBUG_MAX_PIPE_NUM; i++)
         m_debugFpsCount[i] = 0;
@@ -203,6 +375,10 @@ ExynosCamera::ExynosCamera(int cameraId,  __unused camera_device_t *dev)
     m_disablePreviewCB = false;
     m_checkFirstFrameLux = false;
 
+#ifdef LLS_CAPTURE
+    for (int i = 0; i < LLS_HISTORY_COUNT; i++)
+        m_needLLS_history[i] = 0;
+#endif
     m_callbackState = 0;
     m_callbackStateOld = 0;
     m_callbackMonitorCount = 0;
@@ -213,6 +389,38 @@ ExynosCamera::ExynosCamera(int cameraId,  __unused camera_device_t *dev)
     m_skipReprocessing = false;
     m_isFirstStart = true;
     m_exynosCameraParameters->setIsFirstStartFlag(m_isFirstStart);
+
+#ifdef RAWDUMP_CAPTURE
+    m_RawCaptureDumpQ = new frame_queue_t(m_RawCaptureDumpThread);
+#endif
+
+#ifdef SAMSUNG_MAGICSHOT
+    if(getCameraId() == CAMERA_ID_BACK) {
+        m_magicshotMaxCount = MAGICSHOT_COUNT_REAR;
+    } else {
+        m_magicshotMaxCount = MAGICSHOT_COUNT_FRONT;
+    }
+#endif
+
+#ifdef OIS_CAPTURE
+    ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+    m_sCaptureMgr->resetOISCaptureFcount();
+
+    m_OISCaptureShutterEnabled = false;
+#endif
+
+#ifdef RAWDUMP_CAPTURE
+    ExynosCameraActivitySpecialCapture *m_sCapture = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+    m_sCapture->resetRawCaptureFcount();
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    m_LDCaptureCount = 0;
+
+    for (int i = 0; i < MAX_LD_CAPTURE_COUNT; i++) {
+        m_LDBufIndex[i] = 0;
+    }
+#endif
 
     m_exynosconfig = NULL;
     m_setConfigInform();
@@ -238,18 +446,71 @@ ExynosCamera::ExynosCamera(int cameraId,  __unused camera_device_t *dev)
 #ifdef MONITOR_LOG_SYNC
     m_syncLogDuration = 0;
 #endif
+#ifdef SAMSUNG_LBP
+    if(getCameraId() == CAMERA_ID_FRONT) {
+        m_exynosCameraParameters->resetNormalBestFrameCount();
+        m_exynosCameraParameters->resetSCPFrameCount();
+        m_exynosCameraParameters->resetBayerFrameCount();
+    }
+#endif
+#ifdef SAMSUNG_HRM
+    m_uv_rayHandle = NULL;
+#endif
+#ifdef SAMSUNG_LIGHT_IR
+    m_light_irHandle = NULL;
+#endif
+#ifdef SAMSUNG_GYRO
+    m_gyroHandle = NULL;
+#endif
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+    /* init one second burst capture parameters. */
+    for (int i = 0; i < ONE_SECOND_BURST_CAPTURE_CHECK_COUNT; i++)
+        TakepictureDurationTime[i] = 0;
+    m_one_second_burst_capture = false;
+    m_one_second_burst_first_after_open = false;
+    m_one_second_jpegCallbackHeap = NULL;
+    m_one_second_postviewCallbackHeap = NULL;
+#endif
     m_initFrameFactory();
+#ifdef SAMSUNG_QUICKSHOT
+    m_quickShotStart = true;
+#endif
 
     m_tempshot = new struct camera2_shot_ext;
     m_fdmeta_shot = new struct camera2_shot_ext;
     m_meta_shot  = new struct camera2_shot_ext;
 
+#ifdef SUPPORT_SW_VDIS
+    m_swVDIS_fd_dm = new struct camera2_dm;
+    m_swVDIS_FaceData = new struct swVDIS_FaceData;
+#endif /*SUPPORT_SW_VDIS*/
+
+#ifdef USE_CAMERA_PREVIEW_FRAME_SCHEDULER
+    m_previewFrameScheduler = new SecCameraPreviewFrameScheduler();
+#endif
+
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    m_fastEntrance = false;
+    m_isFirstParametersSet = false;
+#endif
+
+#ifdef SAMSUNG_DNG
+    m_searchDNGFrame = false;
+    m_dngFrameNumber = 0;
+    m_longExposureEnds = true;
+    m_dngLongExposureRemainCount = 0;
+    m_dngFrameNumberForManualExposure = 0;
+#endif
     m_longExposureRemainCount = 0;
     m_longExposurePreview = false;
     m_stopLongExposure = false;
     m_cancelPicture = false;
 
+#ifdef SAMSUNG_DEBLUR
+    m_useDeblurCaptureOn = false;
+    m_deblurCaptureCount = 0;
+#endif
     m_previewWindow = NULL;
 }
 
@@ -432,6 +693,27 @@ void ExynosCamera::m_createThreads(void)
     m_postPictureGscThread = new mainCameraThread(this, &ExynosCamera::m_postPictureGscThreadFunc, "m_postPictureGscThread");
     CLOGD("DEBUG(%s): m_postPictureGscThread created", __FUNCTION__);
 
+#ifdef SAMSUNG_LBP
+    m_LBPThread = new mainCameraThread(this, &ExynosCamera::m_LBPThreadFunc, "LBPThread");
+    CLOGD("DEBUG(%s): LBPThread created", __FUNCTION__);
+#endif
+#ifdef SAMSUNG_DNG
+    /* m_DNGCaptureThread */
+    m_DNGCaptureThread = new mainCameraThread(this, &ExynosCamera::m_DNGCaptureThreadFunc, "m_DNGCaptureThread");
+    CLOGD("DEBUG(%s):m_DNGCaptureThread created", __FUNCTION__);
+#endif
+
+#ifdef SAMSUNG_SENSOR_LISTENER
+    m_sensorListenerThread = new mainCameraThread(this, &ExynosCamera::m_sensorListenerThreadFunc, "sensorListenerThread");
+    CLOGD("DEBUG(%s):m_sensorListenerThread created", __FUNCTION__);
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    /* m_LDCapture Thread */
+    m_LDCaptureThread = new mainCameraThread(this, &ExynosCamera::m_LDCaptureThreadFunc, "m_LDCaptureThread");
+    CLOGD("DEBUG(%s):m_LDCaptureThread created", __FUNCTION__);
+#endif
+
     /* saveThread */
     char threadName[20];
     for (int threadNum = JPEG_SAVE_THREAD0; threadNum < JPEG_SAVE_THREAD_MAX_COUNT; threadNum++) {
@@ -456,6 +738,26 @@ void ExynosCamera::m_createThreads(void)
     m_ThumbnailCallbackThread = new mainCameraThread(this, &ExynosCamera::m_ThumbnailCallbackThreadFunc, "m_ThumbnailCallbackThread");
     CLOGD("DEBUG(%s):m_ThumbnailCallbackThread created", __FUNCTION__);
 
+#ifdef SAMSUNG_DEBLUR
+    /* m_deblurCapture Thread */
+    m_deblurCaptureThread = new mainCameraThread(this, &ExynosCamera::m_deblurCaptureThreadFunc, "m_deblurCaptureThread");
+    CLOGD("DEBUG(%s):m_deblurCaptureThread created", __FUNCTION__);
+
+    /* m_detectDeblurCapture Thread */
+    m_detectDeblurCaptureThread = new mainCameraThread(this, &ExynosCamera::m_detectDeblurCaptureThreadFunc, "m_detectDeblurCaptureThread");
+    CLOGD("DEBUG(%s):m_detectDeblurCaptureThread created", __FUNCTION__);
+#endif
+
+#ifdef RAWDUMP_CAPTURE
+    /* RawCaptureDump Thread */
+    m_RawCaptureDumpThread = new mainCameraThread(this, &ExynosCamera::m_RawCaptureDumpThreadFunc, "m_RawCaptureDumpThread");
+    CLOGD("DEBUG(%s):RawCaptureDumpThread created", __FUNCTION__);
+#endif
+
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    m_fastenAeThread = new mainCameraThread(this, &ExynosCamera::m_fastenAeThreadFunc, "fastenAeThread");
+    CLOGD("DEBUG(%s):m_fastenAeThread created", __FUNCTION__);
+#endif
 }
 
 status_t ExynosCamera::m_setupFrameFactory(void)
@@ -693,6 +995,16 @@ void ExynosCamera::release()
     CLOGI("INFO(%s[%d]): -IN-", __FUNCTION__, __LINE__);
     int ret = 0;
 
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    if (m_fastenAeThread != NULL) {
+        CLOGI("INFO(%s[%d]): wait m_fastenAeThread", __FUNCTION__, __LINE__);
+        m_fastenAeThread->requestExitAndWait();
+        CLOGI("INFO(%s[%d]): wait m_fastenAeThread end", __FUNCTION__, __LINE__);
+    } else {
+        CLOGI("INFO(%s[%d]):m_fastenAeThread is NULL", __FUNCTION__, __LINE__);
+    }
+#endif
+
     m_stopCompanion();
 
     if (m_frameMgr != NULL) {
@@ -782,6 +1094,18 @@ void ExynosCamera::release()
         m_postPictureQ = NULL;
     }
 
+#ifdef SAMSUNG_DEBLUR
+    if (m_deblurCaptureQ != NULL) {
+        delete m_deblurCaptureQ;
+        m_deblurCaptureQ = NULL;
+    }
+
+    if (m_detectDeblurCaptureQ != NULL) {
+        delete m_detectDeblurCaptureQ;
+        m_detectDeblurCaptureQ = NULL;
+    }
+#endif
+
     if (m_jpegCallbackQ != NULL) {
         delete m_jpegCallbackQ;
         m_jpegCallbackQ = NULL;
@@ -796,6 +1120,34 @@ void ExynosCamera::release()
         delete m_thumbnailCallbackQ;
         m_thumbnailCallbackQ = NULL;
     }
+
+#ifdef SAMSUNG_LBP
+    if (m_LBPbufferQ != NULL) {
+        delete m_LBPbufferQ;
+        m_LBPbufferQ = NULL;
+    }
+#endif
+
+#ifdef SAMSUNG_DNG
+    if (m_dngCaptureQ != NULL) {
+        delete m_dngCaptureQ;
+        m_dngCaptureQ = NULL;
+    }
+#endif
+
+#ifdef SAMSUNG_BD
+    if (m_BDbufferQ != NULL) {
+        delete m_BDbufferQ;
+        m_BDbufferQ = NULL;
+    }
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    if (m_LDCaptureQ != NULL) {
+        delete m_LDCaptureQ;
+        m_LDCaptureQ = NULL;
+    }
+#endif
 
     if (m_facedetectQ != NULL) {
         delete m_facedetectQ;
@@ -847,6 +1199,14 @@ void ExynosCamera::release()
         m_bayerBufferMgr = NULL;
         CLOGD("DEBUG(%s):BufferManager(bayerBufferMgr) destroyed", __FUNCTION__);
     }
+
+#ifdef SAMSUNG_DNG
+    if (m_fliteBufferMgr != NULL) {
+        delete m_fliteBufferMgr;
+        m_fliteBufferMgr = NULL;
+        CLOGD("DEBUG(%s):BufferManager(m_fliteBufferMgr) destroyed", __FUNCTION__);
+    }
+#endif
 
     if (m_3aaBufferMgr != NULL) {
         delete m_3aaBufferMgr;
@@ -914,6 +1274,14 @@ void ExynosCamera::release()
         CLOGD("DEBUG(%s):BufferManager(m_thumbnailGscBufferMgr) destroyed", __FUNCTION__);
     }
 
+#ifdef SAMSUNG_LBP
+    if (m_lbpBufferMgr != NULL) {
+        delete m_lbpBufferMgr;
+        m_lbpBufferMgr = NULL;
+        CLOGD("DEBUG(%s):BufferManager(lbpBufferMgr) destroyed", __FUNCTION__);
+    }
+#endif
+
     if (m_jpegBufferMgr != NULL) {
         delete m_jpegBufferMgr;
         m_jpegBufferMgr = NULL;
@@ -954,6 +1322,84 @@ void ExynosCamera::release()
         m_recordingCallbackHeap = NULL;
         CLOGD("DEBUG(%s):BufferManager(recordingCallbackHeap) destroyed", __FUNCTION__);
     }
+#ifdef SUPPORT_SW_VDIS
+    if (m_swVDIS_BufferMgr != NULL) {
+        delete m_swVDIS_BufferMgr;
+        m_swVDIS_BufferMgr = NULL;
+        VDIS_LOG("VDIS_HAL(%s):BufferManager(m_swVDIS_BufferMgr) destroyed", __FUNCTION__);
+    }
+#endif /*SUPPORT_SW_VDIS*/
+
+#ifdef SAMSUNG_LLV
+    if(m_LLVpluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_LLVpluginHandle);
+        if(ret < 0) {
+            CLOGE("[LLV](%s[%d]):LLV plugin unload failed!!", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_OT
+    if(m_OTpluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_OTpluginHandle);
+        if(ret < 0) {
+            CLOGE("[OBTR](%s[%d]):Object Tracking plugin unload failed!!", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_LBP
+    if(m_LBPpluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_LBPpluginHandle);
+        if(ret < 0) {
+            CLOGE("[LBP](%s[%d]):Bestphoto plugin unload failed!!", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_JQ
+    if(m_JQpluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_JQpluginHandle);
+        if(ret < 0) {
+            CLOGE("[JQ](%s[%d]):JPEG Qtable plugin unload failed!!", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_BD
+    if(m_BDpluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_BDpluginHandle);
+        if(ret < 0) {
+            CLOGE("[BD](%s[%d]):Blur Detection plugin unload failed!!", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_DEBLUR
+    if(m_DeblurpluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_DeblurpluginHandle);
+        if(ret < 0) {
+            CLOGE("[Deblur](%s[%d]):Deblur plugin unload failed!!", __FUNCTION__, __LINE__);
+        }
+    }
+#if 0
+    if(m_ImgScreenerpluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_ImgScreenerpluginHandle);
+        if(ret < 0) {
+            CLOGE("[Deblur](%s[%d]):Image Screener plugin unload failed!!", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    if(m_LLSpluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_LLSpluginHandle);
+        if(ret < 0) {
+            CLOGE("[LDC](%s[%d]):LLS plugin unload failed!!", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
 
     m_isFirstStart = true;
     m_previewBufferCount = NUM_PREVIEW_BUFFERS;
@@ -977,6 +1423,42 @@ void ExynosCamera::release()
         delete m_meta_shot;
         m_meta_shot = NULL;
     }
+
+#ifdef SUPPORT_SW_VDIS
+    if (m_swVDIS_fd_dm != NULL) {
+        delete m_swVDIS_fd_dm;
+        m_swVDIS_fd_dm = NULL;
+    }
+
+    if (m_swVDIS_FaceData != NULL) {
+        delete m_swVDIS_FaceData;
+        m_swVDIS_FaceData = NULL;
+    }
+#endif /*SUPPORT_SW_VDIS*/
+
+#ifdef SAMSUNG_HRM
+    if(m_uv_rayHandle != NULL) {
+        sensor_listener_disable_sensor(m_uv_rayHandle, ST_UV_RAY);
+        sensor_listener_unload(&m_uv_rayHandle);
+        m_uv_rayHandle = NULL;
+    }
+#endif
+
+#ifdef SAMSUNG_LIGHT_IR
+    if(m_light_irHandle != NULL) {
+        sensor_listener_disable_sensor(m_light_irHandle, ST_LIGHT_IR);
+        sensor_listener_unload(&m_light_irHandle);
+        m_light_irHandle = NULL;
+    }
+#endif
+
+#ifdef SAMSUNG_GYRO
+    if(m_gyroHandle != NULL) {
+        sensor_listener_disable_sensor(m_gyroHandle, ST_GYROSCOPE);
+        sensor_listener_unload(&m_gyroHandle);
+        m_gyroHandle = NULL;
+    }
+#endif
 
     CLOGI("INFO(%s[%d]): -OUT-", __FUNCTION__, __LINE__);
 }
@@ -1143,6 +1625,12 @@ status_t ExynosCamera::startPreview()
     int ret = 0;
     int32_t skipFrameCount = INITIAL_SKIP_FRAME;
     unsigned int fdCallbackSize = 0;
+#ifdef SR_CAPTURE
+    unsigned int srCallbackSize = 0;
+#endif
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    int wait_cnt = 0;
+#endif
 
     m_hdrSkipedFcount = 0;
     m_isTryStopFlash= false;
@@ -1151,7 +1639,9 @@ status_t ExynosCamera::startPreview()
     m_isNeedAllocPictureBuffer = false;
     m_flagThreadStop= false;
     m_frameSkipCount = 0;
+#ifndef CAMERA_FAST_ENTRANCE_V1
     m_checkFirstFrameLux = false;
+#endif
     m_exynosCameraParameters->setIsThumbnailCallbackOn(false);
     m_stopLongExposure = false;
 
@@ -1168,6 +1658,11 @@ status_t ExynosCamera::startPreview()
         return INVALID_OPERATION;
     }
 
+#ifdef SAMSUNG_SENSOR_LISTENER
+    if(m_sensorListenerThread != NULL)
+        m_sensorListenerThread->run();
+#endif
+
 #ifdef FORCE_RESET_MULTI_FRAME_FACTORY
     /* HACK
      * stopPreview() close companion
@@ -1181,12 +1676,20 @@ status_t ExynosCamera::startPreview()
     }
 #endif
 
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    if (m_fastEntrance == false)
+#endif
     {
         /* frame manager start */
         m_frameMgr->start();
     }
 
+#ifdef SAMSUNG_DOF
+    fdCallbackSize = sizeof(camera_frame_metadata_t) * NUM_OF_DETECTED_FACES +
+            sizeof(camera2_pdaf_multi_result)*m_frameMetadata.dof_row*m_frameMetadata.dof_column;
+#else
     fdCallbackSize = sizeof(camera_frame_metadata_t) * NUM_OF_DETECTED_FACES;
+#endif
 
     m_fdCallbackHeap = m_getMemoryCb(-1, fdCallbackSize, 1, m_callbackCookie);
     if (!m_fdCallbackHeap || m_fdCallbackHeap->data == MAP_FAILED) {
@@ -1195,6 +1698,40 @@ status_t ExynosCamera::startPreview()
         goto err;
     }
 
+#ifdef SR_CAPTURE
+    srCallbackSize = sizeof(camera_frame_metadata_t) * NUM_OF_DETECTED_FACES;
+
+    m_srCallbackHeap = m_getMemoryCb(-1, srCallbackSize, 1, m_callbackCookie);
+    if (!m_srCallbackHeap || m_srCallbackHeap->data == MAP_FAILED) {
+        CLOGE("ERR(%s[%d]):m_getMemoryCb(%d) fail", __FUNCTION__, __LINE__, srCallbackSize);
+        m_srCallbackHeap = NULL;
+        goto err;
+    }
+#endif
+
+#ifdef SAMSUNG_LBP
+    if(getCameraId() == CAMERA_ID_FRONT)
+        m_exynosCameraParameters->resetNormalBestFrameCount();
+#endif
+
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    if (m_fastEntrance == true) {
+        /* In case m_previewFrameFactory is not created, wait for 1 sec */
+        while (m_previewFrameFactory == NULL) {
+            if (wait_cnt > 200) {
+                CLOGE("ERR(%s[%d]): m_previewFrameFactory is not created for 1 SEC", __FUNCTION__, __LINE__);
+                break;
+            }
+            usleep(5000);
+            wait_cnt++;
+
+            if (wait_cnt % 20 == 0)
+                CLOGW("WARN(%s[%d]): Waiting until m_previewFrameFactory create (wait_cnt %d)",
+                        __FUNCTION__, __LINE__, wait_cnt);
+        }
+    }
+    else
+#endif
     {
          /*
           * This is for updating parameter value at once.
@@ -1249,6 +1786,25 @@ status_t ExynosCamera::startPreview()
             m_exynosCameraParameters->setPreviewBufferCount(NUM_PREVIEW_BUFFERS);
         }
 
+#ifdef SUPPORT_SW_VDIS
+        m_swVDIS_Mode = false;
+        if(m_exynosCameraParameters->isSWVdisMode()) {
+            m_swVDIS_InW = m_swVDIS_InH = 0;
+            m_exynosCameraParameters->getHwPreviewSize(&m_swVDIS_InW, &m_swVDIS_InH);
+            m_swVDIS_CameraID = getCameraId();
+            m_swVDIS_SensorType = getSensorId(m_swVDIS_CameraID);
+#ifdef SAMSUNG_OIS_VDIS
+            m_swVDIS_OISMode = UNI_PLUGIN_OIS_MODE_VDIS;
+            m_OISvdisMode = UNI_PLUGIN_OIS_MODE_END;
+#endif
+            m_swVDIS_init();
+
+            m_exynosCameraParameters->setPreviewBufferCount(NUM_VDIS_BUFFERS);
+            m_exynosconfig->current->bufInfo.num_preview_buffers = NUM_VDIS_BUFFERS;
+            VDIS_LOG("VDIS_HAL: Preview Buffer Count Change to %d", NUM_VDIS_BUFFERS);
+        }
+#endif /*SUPPORT_SW_VDIS*/
+
         if ((m_exynosCameraParameters->getRestartPreview() == true) ||
             m_previewBufferCount != m_exynosCameraParameters->getPreviewBufferCount()) {
             ret = setPreviewWindow(m_previewWindow);
@@ -1260,6 +1816,18 @@ status_t ExynosCamera::startPreview()
             m_previewBufferCount = m_exynosCameraParameters->getPreviewBufferCount();
         }
 
+#ifdef CAMERA_FAST_ENTRANCE_V1
+        if (m_fastEntrance == true) {
+            ret = m_setBuffers();
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):m_setBuffers failed, releaseBuffer", __FUNCTION__, __LINE__);
+                m_isSuccessedBufferAllocation = false;
+                goto err;
+            }
+
+            m_isSuccessedBufferAllocation = true;
+        } else
+#endif
         {
             CLOGI("INFO(%s[%d]):setBuffersThread is run", __FUNCTION__, __LINE__);
             m_setBuffersThread->run(PRIORITY_DEFAULT);
@@ -1295,16 +1863,71 @@ status_t ExynosCamera::startPreview()
         if (m_sccCaptureSelector != NULL)
             m_sccCaptureSelector->release();
 
+#ifdef OIS_CAPTURE
+        ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+        m_sCaptureMgr->resetOISCaptureFcount();
+#endif
+
+#ifdef RAWDUMP_CAPTURE
+        ExynosCameraActivitySpecialCapture *m_sCapture = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+        m_sCapture->resetRawCaptureFcount();
+#endif
+
         if ((m_previewFrameFactory->isCreated() == false)
+#ifdef CAMERA_FAST_ENTRANCE_V1
+          && (m_fastEntrance == false)
+#endif
         ) {
+#if defined(SAMSUNG_EEPROM)
+            if ((m_use_companion == false) && (isEEprom(getCameraId()) == true)) {
+                if (m_eepromThread != NULL) {
+                    CLOGD("DEBUG(%s): eepromThread join.....", __FUNCTION__);
+                    m_eepromThread->join();
+                } else {
+                    CLOGD("DEBUG(%s): eepromThread is NULL.", __FUNCTION__);
+                }
+                m_exynosCameraParameters->setRomReadThreadDone(true);
+                CLOGD("DEBUG(%s): eepromThread joined", __FUNCTION__);
+            }
+#endif /* SAMSUNG_EEPROM */
+
+#ifdef SAMSUNG_COMPANION
+            if(m_use_companion == true) {
+                ret = m_previewFrameFactory->precreate();
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):m_previewFrameFactory->precreate() failed", __FUNCTION__, __LINE__);
+                    goto err;
+                }
+
+                m_waitCompanionThreadEnd();
+
+                m_exynosCameraParameters->setRomReadThreadDone(true);
+
+                ret = m_previewFrameFactory->postcreate();
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):m_previewFrameFactory->postcreate() failed", __FUNCTION__, __LINE__);
+                    goto err;
+                }
+            } else {
+                ret = m_previewFrameFactory->create();
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):m_previewFrameFactory->create() failed", __FUNCTION__, __LINE__);
+                    goto err;
+                }
+            }
+#else
             ret = m_previewFrameFactory->create();
             if (ret < 0) {
                 CLOGE("ERR(%s[%d]):m_previewFrameFactory->create() failed", __FUNCTION__, __LINE__);
                 goto err;
             }
+#endif
             CLOGD("DEBUG(%s):FrameFactory(previewFrameFactory) created", __FUNCTION__);
         }
 
+#ifdef CAMERA_FAST_ENTRANCE_V1
+        if (m_fastEntrance == false)
+#endif /* CAMERA_FAST_ENTRANCE_V1 */
         {
 #ifdef USE_QOS_SETTING
             ret = m_previewFrameFactory->setControl(V4L2_CID_IS_DVFS_CLUSTER1, BIG_CORE_MAX_LOCK, PIPE_3AA);
@@ -1330,6 +1953,17 @@ status_t ExynosCamera::startPreview()
                 skipFrameCount = INITIAL_SKIP_FRAME + 2;
             }
         }
+
+#ifdef CAMERA_FAST_ENTRANCE_V1
+        if (m_fastEntrance == true) {
+            m_waitFastenAeThreadEnd();
+            if (m_fastenAeThreadResult < 0) {
+                CLOGE("ERR(%s[%d]):fastenAeThread exit with error", __FUNCTION__, __LINE__);
+                ret = m_fastenAeThreadResult;
+                goto err;
+            }
+        }
+#endif
 
 #ifdef SET_FPS_SCENE /* This codes for 5260, Do not need other project */
         struct camera2_shot_ext *initMetaData = new struct camera2_shot_ext;
@@ -1374,10 +2008,34 @@ status_t ExynosCamera::startPreview()
             }
         }
 #endif
+#ifdef USE_FADE_IN_ENTRANCE
+        if (m_exynosCameraParameters->getFirstEntrance() == true) {
+            /* Fade In/Out */
+            m_exynosCameraParameters->setFrameSkipCount(0);
+            ret = m_previewFrameFactory->setControl(V4L2_CID_CAMERA_FADE_IN, 1, PIPE_FLITE);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):FLITE setControl fail(V4L2_CID_CAMERA_FADE_IN), ret(%d)", __FUNCTION__, __LINE__, ret);
+            }
+        } else {
+            /* Skip Frame */
+            m_exynosCameraParameters->setFrameSkipCount(skipFrameCount);
+            ret = m_previewFrameFactory->setControl(V4L2_CID_CAMERA_FADE_IN, 0, PIPE_FLITE);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):FLITE setControl fail(V4L2_CID_CAMERA_FADE_IN), ret(%d)", __FUNCTION__, __LINE__, ret);
+            }
+        }
+#else
+#ifdef CAMERA_FAST_ENTRANCE_V1
+        if (m_fastEntrance == false)
+#endif
         {
             m_exynosCameraParameters->setFrameSkipCount(skipFrameCount);
         }
+#endif
 
+#ifdef CAMERA_FAST_ENTRANCE_V1
+        if (m_fastEntrance == false)
+#endif
         {
             m_setBuffersThread->join();
         }
@@ -1427,6 +2085,10 @@ status_t ExynosCamera::startPreview()
         if (m_previewWindow != NULL)
             m_previewWindow->set_timestamp(m_previewWindow, systemTime(SYSTEM_TIME_MONOTONIC));
 
+#ifdef RAWDUMP_CAPTURE
+        m_mainSetupQThread[INDEX(PIPE_FLITE)]->run(PRIORITY_URGENT_DISPLAY);
+        m_mainSetupQThread[INDEX(PIPE_3AA)]->run(PRIORITY_URGENT_DISPLAY);
+#else
         /* setup frame thread */
         if (m_exynosCameraParameters->getDualMode() == true && getCameraId() == CAMERA_ID_FRONT) {
             CLOGD("DEBUG(%s[%d]):setupThread Thread start pipeId(%d)", __FUNCTION__, __LINE__, PIPE_FLITE);
@@ -1449,6 +2111,14 @@ status_t ExynosCamera::startPreview()
             CLOGD("DEBUG(%s[%d]):setupThread Thread start pipeId(%d)", __FUNCTION__, __LINE__, PIPE_3AA);
             m_mainSetupQThread[INDEX(PIPE_3AA)]->run(PRIORITY_URGENT_DISPLAY);
         }
+#endif
+
+#ifdef SAMSUNG_DNG
+        if (m_exynosCameraParameters->getDNGCaptureModeOn()) {
+            CLOGD("[DNG](%s[%d]):setupThread with List pipeId(%d)", __FUNCTION__, __LINE__, PIPE_FLITE);
+            m_mainSetupQ[INDEX(PIPE_FLITE)]->setup(m_mainSetupQThread[INDEX(PIPE_FLITE)]);
+        }
+#endif
 
         if (m_facedetectThread->isRunning() == false)
             m_facedetectThread->run();
@@ -1502,9 +2172,70 @@ status_t ExynosCamera::startPreview()
     m_burstInitFirst = true;
 #endif
 
+#ifdef SAMSUNG_JQ
+    {
+        int HwPreviewW = 0, HwPreviewH = 0;
+        UniPluginBufferData_t pluginData;
+
+        m_exynosCameraParameters->getHwPreviewSize(&HwPreviewW, &HwPreviewH);
+        memset(&pluginData, 0, sizeof(UniPluginBufferData_t));
+        pluginData.InWidth = HwPreviewW;
+        pluginData.InHeight = HwPreviewH;
+        pluginData.InFormat = UNI_PLUGIN_FORMAT_NV21;
+
+        if(m_JQpluginHandle != NULL) {
+            ret = uni_plugin_set(m_JQpluginHandle,
+                    JPEG_QTABLE_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &pluginData);
+            if(ret < 0) {
+                CLOGE("[JQ](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_BUFFER_INFO) failed!!", __FUNCTION__, __LINE__);
+            }
+            ret = uni_plugin_init(m_JQpluginHandle);
+            if(ret < 0) {
+                CLOGE("[JQ](%s[%d]): Plugin init failed!!", __FUNCTION__, __LINE__);
+            }
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_DEBLUR
+    if(m_DeblurpluginHandle != NULL) {
+        ret = uni_plugin_init(m_DeblurpluginHandle);
+        if(ret < 0) {
+            CLOGE("[Deblur](%s[%d]): Deblur plugin init failed!!", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    m_fastEntrance = false;
+#endif
+
     return NO_ERROR;
 
 err:
+
+#ifdef SAMSUNG_COMPANION
+    if(m_use_companion == true) {
+        m_waitCompanionThreadEnd();
+    }
+#endif
+#if defined(SAMSUNG_EEPROM)
+    if ((m_use_companion == false) && (isEEprom(getCameraId()) == true)) {
+        if (m_eepromThread != NULL) {
+            m_eepromThread->join();
+        } else {
+            CLOGD("DEBUG(%s): eepromThread is NULL.", __FUNCTION__);
+        }
+    }
+#endif
+
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    if (m_fastEntrance == true) {
+        m_waitFastenAeThreadEnd();
+    }
+
+    m_fastEntrance = false;
+#endif
 
     /* frame manager stop */
     m_frameMgr->stop();
@@ -1512,6 +2243,39 @@ err:
     m_setBuffersThread->join();
 
     m_releaseBuffers();
+
+#ifdef SAMSUNG_SENSOR_LISTENER
+    if (m_sensorListenerThread != NULL) {
+        m_sensorListenerThread->requestExitAndWait();
+    }
+
+#ifdef SAMSUNG_HRM
+    if(m_uv_rayHandle != NULL) {
+        m_exynosCameraParameters->m_setHRM_Hint(false);
+        sensor_listener_disable_sensor(m_uv_rayHandle, ST_UV_RAY);
+        sensor_listener_unload(&m_uv_rayHandle);
+        m_uv_rayHandle = NULL;
+    }
+#endif
+
+#ifdef SAMSUNG_LIGHT_IR
+    if(m_light_irHandle != NULL) {
+        m_exynosCameraParameters->m_setLight_IR_Hint(false);
+        sensor_listener_disable_sensor(m_light_irHandle, ST_LIGHT_IR);
+        sensor_listener_unload(&m_light_irHandle);
+        m_light_irHandle = NULL;
+    }
+#endif
+
+#ifdef SAMSUNG_GYRO
+    if(m_gyroHandle != NULL) {
+        m_exynosCameraParameters->m_setGyroHint(false);
+        sensor_listener_disable_sensor(m_gyroHandle, ST_GYROSCOPE);
+        sensor_listener_unload(&m_gyroHandle);
+        m_gyroHandle = NULL;
+    }
+#endif
+#endif /* SAMSUNG_SENSOR_LISTENER */
 
     return ret;
 }
@@ -1525,7 +2289,37 @@ void ExynosCamera::stopPreview()
     ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
     ExynosCameraFrame *frame = NULL;
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+    m_clearOneSecondBurst(false);
+#endif
+
+#ifdef LLS_CAPTURE
+    m_exynosCameraParameters->setLLSOn(false);
+#endif
+
     m_flagLLSStart = false;
+
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    if (m_fastenAeThread != NULL) {
+        CLOGI("INFO(%s[%d]): wait m_fastenAeThread", __FUNCTION__, __LINE__);
+        m_fastenAeThread->requestExitAndWait();
+        CLOGI("INFO(%s[%d]): wait m_fastenAeThread end", __FUNCTION__, __LINE__);
+    } else {
+        CLOGI("INFO(%s[%d]):m_fastenAeThread is NULL", __FUNCTION__, __LINE__);
+    }
+#endif
+
+#ifdef SAMSUNG_COMPANION
+    if(m_use_companion == true) {
+        if (m_companionThread != NULL) {
+            CLOGI("INFO(%s[%d]): wait m_companionThread", __FUNCTION__, __LINE__);
+            m_companionThread->requestExitAndWait();
+            CLOGI("INFO(%s[%d]): wait m_companionThread end", __FUNCTION__, __LINE__);
+        } else {
+            CLOGI("INFO(%s[%d]): m_companionThread is NULL", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
 
     if (m_previewEnabled == false) {
         CLOGD("DEBUG(%s[%d]): preview is not enabled", __FUNCTION__, __LINE__);
@@ -1751,12 +2545,49 @@ void ExynosCamera::stopPreview()
         ret = m_stopPreviewInternal();
         if (ret < 0)
             CLOGE("ERR(%s[%d]):m_stopPreviewInternal fail", __FUNCTION__, __LINE__);
+
+#ifdef SUPPORT_SW_VDIS
+        if(m_swVDIS_Mode) {
+            m_swVDIS_deinit();
+            for (int bufIndex = 0; bufIndex < NUM_VDIS_BUFFERS; bufIndex++) {
+                m_putBuffers(m_swVDIS_BufferMgr, bufIndex);
+            }
+            if (m_swVDIS_BufferMgr != NULL) {
+                m_swVDIS_BufferMgr->deinit();
+            }
+
+            if (m_previewWindow != NULL)
+                m_previewWindow->set_crop(m_previewWindow, 0, 0, 0, 0);
+
+            if(m_exynosCameraParameters->increaseMaxBufferOfPreview()) {
+                m_exynosCameraParameters->setPreviewBufferCount(NUM_PREVIEW_BUFFERS + NUM_PREVIEW_SPARE_BUFFERS);
+                m_exynosconfig->current->bufInfo.num_preview_buffers = NUM_PREVIEW_BUFFERS + NUM_PREVIEW_SPARE_BUFFERS;
+                VDIS_LOG("VDIS_HAL: Preview Buffer Count Change to %d", NUM_PREVIEW_BUFFERS + NUM_PREVIEW_SPARE_BUFFERS);
+            } else {
+                m_exynosCameraParameters->setPreviewBufferCount(NUM_PREVIEW_BUFFERS);
+                m_exynosconfig->current->bufInfo.num_preview_buffers = NUM_PREVIEW_BUFFERS;
+                VDIS_LOG("VDIS_HAL: Preview Buffer Count Change to %d", NUM_PREVIEW_BUFFERS);
+            }
+        }
+#endif /*SUPPORT_SW_VDIS*/
+#ifdef USE_FASTMOTION_CROP
+       if(m_exynosCameraParameters->getShotMode() == SHOT_MODE_FASTMOTION) {
+            if (m_previewWindow != NULL) {
+                m_previewWindow->set_crop(m_previewWindow, 0, 0, 0, 0);
+            }
+        }
+#endif /* USE_FASTMOTION_CROP */
     }
 
     /* skip to free and reallocate buffers : flite / 3aa / isp / ispReprocessing */
     if (m_bayerBufferMgr != NULL) {
         m_bayerBufferMgr->resetBuffers();
     }
+#ifdef SAMSUNG_DNG
+    if (m_fliteBufferMgr != NULL) {
+        m_fliteBufferMgr->resetBuffers();
+    }
+#endif
     if (m_3aaBufferMgr != NULL) {
         m_3aaBufferMgr->resetBuffers();
     }
@@ -1801,6 +2632,12 @@ void ExynosCamera::stopPreview()
     if (m_thumbnailGscBufferMgr != NULL) {
         m_thumbnailGscBufferMgr->deinit();
     }
+
+#ifdef SAMSUNG_LBP
+    if (m_lbpBufferMgr != NULL) {
+        m_lbpBufferMgr->deinit();
+    }
+#endif
 
     if (m_jpegBufferMgr != NULL) {
         m_jpegBufferMgr->deinit();
@@ -1865,7 +2702,68 @@ void ExynosCamera::stopPreview()
         m_fdCallbackHeap = NULL;
     }
 
+#ifdef SR_CAPTURE
+    if (m_srCallbackHeap != NULL) {
+        m_srCallbackHeap->release(m_srCallbackHeap);
+        m_srCallbackHeap = NULL;
+    }
+#endif
+
     m_burstInitFirst = false;
+
+#ifdef SAMSUNG_JQ
+    if(m_JQpluginHandle != NULL) {
+        ret = uni_plugin_deinit(m_JQpluginHandle);
+        if(ret < 0) {
+            CLOGE("[JQ](%s[%d]): Plugin deinit failed!!", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_DEBLUR
+    if(m_DeblurpluginHandle != NULL) {
+        ret = uni_plugin_deinit(m_DeblurpluginHandle);
+        if(ret < 0) {
+            CLOGE("[Deblur](%s[%d]): Deblur Plugin deinit failed!!", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_DOF
+    if(m_lensmoveCount) {
+        CLOGW("[DOF][%s][%d] Out-focus shot parameter is not reset. Reset here forcely!!: %d",
+            __FUNCTION__, __LINE__, m_lensmoveCount);
+        ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
+        autoFocusMgr->setStartLensMove(false);
+        m_lensmoveCount = 0;
+        m_exynosCameraParameters->setMoveLensCount(m_lensmoveCount);
+        m_exynosCameraParameters->setMoveLensTotal(m_lensmoveCount);
+    }
+#endif
+
+#ifdef SAMSUNG_SENSOR_LISTENER
+    if (m_sensorListenerThread != NULL) {
+        m_sensorListenerThread->requestExitAndWait();
+    }
+
+#ifdef SAMSUNG_HRM
+    if(m_uv_rayHandle != NULL) {
+        m_exynosCameraParameters->m_setHRM_Hint(false);
+    }
+#endif
+
+#ifdef SAMSUNG_LIGHT_IR
+    if(m_light_irHandle != NULL) {
+        m_exynosCameraParameters->m_setLight_IR_Hint(false);
+    }
+#endif
+
+#ifdef SAMSUNG_GYRO
+    if(m_gyroHandle != NULL) {
+        m_exynosCameraParameters->m_setGyroHint(false);
+    }
+#endif
+#endif /* SAMSUNG_SENSOR_LISTENER */
 
 #ifdef FORCE_RESET_MULTI_FRAME_FACTORY
     /*
@@ -1884,6 +2782,9 @@ void ExynosCamera::stopPreview()
     m_initFrameFactory();
 #endif
 
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    m_fastEntrance = false;
+#endif
 }
 
 bool ExynosCamera::previewEnabled()
@@ -1910,7 +2811,10 @@ status_t ExynosCamera::storeMetaDataInBuffers( __unused bool enable)
 status_t ExynosCamera::startRecording()
 {
     CLOGI("INFO(%s[%d])", __FUNCTION__, __LINE__);
-
+#ifdef SAMSUNG_HLV
+    int curVideoW = 0, curVideoH = 0;
+    uint32_t curMinFps = 0, curMaxFps = 0;
+#endif
     if (m_exynosCameraParameters != NULL) {
         if (m_exynosCameraParameters->getVisionMode() == true) {
             CLOGW("WRN(%s[%d]): Vision mode does not support", __FUNCTION__, __LINE__);
@@ -1951,6 +2855,55 @@ status_t ExynosCamera::startRecording()
         CLOGE("ERR");
         return ret;
     }
+
+#ifdef SAMSUNG_HLV
+    m_exynosCameraParameters->getVideoSize(&curVideoW, &curVideoH);
+    m_exynosCameraParameters->getPreviewFpsRange(&curMinFps, &curMaxFps);
+
+    if (curVideoW <= 1920 && curVideoH <= 1080
+        && m_HLV == NULL
+        && curMinFps <= 60 && curMaxFps <= 60
+        && !m_exynosCameraParameters->isSWVdisMode()
+#ifdef USE_LIVE_BROADCAST
+        && m_exynosCameraParameters->getPLBMode() == false
+#endif
+    ) {
+        ALOGD("HLV : uni_plugin_load !");
+        m_HLV = uni_plugin_load(HIGHLIGHT_VIDEO_PLUGIN_NAME);
+        if (m_HLV != NULL) {
+            ALOGD("HLV : uni_plugin_load success!");
+
+            ret = uni_plugin_init(m_HLV);
+            if (ret < 0) {
+                ALOGE("HLV : uni_plugin_init fail . Unload %s", HIGHLIGHT_VIDEO_PLUGIN_NAME);
+
+                ret = uni_plugin_unload(&m_HLV);
+                if (ret)
+                    ALOGE("HLV : uni_plug_unload failed !!");
+
+                m_HLV = NULL;
+            }
+            else
+            {
+                ALOGD("HLV : uni_plugin_init success!");
+                UNI_PLUGIN_CAPTURE_STATUS value = UNI_PLUGIN_CAPTURE_STATUS_VID_REC_START;
+                ALOGD("HLV: set UNI_PLUGIN_CAPTURE_STATUS_VID_REC_START");
+
+                uni_plugin_set(m_HLV,
+                        HIGHLIGHT_VIDEO_PLUGIN_NAME,
+                        UNI_PLUGIN_INDEX_CAPTURE_STATUS,
+                        &value);
+            }
+        }
+        else {
+            ALOGD("HLV : uni_plugin_load fail!");
+        }
+    }
+    else {
+        ALOGD("HLV : Not Supported for %dx%d(%d fps) video record !",
+            curVideoW, curVideoH, curMinFps);
+    }
+#endif
 
     m_lastRecordingTimeStamp  = 0;
     m_recordingStartTimeStamp = 0;
@@ -1998,6 +2951,33 @@ void ExynosCamera::stopRecording()
     }
     m_setRecordingEnabled(false);
 
+#ifdef SAMSUNG_HLV
+    if (m_HLV != NULL)
+    {
+        UNI_PLUGIN_CAPTURE_STATUS value = UNI_PLUGIN_CAPTURE_STATUS_VID_REC_STOP;
+        ALOGD("HLV: set UNI_PLUGIN_CAPTURE_STATUS_VID_REC_STOP");
+
+        uni_plugin_set(m_HLV,
+                HIGHLIGHT_VIDEO_PLUGIN_NAME,
+                UNI_PLUGIN_INDEX_CAPTURE_STATUS,
+                &value);
+
+        /* De-Init should be called before m_stopRecordingInternal to avoid race-condition in libHighLightVideo */
+        ALOGD("HLV : uni_plugin_deinit  !!!");
+        ret = uni_plugin_deinit(m_HLV);
+        if (ret) {
+            ALOGE("HLV : uni_plugin_deinit failed !! Possible Memory Leak !!!");
+        }
+
+        ret = uni_plugin_unload(&m_HLV);
+        if (ret)
+            ALOGE("HLV : uni_plug_unload failed !!  Possible Memory Leak !!!");
+
+        m_HLV = NULL;
+        ALOGD("HLV : process_step : %d", m_HLVprocessStep);
+    }
+#endif
+
     /* Do stop recording process */
     ret = m_stopRecordingInternal();
     if (ret < 0)
@@ -2042,17 +3022,10 @@ void ExynosCamera::releaseRecordingFrame(const void *opaque)
 
     if (m_recordingCallbackHeap == NULL) {
         CLOGW("WARN(%s[%d]):recordingCallbackHeap equals NULL", __FUNCTION__, __LINE__);
-        /* The received native_handle must be closed */
-        /* return; */
-    }
-
-    struct VideoNativeHandleMetadata *releaseMetadata = (struct VideoNativeHandleMetadata *) opaque;
-
-    if (releaseMetadata == NULL) {
-        CLOGW("WARN(%s[%d]):releaseMetadata is NULL", __FUNCTION__, __LINE__);
         return;
     }
 
+    struct VideoNativeHandleMetadata *releaseMetadata = (struct VideoNativeHandleMetadata *) opaque;
     native_handle_t *releaseHandle = NULL;
     int releaseBufferIndex = -1;
 
@@ -2101,10 +3074,6 @@ CLEAN:
     if (releaseHandle != NULL) {
         native_handle_close(releaseHandle);
         native_handle_delete(releaseHandle);
-    }
-
-    if (releaseMetadata != NULL) {
-        m_releaseRecordingCallbackHeap(releaseMetadata);
     }
 
     return;
@@ -2163,6 +3132,18 @@ status_t ExynosCamera::cancelAutoFocus()
     }
 
     m_autoFocusRunning = false;
+
+#ifdef SAMSUNG_DOF
+    if(m_lensmoveCount) {
+        CLOGW("[DOF][%s][%d] Out-focus shot parameter is not reset. Reset here forcely!!: %d",
+            __FUNCTION__, __LINE__, m_lensmoveCount);
+        ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
+        autoFocusMgr->setStartLensMove(false);
+        m_lensmoveCount = 0;
+        m_exynosCameraParameters->setMoveLensCount(m_lensmoveCount);
+        m_exynosCameraParameters->setMoveLensTotal(m_lensmoveCount);
+    }
+#endif
 
 #if 0 // not used.
     if (m_exynosCameraParameters != NULL) {
@@ -2227,9 +3208,17 @@ status_t ExynosCamera::takePicture()
     }
 
     retryCount = 0;
+#ifdef SAMSUNG_DNG
+    m_dngFrameNumberForManualExposure = 0;
+#endif
 
     /* wait autoFocus is over for turning on preFlash */
     m_autoFocusThread->join();
+
+#ifdef ONE_SECOND_BURST_CAPTURE
+    /* For Sync with jpegCallbackThread */
+    m_captureLock.lock();
+#endif
 
     seriesShotCount = m_exynosCameraParameters->getSeriesShotCount();
     currentSeriesShotMode = m_exynosCameraParameters->getSeriesShotMode();
@@ -2238,6 +3227,9 @@ status_t ExynosCamera::takePicture()
         CLOGW("WRN(%s[%d]): Vision mode does not support", __FUNCTION__, __LINE__);
         android_printAssert(NULL, LOG_TAG, "Cannot support this operation");
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+        m_captureLock.unlock();
+#endif
         return INVALID_OPERATION;
     }
 
@@ -2247,7 +3239,175 @@ status_t ExynosCamera::takePicture()
         m_hdrEnabled = false;
     }
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+    TakepictureDurationTimer.stop();
+    if (m_exynosCameraParameters->getSamsungCamera() && getCameraId() == CAMERA_ID_BACK
+        && !m_exynosCameraParameters->getRecordingHint()
+        && !m_getRecordingEnabled()
+        && !m_exynosCameraParameters->getDualMode()
+        && !m_exynosCameraParameters->getEffectHint()
+#ifdef SAMSUNG_DNG
+        && !m_exynosCameraParameters->getDNGCaptureModeOn()
+#endif
+        && (currentSeriesShotMode == SERIES_SHOT_MODE_NONE || currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST)) {
+        uint64_t delay;
+        uint64_t sum;
+        delay = TakepictureDurationTimer.durationUsecs();
+        ExynosCameraActivityFlash *m_flashMgr = m_exynosCameraActivityControl->getFlashMgr();
+        ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+
+        /* set smallest delay */
+        if (ONE_SECOND_BURST_CAPTURE_TAKEPICTURE_COUNT == 1
+            && m_one_second_burst_first_after_open == true)
+            delay = 1;
+
+        /* Check other shot(OIS, HDR without companion, FLASH) launching */
+#ifdef OIS_CAPTURE
+        if(getCameraId() == CAMERA_ID_BACK && currentSeriesShotMode != SERIES_SHOT_MODE_BURST) {
+            m_sCaptureMgr->resetOISCaptureFcount();
+            m_exynosCameraParameters->checkOISCaptureMode();
+#ifdef SAMSUNG_LLS_DEBLUR
+            m_exynosCameraParameters->checkLDCaptureMode();
+#endif
+        }
+#endif
+        /* SR, Burst, LLS is already disable on sendCommand() */
+        if (m_hdrEnabled
+            || (m_exynosCameraParameters->getShotMode() == SHOT_MODE_OUTFOCUS)
+            || (m_exynosCameraParameters->getFlashMode() == FLASH_MODE_ON)
+            || (getCameraId() == CAMERA_ID_BACK && m_exynosCameraParameters->getOISCaptureModeOn() == true)
+#ifdef SAMSUNG_LLS_DEBLUR
+            || (m_exynosCameraParameters->getLDCaptureMode() > 0)
+#endif
+            || (m_flashMgr->getNeedCaptureFlash() == true && currentSeriesShotMode == SERIES_SHOT_MODE_NONE)
+            || (m_exynosCameraParameters->getCaptureExposureTime() != 0)
+            || m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_RAW_IMAGE)) { // HAL test (Ext_SecCameraActivityTest_testTakePicture_P01)
+            /* Check other shot only. reset Capturemode */
+            m_exynosCameraParameters->setOISCaptureModeOn(false);
+#ifdef SAMSUNG_LLS_DEBLUR
+            m_exynosCameraParameters->setLDCaptureMode(MULTI_SHOT_MODE_NONE);
+            m_exynosCameraParameters->setLDCaptureCount(0);
+            m_exynosCameraParameters->setLDCaptureLLSValue(LLS_LEVEL_ZSL);
+#endif
+            /* For jpegCallbackThreadFunc() exit */
+            m_captureLock.unlock();
+            m_clearOneSecondBurst(false);
+            m_captureLock.lock();
+            /* Reset value */
+            currentSeriesShotMode = m_exynosCameraParameters->getSeriesShotMode();
+            seriesShotCount = m_exynosCameraParameters->getSeriesShotCount();
+            takePictureCount = m_takePictureCounter.getCount();
+            /* clear delay */
+            delay = 0;
+        }
+
+        if (currentSeriesShotMode == SERIES_SHOT_MODE_NONE) {
+            if (delay <= ONE_SECOND_BURST_CAPTURE_CHECK_TIME * ONE_MSECOND) {
+                sum = 0;
+                for (int i = 0; i < ONE_SECOND_BURST_CAPTURE_CHECK_COUNT; i++) {
+                    if (TakepictureDurationTime[i] != 0)
+                        sum += TakepictureDurationTime[i];
+
+                    if (TakepictureDurationTime[i] == 0) {
+                        TakepictureDurationTime[i] = delay;
+                        sum += TakepictureDurationTime[i];
+                        break;
+                    }
+                }
+                if (sum >= ONE_SECOND_BURST_CAPTURE_CHECK_TIME * ONE_MSECOND) {
+                    /* Remove unnecessary time */
+                    for (int i = 0; i < ONE_SECOND_BURST_CAPTURE_CHECK_COUNT - 1; i++) {
+                        TakepictureDurationTime[i] = TakepictureDurationTime[i + 1];
+                    }
+                    TakepictureDurationTime[ONE_SECOND_BURST_CAPTURE_CHECK_COUNT - 1] = 0;
+                } else {
+                    if (TakepictureDurationTime[ONE_SECOND_BURST_CAPTURE_CHECK_COUNT - 1] != 0) {
+                        /* do one second burst */
+                        CLOGD("DEBUG(%s[%d]): One second burst start - TimeCheck", __FUNCTION__, __LINE__);
+                        m_one_second_burst_first_after_open = true;
+                        for (int i = 0; i < ONE_SECOND_BURST_CAPTURE_CHECK_COUNT; i++) {
+                            TakepictureDurationTime[i] = 0;
+                        }
+                        /* Set one second burst parameters */
+                        m_one_second_burst_capture = true;
+
+                        if (m_burstInitFirst) {
+                            m_burstRealloc = true;
+                            m_burstInitFirst = false;
+                        }
+                        m_exynosCameraParameters->setSeriesShotMode(SERIES_SHOT_MODE_ONE_SECOND_BURST);
+                        /* Set value */
+                        currentSeriesShotMode = m_exynosCameraParameters->getSeriesShotMode();
+                        seriesShotCount = m_exynosCameraParameters->getSeriesShotCount();
+                        m_takePictureCounter.setCount(0);
+                        takePictureCount = m_takePictureCounter.getCount();
+
+                        m_burstCaptureCallbackCount = 0;
+                        m_exynosCameraParameters->setSeriesShotSaveLocation(BURST_SAVE_CALLBACK);
+                        m_jpegCallbackCounter.setCount(seriesShotCount);
+#ifdef USE_DVFS_LOCK
+                        m_exynosCameraParameters->setDvfsLock(true);
+#endif
+                        /* Clear saved CallbackHeap */
+                        if (m_one_second_jpegCallbackHeap != NULL) {
+                            m_one_second_jpegCallbackHeap->release(m_one_second_jpegCallbackHeap);
+                            m_one_second_jpegCallbackHeap = NULL;
+                        }
+                        if (m_one_second_postviewCallbackHeap != NULL) {
+                            m_one_second_postviewCallbackHeap->release(m_one_second_postviewCallbackHeap);
+                            m_one_second_postviewCallbackHeap = NULL;
+                        }
+                    }
+                }
+            } else {
+                /* Init TakepictureDurationTime. Delay is too big */
+                for (int i = 0; i < ONE_SECOND_BURST_CAPTURE_CHECK_COUNT; i++)
+                    TakepictureDurationTime[i] = 0;
+            }
+        } else if (currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST) {
+            /* More one second burst */
+            /* We add 1 to seriesShotCount because we can't know thread state.
+	       We will check m_jpegCallbackCounter is smaller than 1 */
+            CLOGD("DEBUG(%s[%d]): Continue One second burst - TimeCheck", __FUNCTION__, __LINE__);
+            m_reprocessingCounter.setCount(seriesShotCount + 1);
+            m_jpegCounter.setCount(seriesShotCount + 1);
+            m_pictureCounter.setCount(seriesShotCount + 1);
+            m_jpegCallbackCounter.setCount(seriesShotCount);
+            /* Make difference m_takePictureCounter value with seriesShotCount */
+            m_takePictureCounter.setCount(seriesShotCount - 1);
+            takePictureCount = m_takePictureCounter.getCount();
+            m_burstCaptureCallbackCount = 0;
+            m_one_second_burst_capture = true;
+
+            if (m_prePictureThread->isRunning() == false) {
+                if (m_prePictureThread->run(PRIORITY_DEFAULT) != NO_ERROR) {
+                    CLOGE("ERR(%s[%d]):couldn't run pre-picture thread", __FUNCTION__, __LINE__);
+                    m_captureLock.unlock();
+                    return INVALID_OPERATION;
+                }
+            }
+            if (m_pictureThread->isRunning() == false) {
+                if (m_pictureThread->run() != NO_ERROR) {
+                    CLOGE("ERR(%s[%d]):couldn't run picture thread, ret(%d)", __FUNCTION__, __LINE__, ret);
+                    m_captureLock.unlock();
+                    return INVALID_OPERATION;
+                }
+            }
+        }
+    }
+    TakepictureDurationTimer.start();
+#endif
+
+#ifdef ONE_SECOND_BURST_CAPTURE
+    m_captureLock.unlock();
+#endif
+
     m_exynosCameraParameters->setMarkingOfExifFlash(0);
+
+#ifdef SAMSUNG_LBP
+    if (getCameraId() == CAMERA_ID_FRONT)
+        m_exynosCameraParameters->resetNormalBestFrameCount();
+#endif
 
     /* HACK Reset Preview Flag*/
     while ((m_resetPreview == true) && (retryCount < 10)) {
@@ -2394,7 +3554,17 @@ status_t ExynosCamera::takePicture()
             m_startPictureInternalThread->join();
 
 #ifdef BURST_CAPTURE
+#ifdef CAMERA_GED_FEATURE
             if (seriesShotCount > 1)
+#else
+#ifdef ONE_SECOND_BURST_CAPTURE
+            if ((m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST
+                 || m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_ONE_SECOND_BURST)
+                 && m_burstRealloc == true)
+#else
+            if (m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST && m_burstRealloc == true)
+#endif
+#endif
             {
                 int allocCount = 0;
                 int addCount = 0;
@@ -2420,17 +3590,197 @@ status_t ExynosCamera::takePicture()
         CLOGD("DEBUG(%s[%d]): currentSeriesShotMode(%d), m_flashMgr->getNeedCaptureFlash(%d)",
             __FUNCTION__, __LINE__, currentSeriesShotMode, m_flashMgr->getNeedCaptureFlash());
 
+#ifdef RAWDUMP_CAPTURE
+        if(m_use_companion == true) {
+            CLOGD("DEBUG(%s[%d]): start set Raw Capture mode", __FUNCTION__, __LINE__);
+            m_sCaptureMgr->resetRawCaptureFcount();
+            m_sCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_RAW);
+
+            m_exynosCameraParameters->setRawCaptureModeOn(true);
+
+            enum aa_capture_intent captureIntent = AA_CAPTRUE_INTENT_STILL_CAPTURE_COMP_BYPASS;
+
+            ret = m_previewFrameFactory->setControl(V4L2_CID_IS_INTENT, captureIntent, PIPE_3AA);
+            if (ret < 0)
+                CLOGE("ERR(%s[%d]):setControl(STILL_CAPTURE_RAW) fail. ret(%d) intent(%d)",
+                __FUNCTION__, __LINE__, ret, captureIntent);
+            m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_START);
+        }
+#else
+#ifdef OIS_CAPTURE
+        if (getCameraId() == CAMERA_ID_BACK
+#ifdef ONE_SECOND_BURST_CAPTURE
+            && currentSeriesShotMode != SERIES_SHOT_MODE_ONE_SECOND_BURST
+#endif
+            && !m_getRecordingEnabled()
+        ) {
+            m_sCaptureMgr->resetOISCaptureFcount();
+            m_exynosCameraParameters->checkOISCaptureMode();
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+            if (currentSeriesShotMode == SERIES_SHOT_MODE_NONE) {
+                m_exynosCameraParameters->checkLDCaptureMode();
+                CLOGD("LDC(%s[%d]): currentSeriesShotMode(%d), getLDCaptureMode(%d)",
+                        __FUNCTION__, __LINE__, currentSeriesShotMode, m_exynosCameraParameters->getLDCaptureMode());
+            }
+#ifdef SAMSUNG_DEBLUR
+            if (m_exynosCameraParameters->getLDCaptureMode() == MULTI_SHOT_MODE_DEBLUR) {
+                m_captureSelector->setFrameHoldCount(MAX_DEBLUR_CAPTURE_COUNT);
+            }
+#endif
+#endif
+        }
+#endif
+
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+        if (getCameraId() == CAMERA_ID_FRONT && currentSeriesShotMode == SERIES_SHOT_MODE_NONE
+            && isLDCapture(getCameraId()) && !m_getRecordingEnabled()) {
+            m_exynosCameraParameters->checkLDCaptureMode();
+            CLOGD("LDC(%s[%d]): currentSeriesShotMode(%d), getLDCaptureMode(%d)",
+                    __FUNCTION__, __LINE__, currentSeriesShotMode, m_exynosCameraParameters->getLDCaptureMode());
+        }
+#endif
 
         if (m_exynosCameraParameters->getCaptureExposureTime() != 0) {
             m_longExposureRemainCount = m_exynosCameraParameters->getLongExposureShotCount();
         }
 
+#ifdef SAMSUNG_DNG
+        if (getCameraId() == CAMERA_ID_BACK
+            && (currentSeriesShotMode == SERIES_SHOT_MODE_NONE || currentSeriesShotMode == SERIES_SHOT_MODE_LLS)
+            && m_exynosCameraParameters->getDNGCaptureModeOn()
+            && !m_getRecordingEnabled()) {
+            int buffercount = 1;
+            m_longExposureEnds = false;
+            m_dngLongExposureRemainCount = 0;
+
+            m_captureSelector->resetDNGFrameCount();
+            m_exynosCameraParameters->setCheckMultiFrame(false);
+            m_exynosCameraParameters->setUseDNGCapture(true);
+            m_exynosCameraParameters->setDngSaveLocation(BURST_SAVE_PHONE);
+
+            if (m_exynosCameraParameters->getOISCaptureModeOn() ||
+                m_flashMgr->getNeedCaptureFlash() == true ||
+                m_exynosCameraParameters->getCaptureExposureTime() > CAMERA_PREVIEW_EXPOSURE_TIME_LIMIT) {
+                m_exynosCameraParameters->setCheckMultiFrame(true);
+                m_searchDNGFrame = true;
+                buffercount = 3;
+                m_flashMgr->resetShotFcount();
+                if (m_exynosCameraParameters->getLongExposureShotCount() > 0) {
+                    m_dngLongExposureRemainCount = m_exynosCameraParameters->getLongExposureShotCount();
+                }
+            }
+            CLOGD("[DNG](%s[%d]): start set DNG Capture mode m_use_DNGCapture(%d) m_flagMultiFrame(%d)",
+                __FUNCTION__, __LINE__, m_exynosCameraParameters->getUseDNGCapture(),
+                m_exynosCameraParameters->getCheckMultiFrame());
+
+            int pipeId = PIPE_FLITE;
+            ExynosCameraBuffer newBuffer;
+            int dstbufferIndex = 0;
+
+            if (m_fliteBufferMgr->getNumOfAvailableBuffer() > 0) {
+                m_previewFrameFactory->setRequestFLITE(true);
+
+                for (int i = 0; i < buffercount; i++) {
+                    ret = generateFrame(-1, &newFrame);
+                    if (ret < 0) {
+                        CLOGE("ERR(%s[%d]):generateFrame fail", __FUNCTION__, __LINE__);
+                        return ret;
+                    }
+
+                    newBuffer.index = -2;
+                    dstbufferIndex = -1;
+
+                    m_fliteFrameCount++;
+                    m_fliteBufferMgr->getBuffer(&dstbufferIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &newBuffer);
+
+                    CLOGD("[DNG](%s[%d]):create DNG capture frame(%d) index(%d)",
+                        __FUNCTION__, __LINE__, newFrame->getFrameCount(), newBuffer.index);
+
+                    ret = m_setupEntity(pipeId, newFrame, NULL, &newBuffer);
+                    if (ret < 0) {
+                        CLOGE("ERR(%s[%d]):setupEntity fail", __FUNCTION__, __LINE__);
+                        return ret;
+                    }
+
+                    m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, pipeId);
+                    m_previewFrameFactory->pushFrameToPipe(&newFrame, pipeId);
+                }
+
+                m_fliteFrameCount = newFrame->getFrameCount() + 1;
+
+                if (!m_exynosCameraParameters->getCheckMultiFrame()) {
+                    m_previewFrameFactory->setRequestFLITE(false);
+                }
+            }
+
+            m_previewFrameFactory->startThread(pipeId);
+        }
+#endif
+
+#ifdef SAMSUNG_LBP
+        if (currentSeriesShotMode == SERIES_SHOT_MODE_NONE) {
+            uint32_t refBestPicCount = 0;
+            if(getCameraId() == CAMERA_ID_FRONT) {
+                if (m_exynosCameraParameters->getSCPFrameCount() >= m_exynosCameraParameters->getBayerFrameCount()) {
+                    refBestPicCount = m_exynosCameraParameters->getSCPFrameCount() + LBP_CAPTURE_DELAY;
+                } else {
+                    refBestPicCount = m_exynosCameraParameters->getBayerFrameCount() + LBP_CAPTURE_DELAY;
+                }
+            }
+
+            if(getCameraId() == CAMERA_ID_FRONT) {
+                if(m_isLBPlux == true && m_getRecordingEnabled() == false) {
+                    m_exynosCameraParameters->setNormalBestFrameCount(refBestPicCount);
+                    m_captureSelector->setFrameIndex(refBestPicCount);
+
+                    ret = m_captureSelector->setFrameHoldCount(m_exynosCameraParameters->getHoldFrameCount());
+                    m_isLBPon = true;
+                } else {
+                    m_isLBPon = false;
+                }
+            } else {
+#if !defined(SAMSUNG_DEBLUR) && !defined(SAMSUNG_LLS_DEBLUR)
+                if(m_isLBPlux == true && m_exynosCameraParameters->getOISCaptureModeOn() == true
+#ifdef SAMSUNG_DNG
+                    && m_exynosCameraParameters->getDNGCaptureModeOn() == false
+#endif
+                    && m_getRecordingEnabled() == false) {
+                    ret = m_captureSelector->setFrameHoldCount(m_exynosCameraParameters->getHoldFrameCount());
+                    m_isLBPon = true;
+                }
+                else
+#endif
+                {
+                    m_isLBPon = false;
+                }
+            }
+        }
+#endif
+#ifdef SAMSUNG_JQ
+        if (currentSeriesShotMode == SERIES_SHOT_MODE_NONE) {
+            CLOGD("[JQ](%s[%d]): ON!!", __FUNCTION__, __LINE__);
+            m_isJpegQtableOn = true;
+            m_exynosCameraParameters->setJpegQtableOn(true);
+        }
+        else {
+            CLOGD("[JQ](%s[%d]): OFF!!", __FUNCTION__, __LINE__);
+            m_isJpegQtableOn = false;
+            m_exynosCameraParameters->setJpegQtableOn(false);
+        }
+#endif
         if (m_hdrEnabled == true) {
             seriesShotCount = HDR_REPROCESSING_COUNT;
             m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_START);
             m_sCaptureMgr->resetHdrStartFcount();
             m_exynosCameraParameters->setFrameSkipCount(13);
         } else if ((m_flashMgr->getNeedCaptureFlash() == true && currentSeriesShotMode == SERIES_SHOT_MODE_NONE)
+#ifdef FLASHED_LLS_CAPTURE
+                || (m_flashMgr->getNeedCaptureFlash() == true && currentSeriesShotMode == SERIES_SHOT_MODE_LLS
+#ifdef SR_CAPTURE
+                    && m_exynosCameraParameters->getSROn() == false
+#endif
+                    )
+#endif
         ) {
             if (m_exynosCameraParameters->getCaptureExposureTime() != 0) {
                 m_stopLongExposure = false;
@@ -2439,6 +3789,14 @@ status_t ExynosCamera::takePicture()
 
             m_exynosCameraParameters->setMarkingOfExifFlash(1);
 
+#ifdef FLASHED_LLS_CAPTURE
+            if (currentSeriesShotMode == SERIES_SHOT_MODE_LLS) {
+                m_captureSelector->setFlashedLLSCaptureStatus(true);
+#ifdef LLS_REPROCESSING
+                m_sCaptureMgr->setIsFlashLLSCapture(true);
+#endif
+            }
+#endif
             if (m_flashMgr->checkPreFlash() == false && m_isTryStopFlash == false) {
                 m_flashMgr->setCaptureStatus(true);
                 CLOGD("DEBUG(%s[%d]): checkPreFlash(false), Start auto focus internally", __FUNCTION__, __LINE__);
@@ -2451,21 +3809,162 @@ status_t ExynosCamera::takePicture()
                 m_autoFocusThread->run(PRIORITY_DEFAULT);
             }
         }
+#ifdef OIS_CAPTURE
+        else if (m_exynosCameraParameters->getOISCaptureModeOn() == true
+                && getCameraId() == CAMERA_ID_BACK) {
+            CLOGD("DEBUG(%s[%d]): start set zsl-like mode", __FUNCTION__, __LINE__);
+
+            int captureIntent;
+#ifdef SAMSUNG_LBP
+            m_sCaptureMgr->setBestMultiCaptureMode(false);
+#endif
+
+            if (m_exynosCameraParameters->getSeriesShotCount() > 0
+#ifdef LLS_REPROCESSING
+                && currentSeriesShotMode != SERIES_SHOT_MODE_LLS
+#endif
+            ) {
+                /* BURST */
+                m_sCaptureMgr->setMultiCaptureMode(true);
+                captureIntent = AA_CAPTURE_INTENT_STILL_CAPTURE_OIS_MULTI;
+            }
+#ifdef SAMSUNG_LBP
+            else if (currentSeriesShotMode == SERIES_SHOT_MODE_NONE && m_isLBPon == true
+#ifdef LLS_REPROCESSING
+                && currentSeriesShotMode != SERIES_SHOT_MODE_LLS)
+#endif
+            {
+                /* BEST PICK */
+                m_sCaptureMgr->setMultiCaptureMode(true);
+                m_sCaptureMgr->setBestMultiCaptureMode(true);
+                captureIntent = AA_CAPTURE_INTENT_STILL_CAPTURE_OIS_BEST;
+            }
+#endif
+            else {
+                /* SINGLE */
+#ifdef SAMSUNG_DEBLUR
+                if(m_exynosCameraParameters->getLDCaptureMode() == MULTI_SHOT_MODE_DEBLUR) {
+                    captureIntent = AA_CAPTRUE_INTENT_STILL_CAPTURE_OIS_DEBLUR;
+                    CLOGD("DEBUG(%s[%d]): start set Deblur mode captureIntent(%d)", __FUNCTION__, __LINE__,captureIntent);
+                } else
+#endif
+                {
+#ifdef SAMSUNG_LLS_DEBLUR
+                    if (m_exynosCameraParameters->getLDCaptureMode() > 0
+                        && m_exynosCameraParameters->getLDCaptureMode() != MULTI_SHOT_MODE_DEBLUR) {
+                        unsigned int captureintent = AA_CAPTRUE_INTENT_STILL_CAPTURE_DYNAMIC_SHOT;
+                        unsigned int capturecount = m_exynosCameraParameters->getLDCaptureCount();
+                        unsigned int mask = 0;
+
+                        mask = (((captureintent << 16) & 0xFFFF0000) | ((capturecount << 0) & 0x0000FFFF));
+                        captureIntent = mask;
+                        CLOGD("DEBUG(%s[%d]): start set multi mode captureIntent(%d)", __FUNCTION__, __LINE__,captureIntent);
+                    } else
+#endif
+                    {
+                        captureIntent = AA_CAPTURE_INTENT_STILL_CAPTURE_OIS_SINGLE;
+                    }
+                }
+            }
+
+            /* HACK: For the fast OIS-Capture Response time */
+            ret = m_previewFrameFactory->setControl(V4L2_CID_IS_INTENT, captureIntent, PIPE_3AA);
+            if (ret < 0)
+                CLOGE("ERR(%s[%d]):setControl(STILL_CAPTURE_OIS) fail. ret(%d) intent(%d)",
+                __FUNCTION__, __LINE__, ret, captureIntent);
+
+            if(m_exynosCameraParameters->getSeriesShotCount() == 0) {
+                m_OISCaptureShutterEnabled = true;
+            }
+
+            m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_START);
+            m_exynosCameraActivityControl->setOISCaptureMode(true);
+        }
+#endif
         else {
             if (m_exynosCameraParameters->getCaptureExposureTime() != 0) {
                 m_stopLongExposure = false;
                 m_exynosCameraParameters->setExposureTime();
             }
         }
+#ifdef SET_LLS_CAPTURE_SETFILE
+        if(getCameraId() == CAMERA_ID_BACK && currentSeriesShotMode == SERIES_SHOT_MODE_LLS
+#ifdef SR_CAPTURE
+            && !m_exynosCameraParameters->getSROn()
+#endif
+#ifdef FLASHED_LLS_CAPTURE
+            && !m_captureSelector->getFlashedLLSCaptureStatus()
+#endif
+        ) {
+            CLOGD("DEBUG(%s[%d]): set LLS Capture mode on", __FUNCTION__, __LINE__);
+            m_exynosCameraParameters->setLLSCaptureOn(true);
+        }
+#endif
+#endif /* RAWDUMP_CAPTURE */
+#ifdef SAMSUNG_LBP
+        if(currentSeriesShotMode == SERIES_SHOT_MODE_NONE && m_isLBPon == true) {
+            int TotalBufferNum = (int)m_exynosCameraParameters->getHoldFrameCount();
+            ret = uni_plugin_set(m_LBPpluginHandle, BESTPHOTO_PLUGIN_NAME, UNI_PLUGIN_INDEX_TOTAL_BUFFER_NUM, &TotalBufferNum);
+            if(ret < 0) {
+                CLOGE("[LBP](%s[%d]):Bestphoto plugin set failed!!", __FUNCTION__, __LINE__);
+            }
+            ret = uni_plugin_init(m_LBPpluginHandle);
+            if(ret < 0) {
+                CLOGE("[LBP](%s[%d]):Bestphoto plugin init failed!!", __FUNCTION__, __LINE__);
+            }
 
+            m_LBPThread->run(PRIORITY_DEFAULT);
+        }
+#endif
+
+#ifndef RAWDUMP_CAPTURE
         if (currentSeriesShotMode == SERIES_SHOT_MODE_NONE && m_flashMgr->getNeedCaptureFlash() == false
             && m_exynosCameraParameters->getCaptureExposureTime() == 0
+#ifdef OIS_CAPTURE
+            && m_exynosCameraParameters->getOISCaptureModeOn() == false
+#endif
+#ifdef SAMSUNG_LBP
+            && !m_isLBPon
+#endif
         ) {
             m_isZSLCaptureOn = true;
         }
+#endif
+
+#ifndef RAWDUMP_CAPTURE
+        if (m_exynosCameraParameters->getSamsungCamera()
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+            && !m_exynosCameraParameters->getLDCaptureMode()
+#endif
+            ) {
+            int thumbnailW = 0, thumbnailH = 0;
+            m_exynosCameraParameters->getThumbnailSize(&thumbnailW, &thumbnailH);
+
+            if ((thumbnailW > 0 && thumbnailH > 0)
+                && !m_exynosCameraParameters->getRecordingHint()
+                && !m_exynosCameraParameters->getDualMode()
+                && currentSeriesShotMode != SERIES_SHOT_MODE_LLS
+#ifdef SAMSUNG_MAGICSHOT
+                && m_exynosCameraParameters->getShotMode() != SHOT_MODE_MAGIC
+#endif
+                && m_exynosCameraParameters->getShotMode() != SHOT_MODE_OUTFOCUS
+                && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_POSTVIEW_FRAME)) {
+                m_exynosCameraParameters->setIsThumbnailCallbackOn(true);
+                CLOGI("INFO(%s[%d]): m_isThumbnailCallbackOn(%d)", __FUNCTION__, __LINE__,
+                    m_exynosCameraParameters->getIsThumbnailCallbackOn());
+            }
+        }
+#endif
 
         m_exynosCameraParameters->setSetfileYuvRange();
 
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+        int pictureCount = m_exynosCameraParameters->getLDCaptureCount();
+
+        if(m_exynosCameraParameters->getLDCaptureMode()) {
+            m_reprocessingCounter.setCount(pictureCount);
+        } else
+#endif
         {
             m_reprocessingCounter.setCount(seriesShotCount);
         }
@@ -2477,6 +3976,14 @@ status_t ExynosCamera::takePicture()
             }
         }
 
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+        if(m_exynosCameraParameters->getLDCaptureMode()) {
+            m_jpegCounter.setCount(seriesShotCount);
+            m_pictureCounter.setCount(pictureCount);
+            CLOGD("LDC(%s[%d]): pictureCount(%d), getLDCaptureMode(%d)",
+                    __FUNCTION__, __LINE__, pictureCount, m_exynosCameraParameters->getLDCaptureMode());
+        } else
+#endif
         {
             m_jpegCounter.setCount(seriesShotCount);
             m_pictureCounter.setCount(seriesShotCount);
@@ -2511,6 +4018,9 @@ status_t ExynosCamera::takePicture()
         if (!(m_hdrEnabled == true ||
                 currentSeriesShotMode == SERIES_SHOT_MODE_LLS ||
                 currentSeriesShotMode == SERIES_SHOT_MODE_SIS ||
+#ifdef ONE_SECOND_BURST_CAPTURE
+                currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST ||
+#endif
                 m_exynosCameraParameters->getShotMode() == SHOT_MODE_FRONT_PANORAMA)) {
             /* series shot : push buffer to callback thread. */
             m_jpegCallbackThread->join();
@@ -2585,12 +4095,27 @@ status_t ExynosCamera::setParameters(const CameraParameters& params)
     /* HACK Reset Preview Flag*/
     if (m_exynosCameraParameters->getRestartPreview() == true && m_previewEnabled == true) {
         m_resetPreview = true;
+#ifdef SUPPORT_SW_VDIS
+        if(!m_swVDIS_Mode)
+#endif /*SUPPORT_SW_VDIS*/
             ret = m_restartPreviewInternal();
         m_resetPreview = false;
         CLOGI("INFO(%s[%d]) m_resetPreview(%d)", __FUNCTION__, __LINE__, m_resetPreview);
 
         if (ret < 0)
             CLOGE("(%s[%d]): restart preview internal fail", __FUNCTION__, __LINE__);
+    }
+#endif
+
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    if ((m_isFirstParametersSet == false) &&
+      (m_exynosCameraParameters->getSamsungCamera() == true) &&
+      (m_exynosCameraParameters->getDualMode() == false) &&
+      (m_exynosCameraParameters->getVisionMode() == false)) {
+        CLOGD("DEBUG(%s[%d]):1st setParameters", __FUNCTION__, __LINE__);
+        m_fastEntrance = true;
+        m_isFirstParametersSet = true;
+        m_fastenAeThread->run();
     }
 #endif
 
@@ -2720,6 +4245,23 @@ bool ExynosCamera::stopFaceDetection(void)
     return true;
 }
 
+#ifdef SAMSUNG_DOF
+bool ExynosCamera::startCurrentSet(void)
+{
+    m_currentSetStart = true;
+
+    return true;
+}
+
+bool ExynosCamera::stopCurrentSet(void)
+{
+    m_currentSetStart = false;
+
+    return true;
+}
+#endif
+
+
 bool ExynosCamera::m_getRecordingEnabled(void)
 {
     Mutex::Autolock lock(m_recordingStateLock);
@@ -2737,6 +4279,30 @@ int ExynosCamera::m_calibratePosition(int w, int new_w, int pos)
 {
     return (float)(pos * new_w) / (float)w;
 }
+
+#ifdef SAMSUNG_DOF
+void ExynosCamera::m_clearDOFmeta(void)
+{
+    if(m_frameMetadata.dof_data != NULL) {
+        delete []m_frameMetadata.dof_data;
+        m_frameMetadata.dof_data = NULL;
+    }
+    m_frameMetadata.dof_column = 0;
+    m_frameMetadata.dof_row = 0;
+
+    memset(&m_frameMetadata.current_set_data, 0, sizeof(camera_current_set_t));
+    memset(&m_frameMetadata.single_paf_data, 0, sizeof(st_AF_PafWinResult));
+
+    m_flagMetaDataSet = false;
+}
+#endif
+
+#ifdef SAMSUNG_OT
+void ExynosCamera::m_clearOTmeta(void)
+{
+    memset(&m_frameMetadata.object_data, 0, sizeof(camera_object_t));
+}
+#endif
 
 bool ExynosCamera::m_facedetectThreadFunc(void)
 {
@@ -2813,8 +4379,211 @@ func_exit:
     return ret;
 }
 
+#ifdef SR_CAPTURE
+status_t ExynosCamera::m_doSRCallbackFunc(ExynosCameraFrame *frame)
+{
+    ExynosCameraDurationTimer       m_srcallbackTimer;
+    long long                       m_srcallbackTimerTime;
+    int pictureW, pictureH;
+
+    CLOGI("INFO(%s[%d]) -IN-", __FUNCTION__, __LINE__);
+
+    int id[NUM_OF_DETECTED_FACES];
+    int score[NUM_OF_DETECTED_FACES];
+    ExynosRect2 detectedFace[NUM_OF_DETECTED_FACES];
+    ExynosRect2 detectedLeftEye[NUM_OF_DETECTED_FACES];
+    ExynosRect2 detectedRightEye[NUM_OF_DETECTED_FACES];
+    ExynosRect2 detectedMouth[NUM_OF_DETECTED_FACES];
+    int numOfDetectedFaces = 0;
+    int num = 0;
+    int previewW, previewH;
+
+    memset(&id, 0x00, sizeof(int) * NUM_OF_DETECTED_FACES);
+    memset(&score, 0x00, sizeof(int) * NUM_OF_DETECTED_FACES);
+
+    m_exynosCameraParameters->getHwPreviewSize(&previewW, &previewH);
+
+    int waitCount = 5;
+    while (m_isCopySrMdeta && 0 < waitCount) {
+        usleep(10000);
+        waitCount--;
+    }
+
+    CLOGD("DEBUG(%s[%d]) faceDetectMode(%d)", __FUNCTION__, __LINE__, m_srShotMeta.stats.faceDetectMode);
+    CLOGV("[%d %d]", m_srShotMeta.stats.faceRectangles[0][0], m_srShotMeta.stats.faceRectangles[0][1]);
+    CLOGV("[%d %d]", m_srShotMeta.stats.faceRectangles[0][2], m_srShotMeta.stats.faceRectangles[0][3]);
+
+    num = NUM_OF_DETECTED_FACES;
+    if (getMaxNumDetectedFaces() < num)
+        num = getMaxNumDetectedFaces();
+
+    switch (m_srShotMeta.stats.faceDetectMode) {
+    case FACEDETECT_MODE_SIMPLE:
+    case FACEDETECT_MODE_FULL:
+        break;
+    case FACEDETECT_MODE_OFF:
+    default:
+        num = 0;
+        break;
+    }
+
+    for (int i = 0; i < num; i++) {
+        if (m_srShotMeta.stats.faceIds[i]) {
+            switch (m_srShotMeta.stats.faceDetectMode) {
+            case FACEDETECT_MODE_OFF:
+                break;
+            case FACEDETECT_MODE_SIMPLE:
+                detectedFace[i].x1 = m_srShotMeta.stats.faceRectangles[i][0];
+                detectedFace[i].y1 = m_srShotMeta.stats.faceRectangles[i][1];
+                detectedFace[i].x2 = m_srShotMeta.stats.faceRectangles[i][2];
+                detectedFace[i].y2 = m_srShotMeta.stats.faceRectangles[i][3];
+                numOfDetectedFaces++;
+                break;
+            case FACEDETECT_MODE_FULL:
+                id[i] = m_srShotMeta.stats.faceIds[i];
+                score[i] = m_srShotMeta.stats.faceScores[i];
+
+                detectedFace[i].x1 = m_srShotMeta.stats.faceRectangles[i][0];
+                detectedFace[i].y1 = m_srShotMeta.stats.faceRectangles[i][1];
+                detectedFace[i].x2 = m_srShotMeta.stats.faceRectangles[i][2];
+                detectedFace[i].y2 = m_srShotMeta.stats.faceRectangles[i][3];
+
+                detectedLeftEye[i].x1
+                    = detectedLeftEye[i].y1
+                    = detectedLeftEye[i].x2
+                    = detectedLeftEye[i].y2 = -1;
+
+                detectedRightEye[i].x1
+                    = detectedRightEye[i].y1
+                    = detectedRightEye[i].x2
+                    = detectedRightEye[i].y2 = -1;
+
+                detectedMouth[i].x1
+                    = detectedMouth[i].y1
+                    = detectedMouth[i].x2
+                    = detectedMouth[i].y2 = -1;
+
+                numOfDetectedFaces++;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+
+    if (0 < numOfDetectedFaces) {
+        /*
+         * camera.h
+         * width   : -1000~1000
+         * height  : -1000~1000
+         * if eye, mouth is not detectable : -2000, -2000.
+         */
+        memset(m_faces_sr, 0, sizeof(camera_face_t) * NUM_OF_DETECTED_FACES);
+
+        int realNumOfDetectedFaces = 0;
+
+        for (int i = 0; i < numOfDetectedFaces; i++) {
+            /*
+             * over 50s, we will catch
+             * if (score[i] < 50)
+             *    continue;
+            */
+            m_faces_sr[realNumOfDetectedFaces].rect[0] = m_calibratePosition(previewW, 2000, detectedFace[i].x1) - 1000;
+            m_faces_sr[realNumOfDetectedFaces].rect[1] = m_calibratePosition(previewH, 2000, detectedFace[i].y1) - 1000;
+            m_faces_sr[realNumOfDetectedFaces].rect[2] = m_calibratePosition(previewW, 2000, detectedFace[i].x2) - 1000;
+            m_faces_sr[realNumOfDetectedFaces].rect[3] = m_calibratePosition(previewH, 2000, detectedFace[i].y2) - 1000;
+
+            m_faces_sr[realNumOfDetectedFaces].id = id[i];
+            m_faces_sr[realNumOfDetectedFaces].score = score[i] > 100 ? 100 : score[i];
+
+            m_faces_sr[realNumOfDetectedFaces].left_eye[0] = (detectedLeftEye[i].x1 < 0) ? -2000 : m_calibratePosition(previewW, 2000, detectedLeftEye[i].x1) - 1000;
+            m_faces_sr[realNumOfDetectedFaces].left_eye[1] = (detectedLeftEye[i].y1 < 0) ? -2000 : m_calibratePosition(previewH, 2000, detectedLeftEye[i].y1) - 1000;
+
+            m_faces_sr[realNumOfDetectedFaces].right_eye[0] = (detectedRightEye[i].x1 < 0) ? -2000 : m_calibratePosition(previewW, 2000, detectedRightEye[i].x1) - 1000;
+            m_faces_sr[realNumOfDetectedFaces].right_eye[1] = (detectedRightEye[i].y1 < 0) ? -2000 : m_calibratePosition(previewH, 2000, detectedRightEye[i].y1) - 1000;
+
+            m_faces_sr[realNumOfDetectedFaces].mouth[0] = (detectedMouth[i].x1 < 0) ? -2000 : m_calibratePosition(previewW, 2000, detectedMouth[i].x1) - 1000;
+            m_faces_sr[realNumOfDetectedFaces].mouth[1] = (detectedMouth[i].y1 < 0) ? -2000 : m_calibratePosition(previewH, 2000, detectedMouth[i].y1) - 1000;
+
+            CLOGV("face posision(cal:%d,%d %dx%d)(org:%d,%d %dx%d), id(%d), score(%d)",
+                m_faces_sr[realNumOfDetectedFaces].rect[0], m_faces_sr[realNumOfDetectedFaces].rect[1],
+                m_faces_sr[realNumOfDetectedFaces].rect[2], m_faces_sr[realNumOfDetectedFaces].rect[3],
+                detectedFace[i].x1, detectedFace[i].y1,
+                detectedFace[i].x2, detectedFace[i].y2,
+                m_faces_sr[realNumOfDetectedFaces].id,
+                m_faces_sr[realNumOfDetectedFaces].score);
+
+            CLOGV("DEBUG(%s[%d]): left eye(%d,%d), right eye(%d,%d), mouth(%dx%d), num of facese(%d)",
+                    __FUNCTION__, __LINE__,
+                    m_faces_sr[realNumOfDetectedFaces].left_eye[0],
+                    m_faces_sr[realNumOfDetectedFaces].left_eye[1],
+                    m_faces_sr[realNumOfDetectedFaces].right_eye[0],
+                    m_faces_sr[realNumOfDetectedFaces].right_eye[1],
+                    m_faces_sr[realNumOfDetectedFaces].mouth[0],
+                    m_faces_sr[realNumOfDetectedFaces].mouth[1],
+                    realNumOfDetectedFaces
+                 );
+
+            realNumOfDetectedFaces++;
+        }
+
+        m_sr_frameMetadata.number_of_faces = realNumOfDetectedFaces;
+        m_sr_frameMetadata.faces = m_faces_sr;
+
+        m_faceDetected = true;
+        m_fdThreshold = 0;
+    } else {
+        if (m_faceDetected == true && m_fdThreshold < NUM_OF_DETECTED_FACES_THRESHOLD) {
+            /* waiting the unexpected fail about face detected */
+            m_fdThreshold++;
+        } else {
+            if (0 < m_sr_frameMetadata.number_of_faces)
+                memset(m_faces_sr, 0, sizeof(camera_face_t) * NUM_OF_DETECTED_FACES);
+
+            m_sr_frameMetadata.number_of_faces = 0;
+            m_sr_frameMetadata.faces = m_faces_sr;
+            m_fdThreshold = 0;
+            m_faceDetected = false;
+        }
+    }
+
+    m_exynosCameraParameters->getPictureSize(&pictureW, &pictureH);
+
+    m_sr_frameMetadata.crop_info.org_width = pictureW;
+    m_sr_frameMetadata.crop_info.org_height = pictureH;
+    m_sr_frameMetadata.crop_info.cropped_width = m_sr_cropped_width;
+    m_sr_frameMetadata.crop_info.cropped_height = m_sr_cropped_height;
+
+    CLOGI("INFO(%s[%d]):sieze (%d,%d,%d,%d)", __FUNCTION__, __LINE__
+     , pictureW, pictureH, m_sr_cropped_width, m_sr_cropped_height);
+
+    m_srcallbackTimer.start();
+
+    if (m_exynosCameraParameters->msgTypeEnabled(MULTI_FRAME_SHOT_SR_EXTRA_INFO))
+    {
+        setBit(&m_callbackState, MULTI_FRAME_SHOT_SR_EXTRA_INFO, false);
+        m_dataCb(MULTI_FRAME_SHOT_SR_EXTRA_INFO, m_srCallbackHeap, 0, &m_sr_frameMetadata, m_callbackCookie);
+        clearBit(&m_callbackState, MULTI_FRAME_SHOT_SR_EXTRA_INFO, false);
+    }
+    m_srcallbackTimer.stop();
+    m_srcallbackTimerTime = m_srcallbackTimer.durationUsecs();
+
+    if((int)m_srcallbackTimerTime / 1000 > 50) {
+        CLOGD("INFO(%s[%d]): SR callback duration time : (%d)mec", __FUNCTION__, __LINE__, (int)m_srcallbackTimerTime / 1000);
+    }
+
+    return NO_ERROR;
+}
+#endif
+
 status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrame *frame)
 {
+#ifdef SAMSUNG_DOF
+    ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
+#endif
+#ifdef LLS_CAPTURE
+    int LLS_value = 0;
+#endif
     ExynosCameraDurationTimer       m_fdcallbackTimer;
     long long                       m_fdcallbackTimerTime;
 
@@ -2847,6 +4616,11 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrame *frame)
         memset(&score, 0x00, sizeof(int) * NUM_OF_DETECTED_FACES);
 
         m_exynosCameraParameters->getHwPreviewSize(&previewW, &previewH);
+#ifdef SUPPORT_SW_VDIS
+        if(m_exynosCameraParameters->isSWVdisMode()) {
+            m_swVDIS_AdjustPreviewSize(&previewW, &previewH);
+        }
+#endif /*SUPPORT_SW_VDIS*/
 
         dm = &(m_fdmeta_shot->shot.dm);
         if (dm == NULL) {
@@ -3003,6 +4777,49 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrame *frame)
         m_faceDetected = false;
     }
 
+#ifdef LLS_CAPTURE
+    m_needLLS_history[3] = m_needLLS_history[2];
+    m_needLLS_history[2] = m_needLLS_history[1];
+    m_needLLS_history[1] = m_exynosCameraParameters->getLLS(m_fdmeta_shot);
+
+    if ((m_needLLS_history[1] == m_needLLS_history[2])&&
+        (m_needLLS_history[1] == m_needLLS_history[3])) {
+        LLS_value = m_needLLS_history[0] = m_needLLS_history[1];
+    } else {
+        LLS_value = m_needLLS_history[0];
+    }
+
+    m_exynosCameraParameters->setLLSValue(LLS_value);
+
+    if (m_exynosCameraParameters->getShotMode() == SHOT_MODE_PRO_MODE) {
+        LLS_value = LLS_LEVEL_ZSL_LIKE; /* disable SR Mode */
+    } else if (LLS_value >= LLS_LEVEL_MULTI_MERGE_INDICATOR_2 && LLS_value <= LLS_LEVEL_MULTI_MERGE_INDICATOR_4) {
+        LLS_value = LLS_LEVEL_LLS_INDICATOR_ONLY;
+    }
+
+    m_frameMetadata.needLLS = LLS_value;
+    m_frameMetadata.light_condition = LLS_value;
+
+    CLOGV("[%d[%d][%d][%d] LLS_value(%d) light_condition(%d)",
+        m_needLLS_history[0], m_needLLS_history[1], m_needLLS_history[2], m_needLLS_history[3],
+        m_exynosCameraParameters->getLLSValue(), m_frameMetadata.light_condition);
+#endif
+
+#ifdef SAMSUNG_LBP
+    uint32_t shutterSpeed = 0;
+
+    if(m_fdmeta_shot->shot.udm.ae.vendorSpecific[0] == 0xAEAEAEAE)
+        shutterSpeed = m_fdmeta_shot->shot.udm.ae.vendorSpecific[64];
+    else
+        shutterSpeed = m_fdmeta_shot->shot.udm.internal.vendorSpecific2[100];
+
+    CLOGV("[LBP]: ShutterSpeed:%d", shutterSpeed);
+    if(shutterSpeed <= 24)
+        m_isLBPlux = true;
+    else
+        m_isLBPlux = false;
+#endif
+
 #ifdef TOUCH_AE
     if(((m_exynosCameraParameters->getMeteringMode() >= METERING_MODE_CENTER_TOUCH)
         && (m_exynosCameraParameters->getMeteringMode() <= METERING_MODE_AVERAGE_TOUCH))
@@ -3015,10 +4832,141 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrame *frame)
     m_frameMetadata.ae_bv_changed = m_fdmeta_shot->shot.udm.ae.vendorSpecific[396];
 #endif
 
+#ifdef SAMSUNG_DOF
+    if(autoFocusMgr->getCurrentState() == ExynosCameraActivityAutofocus::AUTOFOCUS_STATE_SCANNING ||
+            m_currentSetStart == true) {
+        /* Single Window */
+        m_frameMetadata.current_set_data.lens_position_min = (uint16_t)m_fdmeta_shot->shot.udm.af.lensPositionMacro;
+        m_frameMetadata.current_set_data.lens_position_max = (uint16_t)m_fdmeta_shot->shot.udm.af.lensPositionInfinity;
+        m_frameMetadata.current_set_data.lens_position_current = (uint16_t)m_fdmeta_shot->shot.udm.af.lensPositionCurrent;
+        m_frameMetadata.current_set_data.driver_resolution = m_fdmeta_shot->shot.udm.companion.pdaf.lensPosResolution;
+        CLOGV("current_set_data.exposure_time = %d", m_frameMetadata.current_set_data.exposure_time);
+        CLOGV("current_set_data.iso = %d", m_frameMetadata.current_set_data.iso);
+        CLOGV("current_set_data.lens_position_min = %d", m_frameMetadata.current_set_data.lens_position_min);
+        CLOGV("current_set_data.lens_position_max = %d", m_frameMetadata.current_set_data.lens_position_max);
+        CLOGV("current_set_data.lens_position_current = %d", m_frameMetadata.current_set_data.lens_position_current);
+        CLOGV("current_set_data.driver_resolution = %d", m_frameMetadata.current_set_data.driver_resolution);
+
+        m_flagMetaDataSet = true;
+    }
+
+    if(autoFocusMgr->getCurrentState() == ExynosCameraActivityAutofocus::AUTOFOCUS_STATE_SCANNING) {
+        m_frameMetadata.single_paf_data.mode = m_fdmeta_shot->shot.udm.companion.pdaf.singleResult.mode;
+        m_frameMetadata.single_paf_data.goal_pos = m_fdmeta_shot->shot.udm.companion.pdaf.singleResult.goalPos;
+        m_frameMetadata.single_paf_data.reliability = m_fdmeta_shot->shot.udm.companion.pdaf.singleResult.reliability;
+        CLOGV("single_paf_data.mode = %d", m_fdmeta_shot->shot.udm.companion.pdaf.singleResult.mode);
+        CLOGV("single_paf_data.goal_pos = %d", m_fdmeta_shot->shot.udm.companion.pdaf.singleResult.goalPos);
+        CLOGV("single_paf_data.reliability = %d", m_fdmeta_shot->shot.udm.companion.pdaf.singleResult.reliability);
+    }
+
+    if (m_exynosCameraParameters->getShotMode() == SHOT_MODE_OUTFOCUS) {
+        if (m_fdmeta_shot->shot.udm.companion.pdaf.numCol > 0 &&
+                    m_fdmeta_shot->shot.udm.companion.pdaf.numRow > 0) {
+            if((autoFocusMgr->getCurrentState() == ExynosCameraActivityAutofocus::AUTOFOCUS_STATE_SUCCEESS ||
+                    autoFocusMgr->getCurrentState() == ExynosCameraActivityAutofocus::AUTOFOCUS_STATE_FAIL) &&
+                        m_AFstatus == ExynosCameraActivityAutofocus::AUTOFOCUS_STATE_SCANNING) {
+                /* Multi window */
+                m_frameMetadata.dof_column = m_fdmeta_shot->shot.udm.companion.pdaf.numCol;
+                m_frameMetadata.dof_row = m_fdmeta_shot->shot.udm.companion.pdaf.numRow;
+
+                if(m_frameMetadata.dof_data == NULL)
+                     m_frameMetadata.dof_data = new st_AF_PafWinResult[m_frameMetadata.dof_column * m_frameMetadata.dof_row];
+                for(int i = 0 ; i < m_frameMetadata.dof_column ; i++) {
+                    memcpy(m_frameMetadata.dof_data + (i * m_frameMetadata.dof_row), m_fdmeta_shot->shot.udm.companion.pdaf.multiResult[i],
+                            sizeof(camera2_pdaf_multi_result) * m_frameMetadata.dof_row);
+                }
+
+                for(int i = 0; i < m_fdmeta_shot->shot.udm.companion.pdaf.numCol; i++){
+                    for(int j = 0; j < m_fdmeta_shot->shot.udm.companion.pdaf.numRow; j++){
+                        CLOGD("dof_data[%d][%d] mode = %d", i, j, (m_frameMetadata.dof_data+(i*m_frameMetadata.dof_row +j))->mode);
+                        CLOGD("dof_data[%d][%d] goalPos = %d", i, j, (m_frameMetadata.dof_data+(i*m_frameMetadata.dof_row +j))->goal_pos);
+                        CLOGD("dof_data[%d][%d] reliability = %d", i, j, (m_frameMetadata.dof_data+(i*m_frameMetadata.dof_row +j))->reliability);
+                    }
+                }
+
+                if (m_fdmeta_shot->shot.udm.ae.vendorSpecific[0] == 0xAEAEAEAE)
+                    m_frameMetadata.current_set_data.exposure_time = (uint32_t)m_fdmeta_shot->shot.udm.ae.vendorSpecific[64];
+                else
+                    m_frameMetadata.current_set_data.exposure_time = (uint32_t)m_fdmeta_shot->shot.udm.internal.vendorSpecific2[100];
+
+                m_frameMetadata.current_set_data.iso = (uint16_t)m_fdmeta_shot->shot.udm.internal.vendorSpecific2[101];
+                m_frameMetadata.current_set_data.lens_position_min = (uint16_t)m_fdmeta_shot->shot.udm.af.lensPositionMacro;
+                m_frameMetadata.current_set_data.lens_position_max = (uint16_t)m_fdmeta_shot->shot.udm.af.lensPositionInfinity;
+                m_frameMetadata.current_set_data.lens_position_current = (uint16_t)m_fdmeta_shot->shot.udm.af.lensPositionCurrent;
+                m_frameMetadata.current_set_data.driver_resolution = m_fdmeta_shot->shot.udm.companion.pdaf.lensPosResolution;
+                CLOGD("current_set_data.exposure_time = %d", m_frameMetadata.current_set_data.exposure_time);
+                CLOGD("current_set_data.iso = %d", m_frameMetadata.current_set_data.iso);
+                CLOGD("current_set_data.lens_position_min = %d", m_frameMetadata.current_set_data.lens_position_min);
+                CLOGD("current_set_data.lens_position_max = %d", m_frameMetadata.current_set_data.lens_position_max);
+                CLOGD("current_set_data.lens_position_current = %d", m_frameMetadata.current_set_data.lens_position_current);
+                CLOGD("current_set_data.driver_resolution = %d", m_frameMetadata.current_set_data.driver_resolution);
+
+                m_flagMetaDataSet = true;
+            }
+        }
+    } else {
+        m_frameMetadata.current_set_data.exposure_time = (uint32_t)m_fdmeta_shot->shot.dm.sensor.exposureTime;
+        m_frameMetadata.current_set_data.exposure_value = (int16_t)m_fdmeta_shot->shot.dm.aa.vendor_exposureValue;
+        m_frameMetadata.current_set_data.iso = (uint16_t)m_fdmeta_shot->shot.dm.sensor.sensitivity;
+        CLOGV("current_set_data.exposure_time = %d", m_frameMetadata.current_set_data.exposure_time);
+        CLOGV("current_set_data.exposure_value = %d", m_frameMetadata.current_set_data.exposure_value);
+        CLOGV("current_set_data.iso = %d", m_frameMetadata.current_set_data.iso);
+    }
+
+    m_AFstatus = autoFocusMgr->getCurrentState();
+#endif
+
+#ifdef SAMSUNG_OT
+    if (m_exynosCameraParameters->getObjectTrackingGet() == true){
+        m_frameMetadata.object_data.focusState = m_OTfocusData.FocusState;
+        m_frameMetadata.object_data.focusROI[0] = m_OTfocusData.FocusROILeft;
+        m_frameMetadata.object_data.focusROI[1] = m_OTfocusData.FocusROITop;
+        m_frameMetadata.object_data.focusROI[2] = m_OTfocusData.FocusROIRight;
+        m_frameMetadata.object_data.focusROI[3] = m_OTfocusData.FocusROIBottom;
+        CLOGV("[OBTR](%s[%d])focusState: %d, focusROI[0]: %d, focusROI[1]: %d, focusROI[2]: %d, focusROI[3]: %d",
+            __FUNCTION__, __LINE__, m_OTfocusData.FocusState,
+            m_OTfocusData.FocusROILeft, m_OTfocusData.FocusROITop,
+            m_OTfocusData.FocusROIRight, m_OTfocusData.FocusROIBottom);
+    }
+#endif
+
+#ifdef SAMSUNG_CAMERA_EXTRA_INFO
+    if (m_exynosCameraParameters->getFlashMode() == FLASH_MODE_AUTO) {
+        ExynosCameraActivityFlash *m_flashMgr = m_exynosCameraActivityControl->getFlashMgr();
+        m_frameMetadata.flash_enabled = (int32_t) m_flashMgr->getNeedCaptureFlash();
+    } else {
+        m_frameMetadata.flash_enabled = 0;
+    }
+
+    if (m_exynosCameraParameters->getRTHdr() == COMPANION_WDR_AUTO) {
+        if (m_fdmeta_shot->shot.dm.stats.wdrAutoState == STATE_WDR_AUTO_REQUIRED)
+            m_frameMetadata.hdr_enabled = 1;
+        else
+            m_frameMetadata.hdr_enabled = 0;
+    } else {
+        m_frameMetadata.hdr_enabled = 0;
+    }
+
+    m_frameMetadata.awb_exposure.brightness = m_fdmeta_shot->shot.udm.awb.vendorSpecific[11];
+    m_frameMetadata.awb_exposure.colorTemp = m_fdmeta_shot->shot.udm.awb.vendorSpecific[21];
+    m_frameMetadata.awb_exposure.awbRgbGain[0] = m_fdmeta_shot->shot.udm.awb.vendorSpecific[22];
+    m_frameMetadata.awb_exposure.awbRgbGain[1] = m_fdmeta_shot->shot.udm.awb.vendorSpecific[23];
+    m_frameMetadata.awb_exposure.awbRgbGain[2] = m_fdmeta_shot->shot.udm.awb.vendorSpecific[24];
+#endif
+
     m_fdcallbackTimer.start();
 
     if (m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_METADATA) &&
             (m_flagStartFaceDetection || m_flagLLSStart || m_flagLightCondition
+#ifdef SAMSUNG_CAMERA_EXTRA_INFO
+            || m_flagFlashCallback || m_flagHdrCallback
+#endif
+#ifdef SAMSUNG_DOF
+            || m_flagMetaDataSet
+#endif
+#ifdef SAMSUNG_OT
+            || m_exynosCameraParameters->getObjectTrackingGet()
+#endif
     ))
     {
         setBit(&m_callbackState, CALLBACK_STATE_PREVIEW_META, false);
@@ -3028,6 +4976,10 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrame *frame)
     m_fdcallbackTimer.stop();
     m_fdcallbackTimerTime = m_fdcallbackTimer.durationUsecs();
 
+#ifdef SAMSUNG_DOF
+    m_clearDOFmeta();
+#endif
+
     if((int)m_fdcallbackTimerTime / 1000 > 50) {
         CLOGD("INFO(%s[%d]): FD callback duration time : (%d)mec", __FUNCTION__, __LINE__, (int)m_fdcallbackTimerTime / 1000);
     }
@@ -3035,9 +4987,67 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrame *frame)
     return NO_ERROR;
 }
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+void ExynosCamera::m_clearOneSecondBurst(bool isJpegCallbackThread)
+{
+    if (m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_ONE_SECOND_BURST) {
+        CLOGD("DEBUG(%s[%d]): DISABLE ONE SECOND BURST %d - TimeCheck", __FUNCTION__, __LINE__, isJpegCallbackThread);
+
+        m_takePictureCounter.setCount(0);
+#ifdef OIS_CAPTURE
+        if (getCameraId() == CAMERA_ID_BACK) {
+            ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+            m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_WAIT_CAPTURE);
+        }
+#endif
+
+        m_pictureEnabled = false;
+        m_one_second_burst_capture = false;
+        m_jpegCallbackCounter.clearCount();
+        m_reprocessingCounter.clearCount();
+        m_jpegCounter.clearCount();
+        m_pictureCounter.clearCount();
+        m_stopBurstShot = true;
+        if (isJpegCallbackThread) {
+            m_clearJpegCallbackThread(isJpegCallbackThread);
+            m_exynosCameraParameters->setSeriesShotMode(SERIES_SHOT_MODE_NONE);
+#ifdef USE_DVFS_LOCK
+            if (m_exynosCameraParameters->getDvfsLock() == true)
+                m_exynosCameraParameters->setDvfsLock(false);
+#endif
+        } else {
+            /* waiting jpegCallbackThread first. jpegCallbackThread will launching m_clearJpegCallbackThread() */
+            CLOGI("INFO(%s[%d]): wait m_jpegCallbackThread", __FUNCTION__, __LINE__);
+            m_jpegCallbackThread->requestExit();
+            m_jpegCallbackThread->requestExitAndWait();
+            m_exynosCameraParameters->setSeriesShotMode(SERIES_SHOT_MODE_NONE);
+        }
+
+        CLOGD("DEBUG(%s[%d]): DISABLE ONE SECOND BURST DONE %d - TimeCheck", __FUNCTION__, __LINE__, isJpegCallbackThread);
+    }
+    if (m_one_second_jpegCallbackHeap != NULL) {
+        m_one_second_jpegCallbackHeap->release(m_one_second_jpegCallbackHeap);
+        m_one_second_jpegCallbackHeap = NULL;
+    }
+    if (m_one_second_postviewCallbackHeap != NULL) {
+        m_one_second_postviewCallbackHeap->release(m_one_second_postviewCallbackHeap);
+        m_one_second_postviewCallbackHeap = NULL;
+    }
+    for (int i = 0; i < ONE_SECOND_BURST_CAPTURE_CHECK_COUNT; i++)
+        TakepictureDurationTime[i] = 0;
+}
+#endif
+
 status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32_t arg2)
 {
     ExynosCameraActivityUCTL *uctlMgr = NULL;
+#if defined(SAMSUNG_DOF) || defined(SAMSUNG_OT)
+    ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
+#endif
+#ifdef SAMSUNG_OIS
+    int zoomLevel;
+    int zoomRatio;
+#endif
 
     CLOGV("INFO(%s[%d])", __FUNCTION__, __LINE__);
 
@@ -3048,6 +5058,11 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
 
             return INVALID_OPERATION;
         }
+
+#ifdef SAMSUNG_OIS
+        zoomLevel = m_exynosCameraParameters->getZoomLevel();
+        zoomRatio = m_exynosCameraParameters->getZoomRatio(zoomLevel);
+#endif
     } else {
         CLOGE("ERR(%s):m_exynosCameraParameters is NULL", __FUNCTION__);
         return INVALID_OPERATION;
@@ -3083,9 +5098,46 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
             }
         }
         break;
+#ifdef SAMSUNG_OT
+    case 1504: /* HAL_OBJECT_TRACKING_STARTSTOP */
+        CLOGD("DEBUG(%s):HAL_OBJECT_TRACKING_STARTSTOP(%d) is called!", __FUNCTION__, arg1);
+        if(arg1) {
+            /* Start case */
+            int ret = uni_plugin_init(m_OTpluginHandle);
+            if(ret < 0) {
+                CLOGE("[OBTR](%s[%d]):Object Tracking plugin init failed!!", __FUNCTION__, __LINE__);
+            }
+            autoFocusMgr->setObjectTrackingStart(true);
+            m_OTstart = OBJECT_TRACKING_INIT;
+        }
+        else {
+            /* Stop case */
+            autoFocusMgr->setObjectTrackingStart(false);
+            m_OTstart = OBJECT_TRACKING_DEINIT;
+            m_OTstatus = UNI_PLUGIN_OBJECT_TRACKING_IDLE;
+            m_OTisTouchAreaGet = false;
+            m_exynosCameraParameters->setObjectTrackingGet(false);
+            m_clearOTmeta();
+            /* Waiting here in the recording mode can make preview thread stop */
+#if 0
+            if(m_OTstart != OBJECT_TRACKING_IDLE) {
+                m_OT_mutex.lock();
+                m_OTisWait = true;
+                m_OT_condition.waitRelative(m_OT_mutex, 1000000000); /* 1sec */
+                m_OTisWait = false;
+                m_OT_mutex.unlock();
+            }
+            CLOGD("DEBUG(%s):HAL_OBJECT_TRACKING_STARTSTOP(%d) Out is called!", __FUNCTION__, arg1);
+#endif
+        }
+        break;
+#endif
 #ifdef BURST_CAPTURE
     case 1571: /* HAL_CMD_RUN_BURST_TAKE */
         CLOGD("DEBUG(%s):HAL_CMD_RUN_BURST_TAKE is called!", __FUNCTION__);
+#ifdef ONE_SECOND_BURST_CAPTURE
+        m_clearOneSecondBurst(false);
+#endif
 
         if( m_burstInitFirst ) {
             m_burstRealloc = true;
@@ -3113,6 +5165,19 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
                 m_exynosCameraParameters->getSeriesShotFilePath(),
                 m_burstSavePath, sizeof(m_burstSavePath));
         }
+#ifdef SAMSUNG_BD
+        m_BDbufferIndex = 0;
+        if(m_BDpluginHandle != NULL && m_BDstatus != BLUR_DETECTION_INIT) {
+            int ret = uni_plugin_init(m_BDpluginHandle);
+            if(ret < 0) {
+                CLOGE("[BD](%s[%d]): Plugin init failed!!", __FUNCTION__, __LINE__);
+            }
+            for(int i = 0; i < MAX_BD_BUFF_NUM; i++) {
+                m_BDbuffer[i].data = new unsigned char[BD_EXIF_SIZE];
+            }
+        }
+        m_BDstatus = BLUR_DETECTION_INIT;
+#endif
 #ifdef USE_DVFS_LOCK
         m_exynosCameraParameters->setDvfsLock(true);
 #endif
@@ -3120,6 +5185,18 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
     case 1572: /* HAL_CMD_STOP_BURST_TAKE */
         CLOGD("DEBUG(%s):HAL_CMD_STOP_BURST_TAKE is called!", __FUNCTION__);
         m_takePictureCounter.setCount(0);
+
+#ifdef OIS_CAPTURE
+        if (getCameraId() == CAMERA_ID_BACK) {
+            ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+            if (!m_exynosCameraParameters->getOISCaptureModeOn()) {
+                m_sCaptureMgr->setMultiCaptureMode(false);
+            }
+            /* setMultiCaptureMode flag will be disabled in SCAPTURE_STEP_END in case of OIS capture */
+            m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_WAIT_CAPTURE);
+            m_exynosCameraParameters->setOISCaptureModeOn(false);
+        }
+#endif
 
         if (m_exynosCameraParameters->getSeriesShotCount() == MAX_SERIES_SHOT_COUNT) {
              m_reprocessingCounter.clearCount();
@@ -3132,6 +5209,22 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
         m_clearJpegCallbackThread(false);
 
         m_exynosCameraParameters->setSeriesShotMode(SERIES_SHOT_MODE_NONE);
+#ifdef SAMSUNG_BD
+        m_BDbufferQ->release();
+
+        if(m_BDpluginHandle != NULL && m_BDstatus == BLUR_DETECTION_INIT) {
+            int ret = uni_plugin_deinit(m_BDpluginHandle);
+            if(ret < 0) {
+                CLOGE("[BD](%s[%d]): Plugin deinit failed!!", __FUNCTION__, __LINE__);
+            }
+            for(int i = 0; i < MAX_BD_BUFF_NUM; i++) {
+                if(m_BDbuffer[i].data != NULL){
+                    delete []m_BDbuffer[i].data;
+                }
+            }
+        }
+        m_BDstatus = BLUR_DETECTION_DEINIT;
+#endif
 
 #ifdef USE_DVFS_LOCK
         if (m_exynosCameraParameters->getDvfsLock() == true)
@@ -3143,14 +5236,64 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
         m_takePictureCounter.setCount(0);
         break;
 #endif
+#ifdef LLS_CAPTURE
+    case 1600: /* CAMERA_CMD_START_BURST_PANORAMA */
+        CLOGD("DEBUG(%s):CAMERA_CMD_START_BURST_PANORAMA is called!", __FUNCTION__);
+        m_takePictureCounter.setCount(0);
+        break;
+    case 1601: /*CAMERA_CMD_STOP_BURST_PANORAMA */
+        CLOGD("DEBUG(%s):CAMERA_CMD_STOP_BURST_PANORAMA is called!", __FUNCTION__);
+        m_takePictureCounter.setCount(0);
+        break;
+    case 1516: /*CAMERA_CMD_START_SERIES_CAPTURE */
+        CLOGD("DEBUG(%s):CAMERA_CMD_START_SERIES_CAPTURE is called!%d", __FUNCTION__, arg1);
+#ifdef ONE_SECOND_BURST_CAPTURE
+        m_clearOneSecondBurst(false);
+#endif
+        m_exynosCameraParameters->setSeriesShotMode(SERIES_SHOT_MODE_LLS, arg1);
+        m_takePictureCounter.setCount(0);
+        break;
+    case 1517: /* CAMERA_CMD_STOP_SERIES_CAPTURE */
+        CLOGD("DEBUG(%s):CAMERA_CMD_STOP_SERIES_CAPTURE is called!", __FUNCTION__);
+        m_exynosCameraParameters->setSeriesShotMode(SERIES_SHOT_MODE_NONE);
+        m_takePictureCounter.setCount(0);
+#ifdef SET_LLS_CAPTURE_SETFILE
+        m_exynosCameraParameters->setLLSCaptureOn(false);
+#endif
+#ifdef FLASHED_LLS_CAPTURE
+        if (getCameraId() == CAMERA_ID_BACK && m_captureSelector->getFlashedLLSCaptureStatus() == true) {
+            m_captureSelector->setFlashedLLSCaptureStatus(false);
+#ifdef LLS_REPROCESSING
+            ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+            m_sCaptureMgr->setIsFlashLLSCapture(false);
+#endif
+        }
+#endif
+
+#ifdef OIS_CAPTURE
+        if (getCameraId() == CAMERA_ID_BACK && !m_exynosCameraParameters->getOISCaptureModeOn()) {
+            ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+            m_sCaptureMgr->setMultiCaptureMode(false);
+        }
+#endif
+        break;
+#endif
     case 1351: /*CAMERA_CMD_AUTO_LOW_LIGHT_SET */
         CLOGD("DEBUG(%s):CAMERA_CMD_AUTO_LOW_LIGHT_SET is called!%d", __FUNCTION__, arg1);
         if(arg1) {
             if( m_flagLLSStart != true) {
                 m_flagLLSStart = true;
+#ifdef LLS_CAPTURE
+                m_exynosCameraParameters->setLLSOn(m_flagLLSStart);
+                m_exynosCameraParameters->m_setLLSShotMode();
+#endif
             }
         } else {
             m_flagLLSStart = false;
+#ifdef LLS_CAPTURE
+            m_exynosCameraParameters->setLLSOn(m_flagLLSStart);
+            m_exynosCameraParameters->m_setShotMode(m_exynosCameraParameters->getShotMode());
+#endif
         }
         break;
     case 1801: /* HAL_ENABLE_LIGHT_CONDITION*/
@@ -3160,6 +5303,42 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
         } else {
             m_flagLightCondition = false;
         }
+        break;
+#ifdef SAMSUNG_CAMERA_EXTRA_INFO
+    case 1802: /* HAL_ENABLE_FLASH_AUTO_CALLBACK*/
+        CLOGD("DEBUG(%s):HAL_ENABLE_FLASH_AUTO_CALLBACK is called!%d", __FUNCTION__, arg1);
+        if(arg1) {
+            m_flagFlashCallback = true;
+        } else {
+            m_flagFlashCallback = false;
+        }
+        break;
+    case 1803: /* HAL_ENABLE_HDR_AUTO_CALLBACK*/
+        CLOGD("DEBUG(%s):HAL_ENABLE_HDR_AUTO_CALLBACK is called!%d", __FUNCTION__, arg1);
+        if(arg1) {
+            m_flagHdrCallback = true;
+        } else {
+            m_flagHdrCallback = false;
+        }
+        break;
+#endif
+#ifdef SR_CAPTURE
+    case 1519: /* CAMERA_CMD_SUPER_RESOLUTION_MODE */
+        CLOGD("DEBUG(%s):CAMERA_CMD_SUPER_RESOLUTION_MODE is called!%d", __FUNCTION__, arg1);
+        m_exynosCameraParameters->setSROn(arg1);
+        if (arg1) {
+            m_sr_cropped_width = 0;
+            m_sr_cropped_height = 0;
+            m_isCopySrMdeta = true;
+            memset(m_faces_sr, 0, sizeof(camera_face_t) * NUM_OF_DETECTED_FACES);
+            memset(&m_sr_frameMetadata, 0, sizeof(camera_frame_metadata_t));
+        }
+        break;
+#endif
+    /* 1508: HAL_SET_SAMSUNG_CAMERA */
+    case 1508 :
+        CLOGD("DEBUG(%s):HAL_SET_SAMSUNG_CAMERA is called!%d", __FUNCTION__, arg1);
+        m_exynosCameraParameters->setSamsungCamera(true);
         break;
     /* 1510: CAMERA_CMD_SET_FLIP */
     case 1510 :
@@ -3184,6 +5363,30 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
         CLOGD("DEBUG(%s):CAMERA_CMD_FOCUS_LOCATION is called!%d", __FUNCTION__, arg1);
         m_exynosCameraParameters->setAutoFocusMacroPosition(ExynosCameraActivityAutofocus::AUTOFOCUS_MACRO_POSITION_CENTER_UP);
         break;
+#ifdef SAMSUNG_DOF
+    /*1643: HAL_ENABLE_CURRENT_SET */
+    case 1643:
+        CLOGD("DEBUG(%s):HAL_ENABLE_CURRENT_SET is called!%d", __FUNCTION__, arg1);
+        if(arg1)
+            startCurrentSet();
+        else
+            stopCurrentSet();
+        break;
+    /*1644: HAL_ENABLE_PAF_RESULT */
+    case 1644:
+        CLOGD("DEBUG(%s):HAL_ENABLE_PAF_RESULT is called!%d", __FUNCTION__, arg1);
+        break;
+    /*1650: CAMERA_CMD_START_PAF_CALLBACK */
+    case 1650:
+        CLOGD("DEBUG(%s):CAMERA_CMD_START_PAF_CALLBACK is called!%d", __FUNCTION__, arg1);
+        autoFocusMgr->setPDAF(true);
+        break;
+    /*1651: CAMERA_CMD_STOP_PAF_CALLBACK */
+    case 1651:
+        CLOGD("DEBUG(%s):CAMERA_CMD_STOP_PAF_CALLBACK is called!%d", __FUNCTION__, arg1);
+        autoFocusMgr->setPDAF(false);
+        break;
+#endif
     /*1661: CAMERA_CMD_START_ZOOM */
     case 1661:
         CLOGD("DEBUG(%s):CAMERA_CMD_START_ZOOM is called!", __FUNCTION__);
@@ -3195,7 +5398,53 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
         CLOGD("DEBUG(%s):CAMERA_CMD_STOP_ZOOM is called!", __FUNCTION__);
         m_exynosCameraParameters->setZoomActiveOn(false);
         m_exynosCameraParameters->setFocusModeLock(false);
+#ifdef SAMSUNG_OIS
+        m_exynosCameraParameters->setOISMode();
+#endif
         break;
+#ifdef SAMSUNG_HLV
+    case 1721:  /* HAL_RECORDING_RESUME */
+        {
+            UNI_PLUGIN_CAPTURE_STATUS value = UNI_PLUGIN_CAPTURE_STATUS_VID_REC_RESUME;
+            ALOGD("HLV: set UNI_PLUGIN_CAPTURE_STATUS_VID_REC_RESUME");
+
+            if (m_HLV) {
+                uni_plugin_set(m_HLV,
+                        HIGHLIGHT_VIDEO_PLUGIN_NAME,
+                        UNI_PLUGIN_INDEX_CAPTURE_STATUS,
+                        &value);
+            }
+            else {
+                ALOGE("HLV: %s not yet loaded", HIGHLIGHT_VIDEO_PLUGIN_NAME);
+            }
+        }
+        break;
+
+    case 1722: /* HAL_RECORDING_PAUSE */
+        {
+            ALOGD("HLV: set UNI_PLUGIN_CAPTURE_STATUS_VID_REC_PAUSE");
+            UNI_PLUGIN_CAPTURE_STATUS value = UNI_PLUGIN_CAPTURE_STATUS_VID_REC_PAUSE;
+
+            if (m_HLV) {
+                uni_plugin_set(m_HLV,
+                        HIGHLIGHT_VIDEO_PLUGIN_NAME,
+                        UNI_PLUGIN_INDEX_CAPTURE_STATUS,
+                        &value);
+            }
+            else {
+                ALOGE("HLV: %s not yet loaded", HIGHLIGHT_VIDEO_PLUGIN_NAME);
+            }
+        }
+        break;
+#endif
+
+#ifdef USE_LIVE_BROADCAST
+    case 1730: /* SET PLB mode */
+        CLOGD("DEBUG(%s):SET PLB mode is called!%d", __FUNCTION__, arg1);
+        m_exynosCameraParameters->setPLBMode((bool)arg1);
+        break;
+#endif
+
     default:
         CLOGV("DEBUG(%s):unexpectect command(%d)", __FUNCTION__, command);
         break;
@@ -3463,7 +5712,12 @@ status_t ExynosCamera::m_fastenAeStable(void)
     unsigned int bytesPerLine[EXYNOS_CAMERA_BUFFER_MAX_PLANES] = {0};
     planeSize[0] = 32 * 64 * 2;
     int planeCount  = 2;
+#ifdef SAMSUNG_COMPANION
+    int bufferCount = (m_exynosCameraParameters->getRTHdr() == COMPANION_WDR_ON) ?
+                        NUM_FASTAESTABLE_BUFFER : NUM_FASTAESTABLE_BUFFER - 4;
+#else
     int bufferCount = NUM_FASTAESTABLE_BUFFER;
+#endif
 
     if (skipBufferMgr == NULL) {
         CLOGE("ERR(%s[%d]):createBufferManager failed", __FUNCTION__, __LINE__);
@@ -3501,6 +5755,152 @@ done:
 func_exit:
     return ret;
 }
+
+#ifdef CAMERA_FAST_ENTRANCE_V1
+bool ExynosCamera::m_fastenAeThreadFunc(void)
+{
+    CLOGI("INFO(%s[%d]):", __FUNCTION__, __LINE__);
+    ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+
+    int32_t skipFrameCount = INITIAL_SKIP_FRAME;
+    int ret = NO_ERROR;
+    m_fastenAeThreadResult = 0;
+
+    /* frame manager start */
+    m_frameMgr->start();
+
+    /*
+     * This is for updating parameter value at once.
+     * This must be just before making factory
+     */
+    m_exynosCameraParameters->updateTpuParameters();
+
+    /* setup frameFactory with scenario */
+    m_setupFrameFactory();
+
+    if (m_previewFrameFactory->isCreated() == false) {
+#if defined(SAMSUNG_EEPROM)
+        if ((m_use_companion == false) && (isEEprom(getCameraId()) == true)) {
+            if (m_eepromThread != NULL) {
+                CLOGD("DEBUG(%s): eepromThread join.....", __FUNCTION__);
+                m_eepromThread->join();
+            } else {
+                CLOGD("DEBUG(%s): eepromThread is NULL.", __FUNCTION__);
+            }
+            m_exynosCameraParameters->setRomReadThreadDone(true);
+            CLOGD("DEBUG(%s): eepromThread joined", __FUNCTION__);
+        }
+#endif /* SAMSUNG_EEPROM */
+
+#ifdef SAMSUNG_COMPANION
+        if(m_use_companion == true) {
+            ret = m_previewFrameFactory->precreate();
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):m_previewFrameFactory->precreate() failed", __FUNCTION__, __LINE__);
+                goto err;
+            }
+
+            m_waitCompanionThreadEnd();
+
+            m_exynosCameraParameters->setRomReadThreadDone(true);
+
+            ret = m_previewFrameFactory->postcreate();
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):m_previewFrameFactory->postcreate() failed", __FUNCTION__, __LINE__);
+                goto err;
+            }
+        } else {
+            ret = m_previewFrameFactory->create();
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):m_previewFrameFactory->create() failed", __FUNCTION__, __LINE__);
+                goto err;
+            }
+        }
+#else
+        ret = m_previewFrameFactory->create();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):m_previewFrameFactory->create() failed", __FUNCTION__, __LINE__);
+            goto err;
+        }
+#endif /* SAMSUNG_COMPANION */
+        CLOGD("DEBUG(%s):FrameFactory(previewFrameFactory) created", __FUNCTION__);
+    }
+
+#ifdef USE_QOS_SETTING
+    ret = m_previewFrameFactory->setControl(V4L2_CID_IS_DVFS_CLUSTER1, BIG_CORE_MAX_LOCK, PIPE_3AA);
+    if (ret < 0)
+        CLOGE("ERR(%s[%d]):V4L2_CID_IS_DVFS_CLUSTER1 setControl fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+#endif
+
+    if (m_exynosCameraParameters->getUseFastenAeStable() == true &&
+        m_exynosCameraParameters->getDualMode() == false &&
+        m_exynosCameraParameters->getRecordingHint() == false &&
+        m_isFirstStart == true) {
+
+        ret = m_fastenAeStable();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):m_fastenAeStable() failed", __FUNCTION__, __LINE__);
+            goto err;
+        } else {
+            skipFrameCount = 0;
+            m_exynosCameraParameters->setUseFastenAeStable(false);
+        }
+    }
+
+#ifdef USE_FADE_IN_ENTRANCE
+    if (m_exynosCameraParameters->getUseFastenAeStable() == true) {
+        CLOGE("ERR(%s[%d]):consistency in skipFrameCount might be broken by FASTEN_AE and FADE_IN", __FUNCTION__, __LINE__);
+    }
+#endif
+
+    m_exynosCameraParameters->setFrameSkipCount(skipFrameCount);
+
+    /* one shot */
+    return false;
+
+err:
+    m_fastenAeThreadResult = ret;
+
+#ifdef SAMSUNG_COMPANION
+    if(m_use_companion == true) {
+        m_waitCompanionThreadEnd();
+    }
+#endif
+#if defined(SAMSUNG_EEPROM)
+    if ((m_use_companion == false) && (isEEprom(getCameraId()) == true)) {
+        if (m_eepromThread != NULL) {
+            m_eepromThread->join();
+        } else {
+            CLOGD("DEBUG(%s): eepromThread is NULL.", __FUNCTION__);
+        }
+    }
+#endif
+
+     return false;
+}
+
+status_t ExynosCamera::m_waitFastenAeThreadEnd(void)
+{
+    ExynosCameraDurationTimer timer;
+
+    timer.start();
+
+    if(m_fastEntrance == true) {
+        if (m_fastenAeThread != NULL) {
+            m_fastenAeThread->join();
+        } else {
+            CLOGI("INFO(%s[%d]):m_fastenAeThread is NULL", __FUNCTION__, __LINE__);
+        }
+    }
+
+    timer.stop();
+
+    CLOGD("DEBUG(%s[%d]):fastenAeThread waiting time : duration time(%5d msec)", __FUNCTION__, __LINE__, (int)timer.durationMsecs());
+    CLOGD("DEBUG(%s[%d]):fastenAeThread join", __FUNCTION__, __LINE__);
+
+    return NO_ERROR;
+}
+#endif
 
 status_t ExynosCamera::m_startPreviewInternal(void)
 {
@@ -3635,7 +6035,9 @@ status_t ExynosCamera::m_startPreviewInternal(void)
                 taaBufferManager[m_previewFrameFactory->getNodeType(PIPE_ISPC)] = m_sccBufferMgr;
             } else {
                 taaBufferManager[m_previewFrameFactory->getNodeType(PIPE_3AA)] = m_3aaBufferMgr;
+#ifndef RAWDUMP_CAPTURE
                 taaBufferManager[m_previewFrameFactory->getNodeType(PIPE_3AC)] = m_bayerBufferMgr;
+#endif
                 taaBufferManager[m_previewFrameFactory->getNodeType(PIPE_SCP)] = scpBufferMgr;
             }
         } else {
@@ -3817,6 +6219,14 @@ status_t ExynosCamera::m_startPreviewInternal(void)
     }
 #endif
 
+#ifdef RAWDUMP_CAPTURE
+    /* s_ctrl HAL version for selecting dvfs table */
+    ret = m_previewFrameFactory->setControl(V4L2_CID_IS_HAL_VERSION, IS_HAL_VER_3_2, PIPE_3AA);
+    ALOGD("WARN(%s): V4L2_CID_IS_HAL_VERSION_%d pipe(%d)", __FUNCTION__, IS_HAL_VER_3_2, PIPE_3AA);
+    if (ret < 0)
+        ALOGW("WARN(%s): V4L2_CID_IS_HAL_VERSION is fail", __FUNCTION__);
+#endif
+
     /* stream on pipes */
     ret = m_previewFrameFactory->startPipes();
     if (ret < 0) {
@@ -3841,6 +6251,14 @@ status_t ExynosCamera::m_startPreviewInternal(void)
         m_exynosCameraActivityControl->setAutoFocusMode(focusmode);
         m_exynosCameraParameters->setFocusModeSetting(false);
     }
+
+#ifdef SAMSUNG_OIS
+    if (m_exynosCameraParameters->getOISModeSetting() == true) {
+        CLOGD("set OIS Mode(%s[%d])", __FUNCTION__, __LINE__);
+        m_exynosCameraParameters->setOISMode();
+        m_exynosCameraParameters->setOISModeSetting(false);
+    }
+#endif
 
     CLOGI("DEBUG(%s[%d]):OUT", __FUNCTION__, __LINE__);
 
@@ -4056,6 +6474,15 @@ status_t ExynosCamera::m_stopPictureInternal(void)
     m_prePictureThread->join();
     m_pictureThread->join();
 
+#ifdef SAMSUNG_LLS_DEBLUR
+    m_LDCaptureThread->join();
+#endif
+
+#ifdef SAMSUNG_DEBLUR
+    m_detectDeblurCaptureThread->join();
+    m_deblurCaptureThread->join();
+#endif
+
     m_postPictureGscThread->join();
 
     m_ThumbnailCallbackThread->join();
@@ -4100,6 +6527,30 @@ status_t ExynosCamera::m_stopPictureInternal(void)
     m_postviewCallbackQ->release();
 
     m_thumbnailCallbackQ->release();
+
+#ifdef SAMSUNG_DNG
+    m_dngCaptureQ->release();
+#endif
+
+#ifdef SAMSUNG_BD
+    m_BDbufferQ->release();
+
+    if(m_BDpluginHandle != NULL && m_BDstatus == BLUR_DETECTION_INIT) {
+        int ret = uni_plugin_deinit(m_BDpluginHandle);
+        if(ret < 0) {
+            CLOGE("[BD](%s[%d]): Plugin deinit failed!!", __FUNCTION__, __LINE__);
+        }
+        for(int i = 0; i < MAX_BD_BUFF_NUM; i++) {
+            if(m_BDbuffer[i].data != NULL){
+                delete []m_BDbuffer[i].data;
+            }
+        }
+    }
+    m_BDstatus = BLUR_DETECTION_DEINIT;
+#endif
+#ifdef SAMSUNG_DEBLUR
+    m_detectDeblurCaptureQ->release();
+#endif
 
     for (int threadNum = JPEG_SAVE_THREAD0; threadNum < JPEG_SAVE_THREAD_MAX_COUNT; threadNum++) {
         m_jpegSaveQ[threadNum]->release();
@@ -4153,6 +6604,42 @@ status_t ExynosCamera::m_startRecordingInternal(void)
     buffer_manager_allocation_mode_t allocMode = BUFFER_MANAGER_ALLOCATION_SILENT;
     int heapFd = 0;
 
+#ifdef SAMSUNG_LLV
+    if (m_exynosCameraParameters->getLLV() == true
+#ifdef USE_LIVE_BROADCAST
+        && m_exynosCameraParameters->getPLBMode() == false
+#endif
+    ) {
+        if(m_LLVpluginHandle != NULL){
+            int HwPreviewW = 0, HwPreviewH = 0;
+            m_exynosCameraParameters->getHwPreviewSize(&HwPreviewW, &HwPreviewH);
+
+            UniPluginBufferData_t pluginData;
+            UniPluginCameraInfo_t pluginCameraInfo;
+            pluginCameraInfo.CameraType = (UNI_PLUGIN_CAMERA_TYPE)getCameraId();
+            pluginCameraInfo.SensorType = (UNI_PLUGIN_SENSOR_TYPE)m_cameraSensorId;
+            memset(&pluginData, 0, sizeof(UniPluginBufferData_t));
+            pluginData.InWidth= HwPreviewW;
+            pluginData.InHeight= HwPreviewH;
+            if(m_LLVpluginHandle != NULL) {
+                uni_plugin_set(m_LLVpluginHandle,
+                    LLV_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &pluginData);
+            }
+            int powerCtrl = UNI_PLUGIN_POWER_CONTROL_4;
+            if(m_LLVpluginHandle != NULL) {
+                uni_plugin_set(m_LLVpluginHandle,
+                    LLV_PLUGIN_NAME, UNI_PLUGIN_INDEX_POWER_CONTROL, &powerCtrl);
+                uni_plugin_set(m_LLVpluginHandle,
+                    LLV_PLUGIN_NAME, UNI_PLUGIN_INDEX_CAMERA_INFO, &pluginCameraInfo);
+            }
+            uni_plugin_init(m_LLVpluginHandle);
+
+            m_LLVstatus = LLV_INIT;
+        }
+    }
+
+#endif
+
     m_exynosCameraParameters->getVideoSize(&videoW, &videoH);
     CLOGD("DEBUG(%s[%d]):videoSize = %d x %d",  __FUNCTION__, __LINE__, videoW, videoH);
 
@@ -4190,12 +6677,6 @@ status_t ExynosCamera::m_startRecordingInternal(void)
         CLOGE("ERR(%s[%d]):m_getMemoryCb(%d) fail", __FUNCTION__, __LINE__, (int)sizeof(struct addrs));
         ret = INVALID_OPERATION;
         goto func_exit;
-    }
-
-    /* Initialize recording callback heap available flags */
-    memset(m_recordingCallbackHeapAvailable, 0x00, sizeof(m_recordingCallbackHeapAvailable));
-    for (int i = 0; i < m_recordingBufferCount; i++) {
-        m_recordingCallbackHeapAvailable[i] = true;
     }
 
     if (m_doCscRecording == true) {
@@ -4296,6 +6777,12 @@ status_t ExynosCamera::m_stopRecordingInternal(void)
         m_recordingCallbackHeap = NULL;
     }
 
+#ifdef SAMSUNG_LLV
+    if (m_LLVstatus == LLV_INIT) {
+        m_LLVstatus = LLV_STOPPED;
+    }
+#endif
+
     return NO_ERROR;
 }
 
@@ -4391,10 +6878,32 @@ status_t ExynosCamera::m_restartPreviewInternal(void)
         err = ret;
     }
 
+#ifdef SUPPORT_SW_VDIS
+    if(m_swVDIS_Mode) {
+        if (m_swVDIS_BufferMgr != NULL)
+            m_swVDIS_BufferMgr->deinit();
+
+        if(m_exynosCameraParameters->increaseMaxBufferOfPreview()) {
+            m_exynosCameraParameters->setPreviewBufferCount(NUM_PREVIEW_BUFFERS + NUM_PREVIEW_SPARE_BUFFERS);
+            m_exynosconfig->current->bufInfo.num_preview_buffers = NUM_PREVIEW_BUFFERS + NUM_PREVIEW_SPARE_BUFFERS;
+            VDIS_LOG("VDIS_HAL: Preview Buffer Count Change to %d", NUM_PREVIEW_BUFFERS + NUM_PREVIEW_SPARE_BUFFERS);
+        } else {
+            m_exynosCameraParameters->setPreviewBufferCount(NUM_PREVIEW_BUFFERS);
+            m_exynosconfig->current->bufInfo.num_preview_buffers = NUM_PREVIEW_BUFFERS;
+            VDIS_LOG("VDIS_HAL: Preview Buffer Count Change to %d", NUM_PREVIEW_BUFFERS);
+        }
+    }
+#endif /*SUPPORT_SW_VDIS*/
+
     /* skip to free and reallocate buffers */
     if (m_bayerBufferMgr != NULL) {
         m_bayerBufferMgr->resetBuffers();
     }
+#ifdef SAMSUNG_DNG
+    if (m_fliteBufferMgr != NULL) {
+        m_fliteBufferMgr->resetBuffers();
+    }
+#endif
     if (m_3aaBufferMgr != NULL) {
         m_3aaBufferMgr->resetBuffers();
     }
@@ -4551,6 +7060,13 @@ status_t ExynosCamera::m_restartPreviewInternal(void)
         CLOGD("DEBUG(%s[%d]):setupThread Thread start pipeId(%d)", __FUNCTION__, __LINE__, PIPE_3AA);
         m_mainSetupQThread[INDEX(PIPE_3AA)]->run(PRIORITY_URGENT_DISPLAY);
     }
+
+#ifdef SAMSUNG_DNG
+    if (m_exynosCameraParameters->getDNGCaptureModeOn()) {
+        CLOGD("[DNG](%s[%d]):setupThread with List pipeId(%d)", __FUNCTION__, __LINE__, PIPE_FLITE);
+        m_mainSetupQ[INDEX(PIPE_FLITE)]->setup(m_mainSetupQThread[INDEX(PIPE_FLITE)]);
+    }
+#endif
 
     if (m_facedetectThread->isRunning() == false)
         m_facedetectThread->run();
@@ -4795,6 +7311,16 @@ bool ExynosCamera::m_mainThreadQSetupFLITE()
     nsecs_t timeStamp = 0;
     int frameCount = -1;
     ExynosCameraBufferManager *bufMgr;
+#ifdef SAMSUNG_DNG
+    int dstbufferIndex = 0;
+
+    buffer.index = -2;
+    dstbufferIndex = -1;
+
+    if (m_exynosCameraParameters->getDNGCaptureModeOn()) {
+        loop = false;
+    }
+#endif
 
     CLOGV("INFO(%s[%d]):wait previewCancelQ", __FUNCTION__, __LINE__);
     ret = m_mainSetupQ[INDEX(pipeId)]->waitAndPopProcessQ(&frame);
@@ -4817,6 +7343,11 @@ bool ExynosCamera::m_mainThreadQSetupFLITE()
         goto func_exit;
     }
 
+#ifdef SAMSUNG_DNG
+    if (m_exynosCameraParameters->getDNGCaptureModeOn()) {
+        bufMgr = m_fliteBufferMgr;
+    } else
+#endif
     {
         bufMgr = m_bayerBufferMgr;
     }
@@ -4828,6 +7359,13 @@ bool ExynosCamera::m_mainThreadQSetupFLITE()
             goto func_exit;
         }
 
+#ifdef SAMSUNG_DNG
+        if (m_exynosCameraParameters->getDNGCaptureModeOn()) {
+            m_fliteBufferMgr->getBuffer(&dstbufferIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &buffer);
+            ret = m_setupEntity(pipeId, newframe, NULL, &buffer);
+            CLOGV("[DNG](%s[%d]): m_fliteFrameCount(%d) index(%d)", __FUNCTION__, __LINE__, m_fliteFrameCount,buffer.index);
+        } else
+#endif
         {
             ret = m_setupEntity(pipeId, newframe);
         }
@@ -5155,6 +7693,9 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
     camera2_node_group node_group_info_isp;
     int32_t reprocessingBayerMode = m_exynosCameraParameters->getReprocessingBayerMode();
     int ispDstBufferIndex = -1;
+#ifdef SAMSUNG_LBP
+    unsigned int LBPframeCount = 0;
+#endif
 
     entity = frame->getFrameDoneFirstEntity();
     if (entity == NULL) {
@@ -5321,6 +7862,115 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
     case PIPE_FLITE:
         m_debugFpsCheck(entity->getPipeId());
 
+#ifdef SAMSUNG_DNG
+        if (m_exynosCameraParameters->getUseDNGCapture()) {
+            CLOGV("[DNG](%s[%d]):PIPE_FLITE (%d)", __FUNCTION__, __LINE__, entity->getPipeId());
+
+            ret = frame->getDstBuffer(entity->getPipeId(), &buffer);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):getDstBuffer fail, pipeId(%d), ret(%d)",
+                    __FUNCTION__, __LINE__, entity->getPipeId(), ret);
+                return ret;
+            }
+
+            unsigned int fliteFcount = 0;
+
+            /* Rawdump capture is available in pure bayer only */
+            camera2_shot_ext *shot_ext = NULL;
+            shot_ext = (camera2_shot_ext *)(buffer.addr[1]);
+            if (shot_ext != NULL)
+                fliteFcount = shot_ext->shot.dm.request.frameCount;
+            else
+                ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+
+            CLOGV("[DNG](%s[%d]):frame count (%d)", __FUNCTION__, __LINE__, fliteFcount);
+
+            if (m_exynosCameraParameters->getCheckMultiFrame()) {
+                if (m_searchDNGFrame) {
+                    unsigned int DNGFcount = 0;
+                    bool DNGCapture_activated = false;
+
+                    if (getDNGFcount() != 0) {
+                        m_dngFrameNumber = DNGFcount = getDNGFcount();
+                    }
+
+                    CLOGD("[DNG](%s[%d]):DNGFcount(%d) ois mode(%d) frame count(%d)",
+                        __FUNCTION__, __LINE__,DNGFcount, m_exynosCameraParameters->getOISCaptureModeOn(), fliteFcount);
+
+                    if (DNGFcount > 0) {
+                        DNGCapture_activated = true;
+                    }
+
+                    if (m_exynosCameraParameters->getCaptureExposureTime() == 0 &&
+                        DNGCapture_activated && fliteFcount >= DNGFcount) {
+                        DNGCapture_activated = false;
+                        m_searchDNGFrame = false;
+                        m_previewFrameFactory->setRequestFLITE(false);
+
+                        CLOGD("[DNG](%s[%d]):Raw frame count (%d)", __FUNCTION__, __LINE__, fliteFcount);
+
+                        m_DNGCaptureThread->run();
+                        m_dngCaptureQ->pushProcessQ(&buffer);
+                    } else if (m_exynosCameraParameters->getCaptureExposureTime() != 0 &&
+                        getDNGFcount() == 0) {
+                        if (!m_DNGCaptureThread->isRunning()) {
+                            m_DNGCaptureThread->run();
+                        }
+                        m_dngCaptureQ->pushProcessQ(&buffer);
+                        newFrame = m_frameMgr->createFrame(m_exynosCameraParameters, 0);
+                        m_mainSetupQ[INDEX(entity->getPipeId())]->pushProcessQ(&newFrame);
+                    } else if (m_exynosCameraParameters->getCaptureExposureTime() != 0 &&
+                        DNGCapture_activated && fliteFcount >= DNGFcount) {
+                        if (m_longExposureEnds) {
+                            DNGCapture_activated = false;
+                            m_searchDNGFrame = false;
+                            m_previewFrameFactory->setRequestFLITE(false);
+                            CLOGE("[DNG](%s[%d]):flite qbuffer m_searchDNGFrame(%d)",
+                                __FUNCTION__, __LINE__, m_searchDNGFrame ,fliteFcount);
+                            ret = m_putBuffers(m_fliteBufferMgr, buffer.index);
+                            if (ret < 0) {
+                                CLOGE("ERR(%s[%d]):m_putBuffers(%d) fail", __FUNCTION__, __LINE__, buffer.index);
+                                break;
+                            }
+                        } else {
+                            newFrame = m_frameMgr->createFrame(m_exynosCameraParameters, 0);
+                            m_mainSetupQ[INDEX(entity->getPipeId())]->pushProcessQ(&newFrame);
+                            m_dngCaptureQ->pushProcessQ(&buffer);
+                        }
+                        if (!m_DNGCaptureThread->isRunning() && !m_longExposureEnds) {
+                            m_DNGCaptureThread->run();
+                        }
+                    } else {
+                        CLOGE("[DNG](%s[%d]):flite qbuffer m_searchDNGFrame(%d)",
+                            __FUNCTION__, __LINE__, m_searchDNGFrame ,fliteFcount);
+                        ret = m_putBuffers(m_fliteBufferMgr, buffer.index);
+                        if (ret < 0) {
+                            CLOGE("ERR(%s[%d]):m_putBuffers(%d) fail", __FUNCTION__, __LINE__, buffer.index);
+                            break;
+                        }
+
+                        newFrame = m_frameMgr->createFrame(m_exynosCameraParameters, 0);
+                        m_mainSetupQ[INDEX(entity->getPipeId())]->pushProcessQ(&newFrame);
+                    }
+                } else {
+                    CLOGE("[DNG](%s[%d]):flite dqbuffer m_searchDNGFrame(%d)",
+                        __FUNCTION__, __LINE__, m_searchDNGFrame ,fliteFcount);
+                    ret = m_putBuffers(m_fliteBufferMgr, buffer.index);
+                    if (ret < 0) {
+                        CLOGE("ERR(%s[%d]):m_putBuffers(%d) fail", __FUNCTION__, __LINE__, buffer.index);
+                        break;
+                    }
+                }
+            } else {
+                CLOGD("[DNG](%s[%d]):Raw frame count (%d)", __FUNCTION__, __LINE__, fliteFcount);
+                m_dngFrameNumber = fliteFcount;
+                m_captureSelector->setDNGFrame(fliteFcount);
+                m_previewFrameFactory->stopThread(entity->getPipeId());
+                m_DNGCaptureThread->run();
+                m_dngCaptureQ->pushProcessQ(&buffer);
+            }
+        } else
+#endif
         {
             if (m_exynosCameraParameters->getHighSpeedRecording()) {
                 ret = frame->getDstBuffer(entity->getPipeId(), &buffer);
@@ -5430,7 +8080,13 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
         if (!m_exynosCameraParameters->getHighSpeedRecording()
             && frame->getFrameState() != FRAME_STATE_SKIPPED) {
             skipCount = m_exynosCameraParameters->getFrameSkipCount();
-
+#ifdef SR_CAPTURE
+            if(m_isCopySrMdeta) {
+                frame->getDynamicMeta(&m_srShotMeta);
+                m_isCopySrMdeta = false;
+                CLOGI("INFO(%s[%d]) copy SR FdMeta", __FUNCTION__, __LINE__);
+            }
+#endif
             if( m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_METADATA) &&
                 skipCount <= 0) {
                 fdFrame = m_frameMgr->createFrame(m_exynosCameraParameters, frame->getFrameCount());
@@ -5514,6 +8170,294 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
             frame->getUserDynamicMeta(m_meta_shot);
 
             m_checkEntranceLux(m_meta_shot);
+#ifdef SAMSUNG_LBP
+            if (m_exynosCameraParameters->getUsePureBayerReprocessing() == true) {
+                camera2_shot_ext *shot_ext = NULL;
+                shot_ext = (camera2_shot_ext *)(buffer.addr[1]);
+
+                if (shot_ext != NULL)
+                    LBPframeCount = shot_ext->shot.dm.request.frameCount;
+                else
+                    ALOGE("ERR(%s[%d]):Buffer is null", __FUNCTION__, __LINE__);
+            } else {
+                camera2_stream *lbp_shot_stream = NULL;
+                lbp_shot_stream = (struct camera2_stream *)buffer.addr[2];
+                getStreamFrameCount(lbp_shot_stream, &LBPframeCount);
+            }
+            if(getCameraId() == CAMERA_ID_FRONT)
+                m_exynosCameraParameters->setSCPFrameCount(LBPframeCount);
+#endif
+#ifdef SAMSUNG_JQ
+            if(m_isJpegQtableOn == true
+#ifdef SAMSUNG_LBP
+                && m_isLBPon == false
+#endif
+            ) {
+                m_isJpegQtableOn = false;
+                ret = m_processJpegQtable(&buffer);
+                if (ret < 0) {
+                    CLOGE("[JQ](%s[%d]): m_processJpegQtable() failed!!", __FUNCTION__, __LINE__);
+                }
+            }
+#endif
+#ifdef SAMSUNG_LLV
+            if (m_LLVstatus == LLV_INIT) {
+                int HwPreviewW = 0, HwPreviewH = 0;
+                m_exynosCameraParameters->getHwPreviewSize(&HwPreviewW, &HwPreviewH);
+                UniPluginBufferData_t pluginData;
+                memset(&pluginData, 0, sizeof(UniPluginBufferData_t));
+                int powerCtrl = UNI_PLUGIN_POWER_CONTROL_OFF;
+                float Low_Lux = -5.5;
+                float High_Lux = -3.5;
+                float Low_Lux_Front = -5.2;
+                float High_Lux_Front = -3.2;
+                float LLV_Lux = (int32_t)m_meta_shot->shot.udm.ae.vendorSpecific[5] / 256.0;
+
+                pluginData.InBuffY = buffer.addr[0];
+                pluginData.InBuffU = buffer.addr[1];
+
+                pluginData.InWidth = HwPreviewW;
+                pluginData.InHeight = HwPreviewH;
+                pluginData.BrightnessLux = (int32_t)m_meta_shot->shot.udm.ae.vendorSpecific[5];
+
+                if (getCameraId() == CAMERA_ID_FRONT) {
+                     if ((LLV_Lux > Low_Lux_Front) && (LLV_Lux <= High_Lux_Front))
+                        powerCtrl = UNI_PLUGIN_POWER_CONTROL_4;
+                }
+                else if (getCameraId() == CAMERA_ID_BACK){
+                    if ((LLV_Lux > Low_Lux) && (LLV_Lux <= High_Lux))
+                        powerCtrl = UNI_PLUGIN_POWER_CONTROL_4;
+                }
+
+#ifdef SAMSUNG_LLV_TUNING
+                powerCtrl = m_LLVpowerLevel;
+                CLOGD("[LLV_TEST] powerCtrl: %d", powerCtrl);
+#endif
+                if(m_LLVpluginHandle != NULL) {
+                    uni_plugin_set(m_LLVpluginHandle,
+                        LLV_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &pluginData);
+                    uni_plugin_set(m_LLVpluginHandle,
+                        LLV_PLUGIN_NAME, UNI_PLUGIN_INDEX_POWER_CONTROL, &powerCtrl);
+                    uni_plugin_process(m_LLVpluginHandle);
+                }
+            }
+            else if (m_LLVstatus == LLV_STOPPED) {
+                if(m_LLVpluginHandle != NULL) {
+                    uni_plugin_deinit(m_LLVpluginHandle);
+                }
+                m_LLVstatus = LLV_UNINIT;
+            }
+#endif
+
+#ifdef SAMSUNG_OT
+            if (m_exynosCameraParameters->getObjectTrackingChanged() == true
+                && m_OTstatus == UNI_PLUGIN_OBJECT_TRACKING_IDLE && m_OTstart == OBJECT_TRACKING_INIT) {
+                int maxNumFocusAreas = m_exynosCameraParameters->getMaxNumFocusAreas();
+                ExynosRect2* objectTrackingArea = new ExynosRect2[maxNumFocusAreas];
+                int* objectTrackingWeight = new int[maxNumFocusAreas];
+                int validNumber;
+                UniPluginFocusData_t focusData;
+                memset(&focusData, 0, sizeof(UniPluginFocusData_t));
+
+                m_exynosCameraParameters->getObjectTrackingAreas(&validNumber, objectTrackingArea, objectTrackingWeight);
+
+                for (int i = 0; i < validNumber; i++) {
+                    focusData.FocusROILeft = objectTrackingArea[i].x1;
+                    focusData.FocusROIRight = objectTrackingArea[i].x2;
+                    focusData.FocusROITop = objectTrackingArea[i].y1;
+                    focusData.FocusROIBottom = objectTrackingArea[i].y2;
+                    focusData.FocusWeight = objectTrackingWeight[i];
+                    ret = uni_plugin_set(m_OTpluginHandle,
+                              OBJECT_TRACKING_PLUGIN_NAME, UNI_PLUGIN_INDEX_FOCUS_INFO, &focusData);
+                    if(ret < 0) {
+                        CLOGE("[OBTR](%s[%d]):Object Tracking plugin set focus info failed!!", __FUNCTION__, __LINE__);
+                    }
+                }
+
+                delete[] objectTrackingArea;
+                delete[] objectTrackingWeight;
+
+                m_exynosCameraParameters->setObjectTrackingChanged(false);
+                m_OTisTouchAreaGet = true;
+            }
+
+            if ((m_exynosCameraParameters->getObjectTrackingEnable() == true
+                || m_exynosCameraParameters->getObjectTrackingGet() == true)
+                && m_OTstart == OBJECT_TRACKING_INIT
+                && m_OTisTouchAreaGet == true) {
+                int HwPreviewW = 0, HwPreviewH = 0;
+                m_exynosCameraParameters->getHwPreviewSize(&HwPreviewW, &HwPreviewH);
+
+                UniPluginBufferData_t bufferData;
+                memset(&bufferData, 0, sizeof(UniPluginBufferData_t));
+
+                bufferData.InBuffY = buffer.addr[0];
+                bufferData.InBuffU = buffer.addr[1];
+
+                bufferData.InWidth = HwPreviewW;
+                bufferData.InHeight = HwPreviewH;
+                bufferData.InFormat = UNI_PLUGIN_FORMAT_NV21;
+                ret = uni_plugin_set(m_OTpluginHandle,
+                          OBJECT_TRACKING_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &bufferData);
+                if(ret < 0) {
+                    CLOGE("[OBTR](%s[%d]):Object Tracking plugin set buffer info failed!!", __FUNCTION__, __LINE__);
+                }
+
+                ret = uni_plugin_process(m_OTpluginHandle);
+                if(ret < 0) {
+                    CLOGE("[OBTR](%s[%d]):Object Tracking plugin process failed!!", __FUNCTION__, __LINE__);
+                }
+
+                uni_plugin_get(m_OTpluginHandle,
+                    OBJECT_TRACKING_PLUGIN_NAME, UNI_PLUGIN_INDEX_FOCUS_INFO, &m_OTfocusData);
+                CLOGV("[OBTR](%s[%d])Focus state: %d, x1: %d, x2: %d, y1: %d, y2: %d, weight: %d",
+                        __FUNCTION__, __LINE__, m_OTfocusData.FocusState,
+                        m_OTfocusData.FocusROILeft, m_OTfocusData.FocusROIRight,
+                        m_OTfocusData.FocusROITop, m_OTfocusData.FocusROIBottom, m_OTfocusData.FocusWeight);
+                CLOGV("[OBTR](%s[%d])Wmove: %d, Hmove: %d, Wvel: %d, Hvel: %d",
+                        __FUNCTION__, __LINE__, m_OTfocusData.W_Movement, m_OTfocusData.H_Movement,
+                        m_OTfocusData.W_Velocity, m_OTfocusData.H_Velocity);
+
+                if (m_exynosCameraParameters->getObjectTrackingEnable() == true && m_OTstart == OBJECT_TRACKING_INIT) {
+                    m_exynosCameraParameters->setObjectTrackingGet(true);
+                }
+
+                m_OTstatus = m_OTfocusData.FocusState;
+
+                uni_plugin_get(m_OTpluginHandle,
+                    OBJECT_TRACKING_PLUGIN_NAME, UNI_PLUGIN_INDEX_FOCUS_PREDICTED, &m_OTpredictedData);
+                CLOGV("[OBTR](%s[%d])Predicted state: %d, x1: %d, x2: %d, y1: %d, y2: %d, weight: %d",
+                        __FUNCTION__, __LINE__, m_OTpredictedData.FocusState,
+                        m_OTpredictedData.FocusROILeft, m_OTpredictedData.FocusROIRight,
+                        m_OTpredictedData.FocusROITop, m_OTpredictedData.FocusROIBottom, m_OTpredictedData.FocusWeight);
+                CLOGV("[OBTR](%s[%d])Wmove: %d, Hmove: %d, Wvel: %d, Hvel: %d",
+                        __FUNCTION__, __LINE__, m_OTpredictedData.W_Movement, m_OTpredictedData.H_Movement,
+                        m_OTpredictedData.W_Velocity, m_OTpredictedData.H_Velocity);
+
+                ExynosRect cropRegionRect;
+                ExynosRect2 oldrect, newRect;
+                oldrect.x1 = m_OTpredictedData.FocusROILeft;
+                oldrect.x2 = m_OTpredictedData.FocusROIRight;
+                oldrect.y1 = m_OTpredictedData.FocusROITop;
+                oldrect.y2 = m_OTpredictedData.FocusROIBottom;
+                m_exynosCameraParameters->getHwBayerCropRegion(&cropRegionRect.w, &cropRegionRect.h, &cropRegionRect.x, &cropRegionRect.y);
+                newRect = convertingAndroidArea2HWAreaBcropOut(&oldrect, &cropRegionRect);
+                m_OTpredictedData.FocusROILeft = newRect.x1;
+                m_OTpredictedData.FocusROIRight = newRect.x2;
+                m_OTpredictedData.FocusROITop = newRect.y1;
+                m_OTpredictedData.FocusROIBottom = newRect.y2;
+
+                ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
+                ret = autoFocusMgr->setObjectTrackingAreas(&m_OTpredictedData);
+                if(ret == false) {
+                    CLOGE("[OBTR](%s[%d]):setObjectTrackingAreas failed!!", __FUNCTION__, __LINE__);
+                }
+            }
+            if(m_OTstart == OBJECT_TRACKING_DEINIT) {
+                int ret = uni_plugin_deinit(m_OTpluginHandle);
+                if(ret < 0) {
+                    CLOGE("[OBTR](%s[%d]):Object Tracking plugin deinit failed!!", __FUNCTION__, __LINE__);
+                }
+                m_OTstart = OBJECT_TRACKING_IDLE;
+                /* Waiting in the recording mode can make preview thread stop */
+#if 0
+                m_OT_mutex.lock();
+                if(m_OTisWait == true)
+                    m_OT_condition.signal();
+                m_OT_mutex.unlock();
+#endif
+            }
+#endif
+#ifdef SAMSUNG_LBP
+            if(((m_captureSelector->getFrameIndex() == LBPframeCount && m_captureSelector->getFrameIndex())
+                || (m_LBPindex > 0 && m_LBPindex < m_exynosCameraParameters->getHoldFrameCount()))
+                    && m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_NONE
+                    && m_isLBPon == true){
+                CLOGD("[LBP](%s[%d]):Start BestPic(%d/%d)", __FUNCTION__, __LINE__, LBPframeCount, m_LBPindex);
+                char *srcAddr = NULL;
+                char *dstAddr = NULL;
+                int hwPreviewFormat = m_exynosCameraParameters->getHwPreviewFormat();
+                int planeCount = getYuvPlaneCount(hwPreviewFormat);
+                if (planeCount <= 0) {
+                    CLOGE("[LBP](%s[%d]):getYuvPlaneCount(%d) fail", __FUNCTION__, __LINE__, hwPreviewFormat);
+                }
+
+                ret = m_lbpBufferMgr->getBuffer(&m_LBPindex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &m_LBPbuffer[m_LBPindex].buffer);
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):m_lbpBufferMgr->getBuffer fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+                    return ret;
+                }
+
+                /* TODO : have to consider all fmt(planes) and stride */
+                for (int plane = 0; plane < planeCount; plane++) {
+                    srcAddr = buffer.addr[plane];
+                    dstAddr = m_LBPbuffer[m_LBPindex].buffer.addr[plane];
+                    memcpy(dstAddr, srcAddr, m_LBPbuffer[m_LBPindex].buffer.size[plane]);
+                }
+                m_LBPbuffer[m_LBPindex].frameNumber = LBPframeCount;
+                /* There is a case that LBP thread ends first, we need to increase the index before that. */
+                m_LBPindex++;
+                m_LBPbufferQ->pushProcessQ(&m_LBPbuffer[m_LBPindex-1]);
+            }
+#endif
+#ifdef SUPPORT_SW_VDIS
+            if(m_swVDIS_Mode) {
+                memset(m_swVDIS_fd_dm, 0x00, sizeof(struct camera2_dm));
+                if (frame->getDynamicMeta(m_swVDIS_fd_dm) != NO_ERROR) {
+                    CLOGE("ERR(%s[%d]) meta_shot_ext is null", __FUNCTION__, __LINE__);
+                }
+
+                int swVDIS_BufIndex = -1;
+                int swVDIS_IndexCount = (m_swVDIS_FrameNum % NUM_VDIS_BUFFERS);
+                ret = m_swVDIS_BufferMgr->getBuffer(&swVDIS_BufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL,
+                            &m_swVDIS_OutBuf[swVDIS_IndexCount]);
+
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):m_swVDIS_BufferMgr->getBuffer fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+                    return ret;
+                }
+
+                nsecs_t swVDIS_timeStamp = (nsecs_t)frame->getTimeStamp();
+                nsecs_t swVDIS_timeStampBoot = (nsecs_t)frame->getTimeStampBoot();
+                int swVDIS_Lux = m_meta_shot->shot.udm.ae.vendorSpecific[5] / 256;
+                int swVDIS_ZoomLevel = m_exynosCameraParameters->getZoomLevel();
+                float swVDIS_ExposureValue = (int32_t)m_meta_shot->shot.udm.ae.vendorSpecific[4] / 256.0;
+
+                int swVDIS_num = 0;
+                swVDIS_num = NUM_OF_DETECTED_FACES;
+                memset(m_swVDIS_FaceData, 0x00, sizeof(swVDIS_FaceData_t));
+
+                for (int i = 0; i < swVDIS_num; i++) {
+                    if (m_swVDIS_fd_dm->stats.faceIds[i]) {
+                        m_swVDIS_FaceData->FaceRect[i].left = m_swVDIS_fd_dm->stats.faceRectangles[i][0];
+                        m_swVDIS_FaceData->FaceRect[i].top = m_swVDIS_fd_dm->stats.faceRectangles[i][1];
+                        m_swVDIS_FaceData->FaceRect[i].right = m_swVDIS_fd_dm->stats.faceRectangles[i][2];
+                        m_swVDIS_FaceData->FaceRect[i].bottom= m_swVDIS_fd_dm->stats.faceRectangles[i][3];
+                        m_swVDIS_FaceData->FaceNum++;
+                    }
+                }
+
+                m_swVDIS_process(&buffer, swVDIS_IndexCount, swVDIS_timeStamp, swVDIS_timeStampBoot,
+                    swVDIS_Lux, swVDIS_ZoomLevel, swVDIS_ExposureValue, m_swVDIS_FaceData);
+
+#ifdef SAMSUNG_OIS_VDIS
+                if(m_exynosCameraParameters->getOIS() == OPTICAL_STABILIZATION_MODE_VDIS) {
+                    UNI_PLUGIN_OIS_MODE mode = m_swVDIS_getOISmode();
+                    uint32_t coef = 0;
+                    if(mode == UNI_PLUGIN_OIS_MODE_CENTERING)
+                        coef = 0xFFFF;
+                    else
+                        coef = 0x1;
+
+                    if(m_OISvdisMode != mode) {
+                        CLOGD("DEBUG(%s[%d]):OIS VDIS coef: %d", __FUNCTION__, __LINE__, coef);
+                        m_OISvdisMode = mode;
+                    }
+                    m_exynosCameraParameters->setOISCoef(coef);
+                }
+#endif
+            }
+#endif /*SUPPORT_SW_VDIS*/
 
             /* TO DO : skip frame for HDR */
             shot_stream = (struct camera2_stream *)buffer.addr[2];
@@ -5549,6 +8493,18 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
             if (m_frameSkipCount > 0) {
                 CLOGD("INFO(%s[%d]):Skip frame for frameSkipCount(%d) buffer.index(%d)",
                         __FUNCTION__, __LINE__, m_frameSkipCount, buffer.index);
+#ifdef SUPPORT_SW_VDIS
+                if(m_swVDIS_Mode) {
+                    if(m_frameSkipCount == 1) {
+                        for(int i = 0; i < NUM_VDIS_BUFFERS; i++) {
+                            ret = m_swVDIS_BufferMgr->cancelBuffer(i);
+                            if (ret < 0) {
+                                CLOGE("ERR(%s[%d]):swVDIS buffer return fail", __FUNCTION__, __LINE__);
+                            }
+                        }
+                    }
+                }
+#endif /*SUPPORT_SW_VDIS*/
                 newFrame->setFrameState(FRAME_STATE_SKIPPED);
                 if (buffer.index >= 0) {
                     ret = m_scpBufferMgr->cancelBuffer(buffer.index, true);
@@ -5559,7 +8515,133 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
             } else {
                 if (m_skipReprocessing == true)
                     m_skipReprocessing = false;
+#ifdef SUPPORT_SW_VDIS
+                if(m_swVDIS_Mode) {
+                    nsecs_t timeStamp = m_swVDIS_timeStamp[m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index];
 
+                    ret = m_putBuffers(m_swVDIS_BufferMgr, m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index);
+                    if (ret < 0) {
+                        CLOGE("ERR(%s[%d]):put Buffer fail", __FUNCTION__, __LINE__);
+                        break;
+                    }
+
+                    if (m_getRecordingEnabled() == true
+                        && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)) {
+                        if (timeStamp <= 0L) {
+                            CLOGE("WARN(%s[%d]):timeStamp(%lld) Skip", __FUNCTION__, __LINE__, timeStamp);
+                        } else {
+                            if (m_exynosCameraParameters->doCscRecording() == true) {
+                                /* get Recording Image buffer */
+                                int bufIndex = -2;
+                                ExynosCameraBuffer recordingBuffer;
+                                ret = m_recordingBufferMgr->getBuffer(&bufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &recordingBuffer);
+                                if (ret < 0 || bufIndex < 0) {
+                                    if ((++m_recordingFrameSkipCount % 100) == 0) {
+                                        CLOGE("ERR(%s[%d]): Recording buffer is not available!! Recording Frames are Skipping(%d frames) (bufIndex=%d)",
+                                            __FUNCTION__, __LINE__, m_recordingFrameSkipCount, bufIndex);
+                                        m_recordingBufferMgr->printBufferQState();
+                                    }
+                                } else {
+                                    if (m_recordingFrameSkipCount != 0) {
+                                        CLOGE("ERR(%s[%d]): Recording buffer is not available!! Recording Frames are Skipped(%d frames) (bufIndex=%d) (recordingQ=%d)",
+                                               __FUNCTION__, __LINE__, m_recordingFrameSkipCount, bufIndex, m_recordingQ->getSizeOfProcessQ());
+                                        m_recordingFrameSkipCount = 0;
+                                        m_recordingBufferMgr->printBufferQState();
+                                    }
+
+                                    ret = m_doPrviewToRecordingFunc(PIPE_GSC_VIDEO, m_swVDIS_OutBuf[m_swVDIS_OutQIndex], recordingBuffer, timeStamp);
+                                    if (ret < 0) {
+                                        CLOGW("WARN(%s[%d]):recordingCallback Skip", __FUNCTION__, __LINE__);
+                                    }
+                                }
+                            } else {
+                                m_recordingTimeStamp[m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index] = timeStamp;
+
+                                if (m_recordingStartTimeStamp == 0) {
+                                    m_recordingStartTimeStamp = timeStamp;
+                                    CLOGI("INFO(%s[%d]):m_recordingStartTimeStamp=%lld",
+                                        __FUNCTION__, __LINE__, m_recordingStartTimeStamp);
+                                }
+
+                                if ((0L < timeStamp)
+                                    && (m_lastRecordingTimeStamp < timeStamp)
+                                    && (m_recordingStartTimeStamp <= timeStamp)) {
+                                    if (m_getRecordingEnabled() == true
+                                        && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)) {
+#ifdef CHECK_MONOTONIC_TIMESTAMP
+                                        CLOGD("DEBUG(%s[%d]):m_dataCbTimestamp::recordingFrameIndex=%d, recordingTimeStamp=%lld, fd[0]=%d",
+                                            __FUNCTION__, __LINE__, m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index, timeStamp, m_swVDIS_OutBuf[m_swVDIS_OutQIndex].fd[0]);
+#endif
+#ifdef DEBUG
+                                        CLOGD("DEBUG(%s[%d]): - lastTimeStamp(%lld), systemTime(%lld), recordingStart(%lld)",
+                                            __FUNCTION__, __LINE__,
+                                            m_lastRecordingTimeStamp,
+                                            systemTime(SYSTEM_TIME_MONOTONIC),
+                                            m_recordingStartTimeStamp);
+#endif
+
+                                        if (m_recordingBufAvailable[m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index] == false) {
+                                             CLOGW("WARN(%s[%d]):recordingFrameIndex(%d) didn't release yet !!! drop the frame !!! "
+                                                 " timeStamp(%lld) m_recordingBufAvailable(%d)",
+                                                 __FUNCTION__,
+                                                 __LINE__,
+                                                 m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index,
+                                                 timeStamp,
+                                                 (int)m_recordingBufAvailable[m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index]);
+                                        } else {
+                                            if (m_recordingCallbackHeap != NULL) {
+
+                                                struct VideoNativeHandleMetadata *recordAddrs = NULL;
+
+                                                recordAddrs = (struct VideoNativeHandleMetadata *)m_recordingCallbackHeap->data;
+                                                recordAddrs[m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index].eType = kMetadataBufferTypeNativeHandleSource;
+
+                                                native_handle* handle = native_handle_create(2, 1);
+                                                handle->data[0] = (int32_t) m_swVDIS_OutBuf[m_swVDIS_OutQIndex].fd[0];
+                                                handle->data[1] = (int32_t) m_swVDIS_OutBuf[m_swVDIS_OutQIndex].fd[1];
+                                                handle->data[2] = (int32_t) m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index;
+
+                                                recordAddrs[m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index].pHandle = handle;
+
+                                                m_recordingBufAvailable[m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index] = false;
+                                                m_lastRecordingTimeStamp = timeStamp;
+                                            } else {
+                                                CLOGD("INFO(%s[%d]) : m_recordingCallbackHeap is NULL.", __FUNCTION__, __LINE__);
+                                            }
+
+                                            if (m_getRecordingEnabled() == true
+                                                && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)) {
+#ifdef SAMSUNG_HLV
+                                                if (m_HLV) {
+                                                    /* Ignore the ERROR .. HLV solution is smart */
+                                                    ret = m_ProgramAndProcessHLV(&m_swVDIS_OutBuf[m_swVDIS_OutQIndex]);
+                                                }
+#endif
+                                                m_dataCbTimestamp(
+                                                    timeStamp,
+                                                    CAMERA_MSG_VIDEO_FRAME,
+                                                    m_recordingCallbackHeap,
+                                                    m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index,
+                                                    m_callbackCookie);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    CLOGW("WARN(%s[%d]):recordingFrameIndex=%d, timeStamp(%lld) invalid -"
+                                        " lastTimeStamp(%lld), systemTime(%lld), recordingStart(%lld), m_recordingBufAvailable(%d)",
+                                        __FUNCTION__, __LINE__, m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index, timeStamp,
+                                        m_lastRecordingTimeStamp,
+                                        systemTime(SYSTEM_TIME_MONOTONIC),
+                                        m_recordingStartTimeStamp,
+                                        (int)m_recordingBufAvailable[m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index]);
+                                        m_recordingTimeStamp[m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index] = 0L;
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+#endif /*SUPPORT_SW_VDIS*/
                 {
                     nsecs_t timeStamp = (nsecs_t)frame->getTimeStamp();
 
@@ -5606,8 +8688,6 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
                                     && (m_recordingStartTimeStamp <= timeStamp)) {
                                     if (m_getRecordingEnabled() == true
                                         && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)) {
-                                        int heapIndex = -1;
-                                        native_handle* handle = NULL;
 #ifdef CHECK_MONOTONIC_TIMESTAMP
                                         CLOGD("DEBUG(%s[%d]):m_dataCbTimestamp::recordingFrameIndex=%d, recordingTimeStamp=%lld, fd[0]=%d",
                                                 __FUNCTION__, __LINE__, buffer.index, (long long)timeStamp, buffer.fd[0]);
@@ -5628,22 +8708,15 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
                                             if (m_recordingCallbackHeap != NULL) {
                                                 struct VideoNativeHandleMetadata *recordAddrs = NULL;
 
-                                                ret = m_getAvailableRecordingCallbackHeapIndex(&heapIndex);
-                                                if (ret != NO_ERROR || heapIndex < 0 || heapIndex >= m_recordingBufferCount) {
-                                                    CLOGE("ERR(%s[%d]):Failed to getAvailableRecordingCallbackHeapIndex %d",
-                                                            __FUNCTION__, __LINE__,
-                                                            heapIndex);
-                                                }
-
                                                 recordAddrs = (struct VideoNativeHandleMetadata *)m_recordingCallbackHeap->data;
-                                                recordAddrs[heapIndex].eType = kMetadataBufferTypeNativeHandleSource;
+                                                recordAddrs[buffer.index].eType = kMetadataBufferTypeNativeHandleSource;
 
-                                                handle = native_handle_create(2, 1);
+                                                native_handle* handle = native_handle_create(2, 1);
                                                 handle->data[0] = (int32_t) buffer.fd[0];
                                                 handle->data[1] = (int32_t) buffer.fd[1];
                                                 handle->data[2] = (int32_t) buffer.index;
 
-                                                recordAddrs[heapIndex].pHandle = handle;
+                                                recordAddrs[buffer.index].pHandle = handle;
 
                                                 m_recordingBufAvailable[buffer.index] = false;
                                                 m_lastRecordingTimeStamp = timeStamp;
@@ -5653,17 +8726,19 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
 
                                             if (m_getRecordingEnabled() == true
                                                 && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)) {
+#ifdef SAMSUNG_HLV
+                                                if (m_HLV) {
+                                                    /* Ignore the ERROR .. HLV solution is smart */
+                                                    ret = m_ProgramAndProcessHLV(&buffer);
+                                                }
+#endif
                                                 m_dataCbTimestamp(
                                                     timeStamp,
                                                     CAMERA_MSG_VIDEO_FRAME,
                                                     m_recordingCallbackHeap,
-                                                    heapIndex,
+                                                    buffer.index,
                                                     m_callbackCookie);
                                             }
-                                        }
-
-                                        if (handle != NULL) {
-                                            native_handle_delete(handle);
                                         }
                                     }
                                 } else {
@@ -5723,6 +8798,25 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
 
                 } else if((m_exynosCameraParameters->getFastFpsMode() > 1) && (m_exynosCameraParameters->getRecordingHint() == 1)) {
                     m_skipCount++;
+#ifdef SAMSUNG_TN_FEATURE
+                    short skipInterval = (m_exynosCameraParameters->getFastFpsMode() - 1) * 2;
+
+                    if((m_exynosCameraParameters->getShotMode() == SHOT_MODE_SEQUENCE && (m_skipCount%4 != 0))
+                        || (m_exynosCameraParameters->getShotMode() != SHOT_MODE_SEQUENCE && (m_skipCount % skipInterval) > 0)) {
+                        CLOGV("INFO(%s[%d]):fast fps mode skip frame(%d) ", __FUNCTION__, __LINE__,m_skipCount);
+                        newFrame->setFrameState(FRAME_STATE_SKIPPED);
+                        if (buffer.index >= 0) {
+                            /* only apply in the Full OTF of Exynos74xx. */
+                            ret = m_scpBufferMgr->cancelBuffer(buffer.index, true);
+                            if (ret < 0)
+                                CLOGE("ERR(%s[%d]):SCP buffer return fail", __FUNCTION__, __LINE__);
+                        }
+
+                        callbackFrame->decRef();
+                        m_frameMgr->deleteFrame(callbackFrame);
+                        callbackFrame = NULL;
+                    } else
+#endif
                     {
                         CLOGV("INFO(%s[%d]):push frame to previewQ", __FUNCTION__, __LINE__);
                         m_previewQ->pushProcessQ(&callbackFrame);
@@ -5749,6 +8843,53 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrame *frame)
                         callbackFrame = NULL;
                         m_longExposurePreview = true;
                     } else {
+#ifdef OIS_CAPTURE
+                        ExynosCameraActivitySpecialCapture *m_sCaptureMgr = NULL;
+                        unsigned int OISFcount = 0;
+                        unsigned int fliteFcount = 0;
+                        bool OISCapture_activated = false;
+
+                        m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+                        OISFcount = m_sCaptureMgr->getOISCaptureFcount();
+                        OISFcount += OISCAPTURE_DELAY;
+                        fliteFcount = m_meta_shot->shot.dm.request.frameCount;
+
+                        if(OISFcount > OISCAPTURE_DELAY) {
+                            if (OISFcount == fliteFcount
+#ifdef SAMSUNG_LLS_DEBLUR
+                                && m_exynosCameraParameters->getLDCaptureMode() == MULTI_SHOT_MODE_NONE
+#endif
+                            ) {
+                                OISCapture_activated = true;
+                            }
+#ifdef SAMSUNG_LLS_DEBLUR
+                            else if (m_exynosCameraParameters->getLDCaptureMode() > MULTI_SHOT_MODE_NONE
+                                && OISFcount <= fliteFcount
+                                && fliteFcount < OISFcount + m_exynosCameraParameters->getLDCaptureCount()) {
+                                OISCapture_activated = true;
+                            }
+#endif
+                        }
+
+                        if((m_exynosCameraParameters->getSeriesShotCount() == 0
+#ifdef LLS_REPROCESSING
+                            || m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS
+#endif
+                            ) && OISCapture_activated) {
+                            CLOGD("INFO(%s[%d]):OIS capture mode. Skip frame. FliteFrameCount(%d) ", __FUNCTION__, __LINE__,fliteFcount);
+                            newFrame->setFrameState(FRAME_STATE_SKIPPED);
+                            if (buffer.index >= 0) {
+                                /* only apply in the Full OTF of Exynos74xx. */
+                                ret = m_scpBufferMgr->cancelBuffer(buffer.index, true);
+                                if (ret < 0)
+                                    CLOGE("ERR(%s[%d]):SCP buffer return fail", __FUNCTION__, __LINE__);
+                            }
+
+                            callbackFrame->decRef();
+                            m_frameMgr->deleteFrame(callbackFrame);
+                            callbackFrame = NULL;
+                        } else
+#endif
                         {
                             CLOGV("INFO(%s[%d]):push frame to previewQ", __FUNCTION__, __LINE__);
                             m_previewQ->pushProcessQ(&callbackFrame);
@@ -6087,8 +9228,6 @@ status_t ExynosCamera::m_handlePreviewFrameFrontDual(ExynosCameraFrame *frame)
                                 && (m_recordingStartTimeStamp <= timeStamp)) {
                                 if (m_getRecordingEnabled() == true
                                         && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)) {
-                                    int heapIndex = -1;
-                                    native_handle* handle = NULL;
 #ifdef CHECK_MONOTONIC_TIMESTAMP
                                     CLOGD("DEBUG(%s[%d]):m_dataCbTimestamp::recordingFrameIndex=%d, recordingTimeStamp=%lld, fd[0]=%d",
                                             __FUNCTION__, __LINE__, buffer.index, (long long)timeStamp, buffer.fd[0]);
@@ -6108,22 +9247,15 @@ status_t ExynosCamera::m_handlePreviewFrameFrontDual(ExynosCameraFrame *frame)
                                     } else {
                                         struct VideoNativeHandleMetadata *recordAddrs = NULL;
 
-                                        ret = m_getAvailableRecordingCallbackHeapIndex(&heapIndex);
-                                        if (ret != NO_ERROR || heapIndex < 0 || heapIndex >= m_recordingBufferCount) {
-                                            CLOGE("ERR(%s[%d]):Failed to getAvailableRecordingCallbackHeapIndex %d",
-                                                    __FUNCTION__, __LINE__,
-                                                    heapIndex);
-                                        }
-
                                         recordAddrs = (struct VideoNativeHandleMetadata *)m_recordingCallbackHeap->data;
-                                        recordAddrs[heapIndex].eType = kMetadataBufferTypeNativeHandleSource;
+                                        recordAddrs[buffer.index].eType = kMetadataBufferTypeNativeHandleSource;
 
-                                        handle = native_handle_create(2, 1);
+                                        native_handle* handle = native_handle_create(2, 1);
                                         handle->data[0] = (int32_t) buffer.fd[0];
                                         handle->data[1] = (int32_t) buffer.fd[1];
                                         handle->data[2] = (int32_t) buffer.index;
 
-                                        recordAddrs[heapIndex].pHandle = handle;
+                                        recordAddrs[buffer.index].pHandle = handle;
 
                                         m_recordingBufAvailable[buffer.index] = false;
                                         m_lastRecordingTimeStamp = timeStamp;
@@ -6132,12 +9264,8 @@ status_t ExynosCamera::m_handlePreviewFrameFrontDual(ExynosCameraFrame *frame)
                                                 timeStamp,
                                                 CAMERA_MSG_VIDEO_FRAME,
                                                 m_recordingCallbackHeap,
-                                                heapIndex,
+                                                buffer.index,
                                                 m_callbackCookie);
-                                    }
-
-                                    if (handle != NULL) {
-                                        native_handle_delete(handle);
                                     }
                                 }
                             } else {
@@ -6183,6 +9311,21 @@ status_t ExynosCamera::m_handlePreviewFrameFrontDual(ExynosCameraFrame *frame)
                     callbackFrame = NULL;
                 } else if((m_exynosCameraParameters->getFastFpsMode() == 2) && (m_exynosCameraParameters->getRecordingHint() == 1)) {
                     m_skipCount++;
+#ifdef SAMSUNG_DOF
+                    if((m_exynosCameraParameters->getShotMode() == SHOT_MODE_SEQUENCE && m_skipCount%4 != 0)
+                        || (m_exynosCameraParameters->getShotMode() != SHOT_MODE_SEQUENCE && m_skipCount%2 == 1)) {
+                        CLOGV("INFO(%s[%d]):fast fps mode skip frame(%d) ", __FUNCTION__, __LINE__,m_skipCount);
+                        newFrame->setFrameState(FRAME_STATE_SKIPPED);
+                        if (buffer.index >= 0) {
+                            ret = m_scpBufferMgr->cancelBuffer(buffer.index);
+                            if (ret < 0)
+                                CLOGE("ERR(%s[%d]):SCP buffer return fail", __FUNCTION__, __LINE__);
+                        }
+                        callbackFrame->decRef();
+                        m_frameMgr->deleteFrame(callbackFrame);
+                        callbackFrame = NULL;
+                    } else
+#endif
                     {
                         CLOGV("INFO(%s[%d]):push frame to previewQ", __FUNCTION__, __LINE__);
                         m_previewQ->pushProcessQ(&callbackFrame);
@@ -6307,11 +9450,27 @@ bool ExynosCamera::m_previewThreadFunc(void)
     int  pipeId    = 0;
     int  pipeIdCsc = 0;
     int  maxbuffers   = 0;
+#ifdef USE_CAMERA_PREVIEW_FRAME_SCHEDULER
+    uint32_t curMinFps = 0;
+    uint32_t curMaxFps = 0;
+#endif
     ExynosCameraBuffer buffer;
     ExynosCameraFrame  *frame = NULL;
     nsecs_t timeStamp = 0;
     int frameCount = -1;
     frame_queue_t *previewQ;
+
+#ifdef USE_CAMERA_PREVIEW_FRAME_SCHEDULER
+    m_exynosCameraParameters->getPreviewFpsRange(&curMinFps, &curMaxFps);
+
+    /* Check the Slow/Fast Motion Scenario - sensor : 120fps, preview : 60fps */
+    if(((curMinFps == 120) && (curMaxFps == 120))
+         || ((curMinFps == 240) && (curMaxFps == 240))) {
+        CLOGV("(%s[%d]) : Change PreviewDuration from (%d,%d) to (60000, 60000)", __FUNCTION__, __LINE__, curMinFps, curMaxFps);
+        curMinFps = 60;
+        curMaxFps = 60;
+    }
+#endif
 
     pipeId    = PIPE_SCP;
     pipeIdCsc = PIPE_GSC;
@@ -6372,6 +9531,9 @@ bool ExynosCamera::m_previewThreadFunc(void)
 
     /* Prevent displaying unprocessed beauty images in beauty shot. */
     if ((m_exynosCameraParameters->getShotMode() == SHOT_MODE_BEAUTY_FACE)
+#ifdef LLS_CAPTURE
+        || (m_exynosCameraParameters->getLLSOn() == true && getCameraId() == CAMERA_ID_FRONT)
+#endif
         ) {
         if (m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME) &&
             checkBit(&m_callbackState, CALLBACK_STATE_COMPRESSED_IMAGE)) {
@@ -6387,6 +9549,11 @@ bool ExynosCamera::m_previewThreadFunc(void)
         (m_exynosCameraParameters->getPreviewBufferCount() == NUM_PREVIEW_BUFFERS + NUM_PREVIEW_SPARE_BUFFERS &&
         m_scpBufferMgr->getNumOfAvailableAndNoneBuffer() > 4 &&
         previewQ->getSizeOfProcessQ() < 2) ||
+#ifdef SUPPORT_SW_VDIS
+        (m_exynosCameraParameters->getPreviewBufferCount() == NUM_VDIS_BUFFERS &&
+        m_scpBufferMgr->getNumOfAvailableAndNoneBuffer() > 2 &&
+        previewQ->getSizeOfProcessQ() < 1) ||
+#endif /*SUPPORT_SW_VDIS*/
         (m_exynosCameraParameters->getPreviewBufferCount() == NUM_PREVIEW_BUFFERS &&
         m_scpBufferMgr->getNumOfAvailableAndNoneBuffer() > 2 &&
         previewQ->getSizeOfProcessQ() < 1)) {
@@ -6469,8 +9636,81 @@ bool ExynosCamera::m_previewThreadFunc(void)
         }
 #endif
 
+#ifdef SAMSUNG_SENSOR_LISTENER
+#ifdef SAMSUNG_HRM
+        if(m_uv_rayHandle != NULL) {
+            ret = sensor_listener_get_data(m_uv_rayHandle, ST_UV_RAY, &m_uv_rayListenerData, false);
+            if(ret < 0) {
+                CLOGW("WRN(%s[%d]:%d):skip the HRM data", __FUNCTION__, __LINE__, ret);
+            } else {
+                m_exynosCameraParameters->m_setHRM(m_uv_rayListenerData.uv_ray.ir_data, m_uv_rayListenerData.uv_ray.status);
+            }
+        }
+#endif
+
+#ifdef SAMSUNG_LIGHT_IR
+        if(m_light_irHandle != NULL) {
+            ret = sensor_listener_get_data(m_light_irHandle, ST_LIGHT_IR, &m_light_irListenerData, false);
+            if(ret < 0) {
+                CLOGW("WRN(%s[%d]:%d):skip the Light IR data", __FUNCTION__, __LINE__, ret);
+            } else {
+                m_exynosCameraParameters->m_setLight_IR(m_light_irListenerData);
+            }
+        }
+#endif
+
+#ifdef SAMSUNG_GYRO
+        if(m_gyroHandle != NULL) {
+            ret = sensor_listener_get_data(m_gyroHandle, ST_GYROSCOPE, &m_gyroListenerData, false);
+            if(ret < 0) {
+                CLOGW("WRN(%s[%d]:%d):skip the Gyro data", __FUNCTION__, __LINE__, ret);
+            } else {
+                m_exynosCameraParameters->m_setGyro(m_gyroListenerData);
+            }
+        }
+#endif
+#endif /* SAMSUNG_SENSOR_LISTENER */
+
+#ifdef SUPPORT_SW_VDIS
+        if(m_swVDIS_Mode) {
+            int swVDIS_InW, swVDIS_InH, swVDIS_OutW, swVDIS_OutH;
+            int swVDIS_StartX, swVDIS_StartY;
+
+            m_exynosCameraParameters->getHwPreviewSize(&swVDIS_OutW, &swVDIS_OutH);
+            swVDIS_InW = swVDIS_OutW;
+            swVDIS_InH = swVDIS_OutH;
+            m_swVDIS_AdjustPreviewSize(&swVDIS_OutW, &swVDIS_OutH);
+
+            swVDIS_StartX = (swVDIS_InW-swVDIS_OutW)/2;
+            swVDIS_StartY = (swVDIS_InH-swVDIS_OutH)/2;
+
+            if (m_previewWindow != NULL) {
+                m_previewWindow->set_crop(m_previewWindow, swVDIS_StartX, swVDIS_StartY,
+                    swVDIS_OutW + swVDIS_StartX, swVDIS_OutH + swVDIS_StartY);
+            }
+        }
+#endif /*SUPPORT_SW_VDIS*/
+#ifdef USE_FASTMOTION_CROP
+        if(m_exynosCameraParameters->getShotMode() == SHOT_MODE_FASTMOTION) {
+            int inW, inH, outW, outH, startX, startY;
+
+            m_exynosCameraParameters->getPreviewSize(&inW, &inH);
+            outW = ALIGN_DOWN((int)(inW * FASTMOTION_CROP_RATIO), PREVIEW_OPS_CROP_ALIGN);
+            outH = ALIGN_DOWN((int)(inH * FASTMOTION_CROP_RATIO), PREVIEW_OPS_CROP_ALIGN);
+            startX = ALIGN_DOWN((inW - outW) / 2, PREVIEW_OPS_CROP_ALIGN);
+            startY = ALIGN_DOWN((inH - outH) / 2, PREVIEW_OPS_CROP_ALIGN);
+
+            if (m_previewWindow != NULL) {
+                m_previewWindow->set_crop(m_previewWindow, startX, startY, startX + outW, startY + outH);
+            }
+        }
+#endif /* USE_FASTMOTION_CROP */
+
         /* Prevent displaying unprocessed beauty images in beauty shot. */
         if ((m_exynosCameraParameters->getShotMode() == SHOT_MODE_BEAUTY_FACE)
+#ifdef LLS_CAPTURE
+            || (m_exynosCameraParameters->getLLSOn() == true && getCameraId() == CAMERA_ID_FRONT)
+#endif
             ) {
             if (m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME) &&
                 checkBit(&m_callbackState, CALLBACK_STATE_COMPRESSED_IMAGE)) {
@@ -6480,6 +9720,16 @@ bool ExynosCamera::m_previewThreadFunc(void)
                 goto func_exit;
             }
         }
+
+#ifdef USE_CAMERA_PREVIEW_FRAME_SCHEDULER
+        if (((m_getRecordingEnabled() == true) && (curMinFps == curMaxFps)
+            && (m_exynosCameraParameters->getShotMode() != SHOT_MODE_SEQUENCE))
+            || (m_exynosCameraParameters->getVRMode() == 1)) {
+            if(previewQ->getSizeOfProcessQ() < 1) {
+                m_previewFrameScheduler->m_schedulePreviewFrame(curMaxFps);
+            }
+        }
+#endif
 
         /* display the frame */
         {
@@ -6570,6 +9820,10 @@ status_t ExynosCamera::m_doPreviewToCallbackFunc(
     camera_frame_metadata_t m_Metadata;
 
     m_exynosCameraParameters->getHwPreviewSize(&hwPreviewW, &hwPreviewH);
+#ifdef SUPPORT_SW_VDIS
+    if(m_swVDIS_Mode)
+        m_swVDIS_AdjustPreviewSize(&hwPreviewW, &hwPreviewH);
+#endif /*SUPPORT_SW_VDIS*/
 
     ExynosRect srcRect, dstRect;
 
@@ -6595,6 +9849,10 @@ status_t ExynosCamera::m_doPreviewToCallbackFunc(
     }
 
     memset(&m_Metadata, 0, sizeof(camera_frame_metadata_t));
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+    m_Metadata.timestamp = newFrame->getTimeStampBoot();
+    CLOGV("INFO(%s[%d]): timestamp:%lldms!", __FUNCTION__, __LINE__, newFrame->getTimeStampBoot());
+#endif
     ret = m_calcPreviewGSCRect(&srcRect, &dstRect);
 
     if (useCSC) {
@@ -6672,6 +9930,11 @@ status_t ExynosCamera::m_doPreviewToCallbackFunc(
         !checkBit(&m_callbackState, CALLBACK_STATE_COMPRESSED_IMAGE) &&
         m_disablePreviewCB == false) {
         if(m_exynosCameraParameters->getVRMode() == 1) {
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+            setBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
+            m_dataCb(CAMERA_MSG_PREVIEW_FRAME|CAMERA_MSG_PREVIEW_METADATA, previewCallbackHeap, 0, &m_Metadata, m_callbackCookie);
+            clearBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
+#endif
         } else {
             setBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
             m_dataCb(CAMERA_MSG_PREVIEW_FRAME, previewCallbackHeap, 0, NULL, m_callbackCookie);
@@ -6713,6 +9976,11 @@ status_t ExynosCamera::m_doCallbackToPreviewFunc(
     bool useCSC = m_exynosCameraParameters->getCallbackNeedCSC();
 
     m_exynosCameraParameters->getHwPreviewSize(&hwPreviewW, &hwPreviewH);
+
+#ifdef SUPPORT_SW_VDIS
+    if(m_swVDIS_Mode)
+        m_swVDIS_AdjustPreviewSize(&hwPreviewW, &hwPreviewH);
+#endif /*SUPPORT_SW_VDIS*/
 
     camera_memory_t *previewCallbackHeap = NULL;
     previewCallbackHeap = m_getMemoryCb(callbackBuf.fd[0], callbackBuf.size[0], 1, m_callbackCookie);
@@ -7589,6 +10857,15 @@ bool ExynosCamera::m_shutterCallbackThreadFunc(void)
     CLOGI("INFO(%s[%d]):", __FUNCTION__, __LINE__);
     int loop = false;
 
+#ifdef OIS_CAPTURE
+    if(m_OISCaptureShutterEnabled) {
+        CLOGD("INFO(%s[%d]):shutter callback wait start", __FUNCTION__, __LINE__);
+        ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+        m_sCaptureMgr->waitShutterCallback();
+        CLOGD("INFO(%s[%d]):fast shutter callback wait end(%d)", __FUNCTION__, __LINE__, m_sCaptureMgr->getOISCaptureFcount());
+    }
+#endif
+
     if (m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_SHUTTER)) {
         CLOGI("INFO(%s[%d]): CAMERA_MSG_SHUTTER callback S", __FUNCTION__, __LINE__);
 #ifdef BURST_CAPTURE
@@ -7598,6 +10875,16 @@ bool ExynosCamera::m_shutterCallbackThreadFunc(void)
 #endif
         CLOGI("INFO(%s[%d]): CAMERA_MSG_SHUTTER callback E", __FUNCTION__, __LINE__);
     }
+
+#ifdef FLASHED_LLS_CAPTURE
+    if(m_exynosCameraParameters->getSamsungCamera() && m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS) {
+        if (m_exynosCameraParameters->msgTypeEnabled(MULTI_FRAME_SHOT_FLASHED_INFO)) {
+            m_notifyCb(MULTI_FRAME_SHOT_FLASHED_INFO, m_captureSelector->getFlashedLLSCaptureStatus(), 0, m_callbackCookie);
+            CLOGI("INFO(%s[%d]): MULTI_FRAME_SHOT_FLASHED_INFO callback flash(%s)",
+                __FUNCTION__, __LINE__, m_captureSelector->getFlashedLLSCaptureStatus()? "on" : "off");
+        }
+    }
+#endif
 
     /* one shot */
     return loop;
@@ -7662,7 +10949,18 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
         }
     }
 
+#if defined(SAMSUNG_JQ) && defined(ONE_SECOND_BURST_CAPTURE)
+    if (m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_ONE_SECOND_BURST) {
+        CLOGD("[JQ](%s[%d]): ON!!", __FUNCTION__, __LINE__);
+        m_isJpegQtableOn = true;
+        m_exynosCameraParameters->setJpegQtableOn(true);
+    }
+#endif
+
     if (m_isZSLCaptureOn
+#ifdef OIS_CAPTURE
+        || m_OISCaptureShutterEnabled
+#endif
     ) {
         CLOGD("INFO(%s[%d]):fast shutter callback!!", __FUNCTION__, __LINE__);
         m_shutterCallbackThread->join();
@@ -7698,6 +10996,30 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
         goto CLEAN_FRAME;
     }
 
+#ifdef SAMSUNG_LBP
+    if (m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_NONE && m_isLBPon == true) {
+        ret = m_captureSelector->setFrameHoldCount(REPROCESSING_BAYER_HOLD_COUNT);
+        m_LBPThread->requestExitAndWait();
+        m_lbpBufferMgr->resetBuffers();
+        if(m_LBPpluginHandle != NULL) {
+            ret = uni_plugin_deinit(m_LBPpluginHandle);
+            if(ret < 0)
+                CLOGE("[LBP](%s[%d]):Bestphoto plugin deinit failed!!", __FUNCTION__, __LINE__);
+        }
+        m_LBPindex = 0;
+        m_isLBPon = false;
+    }
+#endif
+
+#ifdef SAMSUNG_DEBLUR
+        if(m_exynosCameraParameters->getLDCaptureMode() == MULTI_SHOT_MODE_DEBLUR
+            && m_reprocessingCounter.getCount() == 1) {
+            CLOGD("DEBUG(%s[%d]):m_reprocessingCounter.getCount()(%d)", __FUNCTION__, __LINE__, m_reprocessingCounter.getCount());
+            m_exynosCameraParameters->setOISCaptureModeOn(false);
+            ret = m_captureSelector->setFrameHoldCount(1);
+        }
+#endif
+
     CLOGD("DEBUG(%s[%d]):bayerBuffer index %d", __FUNCTION__, __LINE__, bayerBuffer.index);
 
     if (m_exynosCameraParameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC) {
@@ -7705,8 +11027,15 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
     }
 
     if (!m_isZSLCaptureOn
+#ifdef OIS_CAPTURE
+        && !m_OISCaptureShutterEnabled
+#endif
 #ifdef BURST_CAPTURE
         && (m_exynosCameraParameters->getSeriesShotMode() != SERIES_SHOT_MODE_BURST
+            || m_burstShutterLocation == BURST_SHUTTER_PREPICTURE)
+#endif
+#ifdef ONE_SECOND_BURST_CAPTURE
+        && (m_exynosCameraParameters->getSeriesShotMode() != SERIES_SHOT_MODE_ONE_SECOND_BURST
             || m_burstShutterLocation == BURST_SHUTTER_PREPICTURE)
 #endif
     ) {
@@ -7716,9 +11045,31 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
         if (m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST)
             m_burstShutterLocation = BURST_SHUTTER_PREPICTURE_DONE;
 #endif
+#ifdef ONE_SECOND_BURST_CAPTURE
+        if (m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_ONE_SECOND_BURST)
+            m_burstShutterLocation = BURST_SHUTTER_PREPICTURE_DONE;
+#endif
     }
 
+#ifdef OIS_CAPTURE
+    m_OISCaptureShutterEnabled = false;
+#endif
+
     m_isZSLCaptureOn = false;
+
+#ifdef OIS_CAPTURE
+if ((m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
+        m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_SIS) &&
+        m_reprocessingCounter.getCount() == 1) {
+            CLOGD("DEBUG(%s[%d]):LLS last capture frame", __FUNCTION__, __LINE__);
+#ifndef LLS_REPROCESSING
+            ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+            m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_WAIT_CAPTURE);
+#else
+            m_exynosCameraParameters->setOISCaptureModeOn(false);
+#endif
+    }
+#endif
 
     /* Generate reprocessing Frame */
     ret = generateFrameReprocessing(&newFrame);
@@ -7727,6 +11078,7 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
         goto CLEAN_FRAME;
     }
 
+#ifndef RAWDUMP_CAPTURE
 #ifdef DEBUG_RAWDUMP
     if (m_exynosCameraParameters->checkBayerDumpEnable()) {
         int sensorMaxW, sensorMaxH;
@@ -7750,8 +11102,12 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
             CLOGE("couldn't make a raw file");
     }
 #endif /* DEBUG_RAWDUMP */
+#endif
 
     if (m_exynosCameraParameters->getUsePureBayerReprocessing() == false
+#ifdef LLS_REPROCESSING
+        && m_captureSelector->getIsConvertingMeta() == true
+#endif
         ) {
         /* TODO: HACK: Will be removed, this is driver's job */
         ret = m_convertingStreamToShotExt(&bayerBuffer, &output_crop_info);
@@ -8033,6 +11389,22 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
 
     newFrame->setMetaDataEnable(true);
 
+#ifdef LLS_CAPTURE
+    if (shot_ext != NULL) {
+        if ((m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
+                m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_SIS) &&
+                    m_reprocessingCounter.getCount() == m_exynosCameraParameters->getSeriesShotCount()) {
+            CLOGD("LLS(%s[%d]): lls_tuning_set_index(%d)", __FUNCTION__, __LINE__, shot_ext->shot.dm.stats.vendor_lls_tuning_set_index);
+            CLOGD("LLS(%s[%d]): lls_brightness_index(%d)", __FUNCTION__, __LINE__, shot_ext->shot.dm.stats.vendor_lls_brightness_index);
+            m_notifyCb(MULTI_FRAME_SHOT_PARAMETERS, shot_ext->shot.dm.stats.vendor_lls_tuning_set_index,
+                            shot_ext->shot.dm.stats.vendor_lls_brightness_index, m_callbackCookie);
+        }
+    }
+#endif
+
+#ifdef LLS_REPROCESSING
+    if (m_captureSelector->getIsLastFrame() == true)
+#endif
     {
         /* put bayer buffer */
         ret = m_putBuffers(m_bayerBufferMgr, bayerBuffer.index);
@@ -8040,6 +11412,9 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
             CLOGE("ERR(%s[%d]): 3AA src putBuffer fail, index(%d), ret(%d)", __FUNCTION__, __LINE__, bayerBuffer.index, ret);
             goto CLEAN;
         }
+#ifdef LLS_REPROCESSING
+        m_captureSelector->setIsConvertingMeta(true);
+#endif
     }
 
     /* put isp buffer */
@@ -8076,6 +11451,12 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
         if (m_reprocessingCounter.getCount() == 0)
             m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_OFF);
     }
+
+#ifdef OIS_CAPTURE
+    if (m_exynosCameraParameters->getOISCaptureModeOn() == true && m_reprocessingCounter.getCount() == 0) {
+        m_exynosCameraParameters->setOISCaptureModeOn(false);
+    }
+#endif
 
         if (newFrame != NULL) {
         CLOGD("DEBUG(%s[%d]): Reprocessing frame delete(%d)", __FUNCTION__, __LINE__, newFrame->getFrameCount());
@@ -8154,6 +11535,9 @@ CLEAN:
 
         newFrame->printEntity();
         CLOGD("DEBUG(%s[%d]): Reprocessing frame delete(%d)", __FUNCTION__, __LINE__, newFrame->getFrameCount());
+#ifdef LLS_REPROCESSING
+        if (m_captureSelector->getIsLastFrame() == true)
+#endif
         {
             newFrame->decRef();
             m_frameMgr->deleteFrame(newFrame);
@@ -8175,6 +11559,12 @@ CLEAN:
             m_sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_OFF);
     }
 
+#ifdef OIS_CAPTURE
+    if (m_exynosCameraParameters->getOISCaptureModeOn() == true && m_reprocessingCounter.getCount() == 0) {
+        m_exynosCameraParameters->setOISCaptureModeOn(false);
+    }
+#endif
+
         if (newFrame != NULL) {
             newFrame->decRef();
             m_frameMgr->deleteFrame(newFrame);
@@ -8192,6 +11582,105 @@ CLEAN:
 
     return loop;
 }
+
+#if defined(SAMSUNG_COMPANION)
+int ExynosCamera::m_getSensorId(int m_cameraId)
+{
+    unsigned int scenario = 0;
+    unsigned int scenarioBit = 0;
+    unsigned int nodeNumBit = 0;
+    unsigned int sensorIdBit = 0;
+    unsigned int sensorId = getSensorId(m_cameraId);
+
+    scenarioBit = (scenario << SCENARIO_SHIFT);
+
+    nodeNumBit = ((FIMC_IS_VIDEO_SS0_NUM - FIMC_IS_VIDEO_SS0_NUM) << SSX_VINDEX_SHIFT);
+
+    sensorIdBit = (sensorId << 0);
+
+    return (scenarioBit) | (nodeNumBit) | (sensorIdBit);
+}
+
+bool ExynosCamera::m_companionThreadFunc(void)
+{
+    CLOGI("INFO(%s[%d]):", __FUNCTION__, __LINE__);
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+    int loop = false;
+    int ret = 0;
+
+    m_timer.start();
+
+    m_companionNode = new ExynosCameraNode();
+
+    ret = m_companionNode->create("companion", m_cameraId);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]): Companion Node create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+    }
+
+    ret = m_companionNode->open(MAIN_CAMERA_COMPANION_NUM);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]): Companion Node open fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+    }
+    CLOGD("DEBUG(%s):Companion Node(%d) opened running)", __FUNCTION__, MAIN_CAMERA_COMPANION_NUM);
+
+    ret = m_companionNode->setInput(m_getSensorId(m_cameraId));
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]): Companion Node s_input fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+    }
+    CLOGD("DEBUG(%s):Companion Node(%d) s_input)", __FUNCTION__, MAIN_CAMERA_COMPANION_NUM);
+
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+    CLOGD("DEBUG(%s):duration time(%5d msec)", __FUNCTION__, (int)durationTime);
+
+    /* one shot */
+    return loop;
+}
+#endif
+
+#if defined(SAMSUNG_EEPROM)
+bool ExynosCamera::m_eepromThreadFunc(void)
+{
+    CLOGI("INFO(%s[%d]):", __FUNCTION__, __LINE__);
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+    char sensorFW[50] = {0,};
+    int ret = 0;
+    FILE *fp = NULL;
+
+    m_timer.start();
+
+    if(m_cameraId == CAMERA_ID_BACK) {
+        fp = fopen(SENSOR_FW_PATH_BACK, "r");
+    } else {
+        fp = fopen(SENSOR_FW_PATH_FRONT, "r");
+    }
+    if (fp == NULL) {
+        CLOGE("ERR(%s[%d]):failed to open sysfs. camera id = %d", __FUNCTION__, __LINE__, m_cameraId);
+        goto err;
+    }
+
+    if (fgets(sensorFW, sizeof(sensorFW), fp) == NULL) {
+        CLOGE("ERR(%s[%d]):failed to read sysfs entry", __FUNCTION__, __LINE__);
+	    goto err;
+    }
+
+    /* int numread = strlen(sensorFW); */
+    CLOGI("INFO(%s[%d]): eeprom read complete. Sensor FW ver: %s", __FUNCTION__, __LINE__, sensorFW);
+
+err:
+    if (fp != NULL)
+        fclose(fp);
+
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+    CLOGD("DEBUG(%s):duration time(%5d msec)", __FUNCTION__, (int)durationTime);
+
+    /* one shot */
+    return false;
+}
+#endif
 
 bool ExynosCamera::m_ThumbnailCallbackThreadFunc(void)
 {
@@ -8284,6 +11773,12 @@ bool ExynosCamera::m_ThumbnailCallbackThreadFunc(void)
         goto CLEAN;
     }
 
+#ifdef SAMSUNG_LLS_DEBLUR
+    if (m_exynosCameraParameters->getLDCaptureMode()) {
+       m_pictureFrameFactory->setFlagFlipIgnore(gscPipe, true);
+    }
+#endif
+
     m_pictureFrameFactory->setOutputFrameQToPipe(m_ThumbnailPostCallbackQ, gscPipe);
     m_pictureFrameFactory->pushFrameToPipe(&callbackFrame, gscPipe);
 
@@ -8358,6 +11853,15 @@ bool ExynosCamera::m_postPictureGscThreadFunc(void)
     ExynosCameraBuffer postgscReprocessingBuffer;
     ExynosCameraBufferManager *bufferMgr = NULL;
     camera_memory_t *postviewCallbackHeap = NULL;
+#ifdef SAMSUNG_BD
+    int previewW = 0, previewH = 0;
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+    bool isThumbnailCallbackOn = false;
+#if 0
+    char filePath[70] = "/data/media/0/BD_input.yuv";
+#endif
+#endif
 
     postgscReprocessingBuffer.index = -2;
 
@@ -8403,7 +11907,96 @@ bool ExynosCamera::m_postPictureGscThreadFunc(void)
         m_ThumbnailCallbackThread->run();
         m_thumbnailCallbackQ->pushProcessQ(&postgscReprocessingBuffer);
         CLOGD("DEBUG(%s[%d]): m_ThumbnailCallbackThread run", __FUNCTION__, __LINE__);
+#ifdef SAMSUNG_BD
+        isThumbnailCallbackOn = true;
+#endif
     }
+#ifdef SAMSUNG_MAGICSHOT
+    else if(m_exynosCameraParameters->getShotMode() == SHOT_MODE_MAGIC) {
+        if(m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_POSTVIEW_FRAME)) {
+            if( m_burstCaptureCallbackCount < m_magicshotMaxCount ) {
+                postviewCallbackHeap = m_getMemoryCb(postgscReprocessingBuffer.fd[0],
+                                        postgscReprocessingBuffer.size[0], 1, m_callbackCookie);
+                if (!postviewCallbackHeap || postviewCallbackHeap->data == MAP_FAILED) {
+                    CLOGE("ERR(%s[%d]):m_getMemoryCb(%d) fail", __FUNCTION__, __LINE__, postgscReprocessingBuffer.size[0]);
+                    goto CLEAN;
+                }
+                setBit(&m_callbackState, CALLBACK_STATE_POSTVIEW_FRAME, true);
+                m_dataCb(CAMERA_MSG_POSTVIEW_FRAME, postviewCallbackHeap, 0, NULL, m_callbackCookie);
+                clearBit(&m_callbackState, CALLBACK_STATE_POSTVIEW_FRAME, true);
+                postviewCallbackHeap->release(postviewCallbackHeap);
+                CLOGD("magic shot POSTVIEW callback end(%s)(%d), pipe(%d), index(%d), count(%d), max(%d)",
+                    __FUNCTION__, __LINE__, pipeId_postPictureGsc, postgscReprocessingBuffer.index,
+                    m_burstCaptureCallbackCount,m_magicshotMaxCount);
+            }
+            ret = m_putBuffers(bufferMgr, postgscReprocessingBuffer.index);
+        }
+        return loop;
+    }
+#endif
+#ifdef SAMSUNG_DEBLUR
+    else if (m_deblurCaptureCount == 0
+        && m_exynosCameraParameters->getLDCaptureMode() == MULTI_SHOT_MODE_DEBLUR) {
+        m_detectDeblurCaptureThread->run();
+        m_detectDeblurCaptureQ->pushProcessQ(&postgscReprocessingBuffer);
+        CLOGD("DEBUG(%s[%d]): m_detectDeblurCaptureThread run", __FUNCTION__, __LINE__);
+        return loop;
+    }
+#endif
+
+#ifdef SAMSUNG_BD
+        if(m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST) {
+            m_timer.start();
+
+            UniPluginBufferData_t pluginData;
+            m_exynosCameraParameters->getPreviewSize(&previewW, &previewH);
+            memset(&pluginData, 0, sizeof(UniPluginBufferData_t));
+            pluginData.InWidth = previewW;
+            pluginData.InHeight = previewH;
+            pluginData.InFormat = UNI_PLUGIN_FORMAT_NV21;
+            pluginData.InBuffY = postgscReprocessingBuffer.addr[0];
+            pluginData.InBuffU = postgscReprocessingBuffer.addr[1];
+#if 0
+            dumpToFile((char *)filePath,
+                postgscReprocessingSrcBuffer.addr[0],
+                (previewW * previewH * 3) / 2);
+#endif
+            if(m_BDpluginHandle != NULL) {
+                ret = uni_plugin_set(m_BDpluginHandle,
+                        BLUR_DETECTION_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &pluginData);
+                if(ret < 0) {
+                    CLOGE("[BD](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_BUFFER_INFO) failed!!", __FUNCTION__, __LINE__);
+                }
+                ret = uni_plugin_process(m_BDpluginHandle);
+                if(ret < 0) {
+                    CLOGE("[BD](%s[%d]): Plugin process failed!!", __FUNCTION__, __LINE__);
+                }
+                ret = uni_plugin_get(m_BDpluginHandle,
+                    BLUR_DETECTION_PLUGIN_NAME, UNI_PLUGIN_INDEX_DEBUG_INFO, &m_BDbuffer[m_BDbufferIndex]);
+                if(ret < 0) {
+                    CLOGE("[BD](%s[%d]): Plugin get failed!!", __FUNCTION__, __LINE__);
+                }
+                CLOGD("[BD](%s[%d]): Push the buffer(Qsize:%d, Index: %d)",
+                            __FUNCTION__, __LINE__, m_BDbufferQ->getSizeOfProcessQ(), m_BDbufferIndex);
+                if(m_BDbufferQ->getSizeOfProcessQ() == MAX_BD_BUFF_NUM)
+                    CLOGE("[BD](%s[%d]): All buffers are queued!! Skip the buffer!!", __FUNCTION__, __LINE__);
+                else
+                    m_BDbufferQ->pushProcessQ(&m_BDbuffer[m_BDbufferIndex]);
+
+                if(++m_BDbufferIndex == MAX_BD_BUFF_NUM)
+                    m_BDbufferIndex = 0;
+            }
+
+            m_timer.stop();
+            durationTime = m_timer.durationMsecs();
+            CLOGD("[BD](%s[%d]):Plugin duration time(%5d msec)", __FUNCTION__, __LINE__, (int)durationTime);
+        }
+
+    if (isThumbnailCallbackOn == false) {
+        if (postgscReprocessingBuffer.index != -2)
+            m_putBuffers(bufferMgr, postgscReprocessingBuffer.index);
+        }
+#endif
 
         return loop;
 
@@ -8422,6 +12015,153 @@ CLEAN:
     /* one shot */
     return loop;
 }
+
+#ifdef SAMSUNG_LBP
+bool ExynosCamera::m_LBPThreadFunc(void)
+{
+    lbp_buffer_t LBPbuff;
+    int ret;
+    bool loop = true;
+
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+    int HwPreviewW = 0, HwPreviewH = 0;
+
+    ret = m_LBPbufferQ->waitAndPopProcessQ(&LBPbuff);
+
+    if (m_flagThreadStop == true) {
+        CLOGI("INFO(%s[%d]):m_flagThreadStop(%d)", __FUNCTION__, __LINE__, m_flagThreadStop);
+        m_LBPCount = 0;
+        return false;
+    }
+
+    if(ret == TIMED_OUT || ret < 0) {
+        CLOGE("ERR(%s)(%d):wait and pop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        m_captureSelector->setBestFrameNum(0);
+        m_LBPCount = 0;
+        return false;
+    }
+
+    CLOGD("[LBP]: Buffer pushed(%d):%p, %p!!", LBPbuff.buffer.index, LBPbuff.buffer.addr[0], LBPbuff.buffer.addr[1]);
+    m_LBPCount ++;
+
+    if(m_LBPpluginHandle != NULL) {
+        m_exynosCameraParameters->getHwPreviewSize(&HwPreviewW, &HwPreviewH);
+        UniPluginBufferData_t pluginData;
+        memset(&pluginData, 0, sizeof(UniPluginBufferData_t));
+        pluginData.InBuffY= LBPbuff.buffer.addr[0];
+        pluginData.InBuffU = LBPbuff.buffer.addr[1];
+        pluginData.InWidth = HwPreviewW;
+        pluginData.InHeight = HwPreviewH;
+
+        m_timer.start();
+        ret = uni_plugin_set(m_LBPpluginHandle, BESTPHOTO_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &pluginData);
+        if(ret < 0)
+            CLOGE("[LBP](%s[%d]):Bestphoto plugin set failed!!", __FUNCTION__, __LINE__);
+        ret = uni_plugin_process(m_LBPpluginHandle);
+        if(ret < 0)
+            CLOGE("[LBP](%s[%d]):Bestphoto plugin process failed!!", __FUNCTION__, __LINE__);
+        m_timer.stop();
+        durationTime = m_timer.durationMsecs();
+        CLOGD("[LBP](%s[%d]):duration time(%5d msec)", __FUNCTION__, __LINE__, (int)durationTime);
+    }
+
+    if(m_LBPCount == m_exynosCameraParameters->getHoldFrameCount()) {
+        int bestPhotoIndex;
+        ret = uni_plugin_get(m_LBPpluginHandle, BESTPHOTO_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INDEX, &bestPhotoIndex);
+        if(ret < 0)
+            CLOGE("[LBP](%s[%d]):Bestphoto plugin get failed!!", __FUNCTION__, __LINE__);
+
+        CLOGD("[LBP]: Best photo index(%d), frame(%d)", bestPhotoIndex, m_LBPbuffer[bestPhotoIndex].frameNumber);
+#if 0
+        /* To check the performance */
+        bool bRet;
+        char filePath[70];
+        for(int i = 0; i < m_LBPCount; i++) {
+            memset(filePath, 0, sizeof(filePath));
+            if(i == bestPhotoIndex)
+                snprintf(filePath, sizeof(filePath), "/data/media/0/DCIM/Bestphoto_%d_Pick.yuv", m_LBPbuffer[i].frameNumber);
+            else
+                snprintf(filePath, sizeof(filePath), "/data/media/0/DCIM/Bestphoto_%d.yuv", m_LBPbuffer[i].frameNumber);
+
+            bRet = dumpToFileYUV((char *)filePath,
+                m_LBPbuffer[i].buffer.addr[0], m_LBPbuffer[i].buffer.addr[1],
+                HwPreviewW, HwPreviewH);
+            if (bRet != true)
+                CLOGE("couldn't make a YUV file");
+        }
+#endif
+        m_captureSelector->setBestFrameNum(m_LBPbuffer[bestPhotoIndex].frameNumber);
+#ifdef SAMSUNG_JQ
+        if(m_isJpegQtableOn == true) {
+            m_isJpegQtableOn = false;
+            ret = m_processJpegQtable(&m_LBPbuffer[bestPhotoIndex].buffer);
+            if (ret < 0) {
+                CLOGE("[JQ](%s[%d]): m_processJpegQtable() failed!!", __FUNCTION__, __LINE__);
+            }
+        }
+#endif
+    }
+
+    if(m_LBPCount == m_exynosCameraParameters->getHoldFrameCount()) {
+        m_LBPCount = 0;
+        loop = false;
+    }
+    else
+        loop = true;
+
+    return loop;
+}
+#endif
+#ifdef SAMSUNG_JQ
+int ExynosCamera::m_processJpegQtable(ExynosCameraBuffer* buffer)
+{
+    int ret = 0;
+    int HwPreviewW = 0, HwPreviewH = 0;
+    UniPluginBufferData_t pluginData;
+
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+
+    m_timer.start();
+
+    m_exynosCameraParameters->getHwPreviewSize(&HwPreviewW, &HwPreviewH);
+
+    memset(&pluginData, 0, sizeof(UniPluginBufferData_t));
+    pluginData.InBuffY = buffer->addr[0];
+    pluginData.InBuffU = buffer->addr[1];
+    pluginData.InWidth = HwPreviewW;
+    pluginData.InHeight = HwPreviewH;
+    pluginData.InFormat = UNI_PLUGIN_FORMAT_NV21;
+
+    if(m_JQpluginHandle != NULL) {
+        ret = uni_plugin_set(m_JQpluginHandle,
+                JPEG_QTABLE_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &pluginData);
+        if(ret < 0) {
+            CLOGE("[JQ](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_BUFFER_INFO) failed!!", __FUNCTION__, __LINE__);
+        }
+        ret = uni_plugin_process(m_JQpluginHandle);
+        if(ret < 0) {
+            CLOGE("[JQ](%s[%d]): Plugin process failed!!", __FUNCTION__, __LINE__);
+        }
+        ret = uni_plugin_get(m_JQpluginHandle,
+                JPEG_QTABLE_PLUGIN_NAME, UNI_PLUGIN_INDEX_JPEG_QTABLE, m_qtable);
+        if(ret < 0) {
+            CLOGE("[JQ](%s[%d]): Plugin get(UNI_PLUGIN_INDEX_JPEG_QTABLE) failed!!", __FUNCTION__, __LINE__);
+        }
+
+        CLOGD("[JQ](%s[%d]): Qtable Set Done!!", __FUNCTION__, __LINE__);
+        m_exynosCameraParameters->setJpegQtable(m_qtable);
+        m_exynosCameraParameters->setJpegQtableStatus(JPEG_QTABLE_UPDATED);
+    }
+
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+    CLOGD("[JQ](%s[%d]):duration time(%5d msec)", __FUNCTION__, __LINE__, (int)durationTime);
+
+    return ret;
+}
+#endif
 
 bool ExynosCamera::m_CheckCameraSavingPath(char *dir, char* srcPath, char *dstPath, int dstSize)
 {
@@ -8663,6 +12403,79 @@ bool ExynosCamera::m_pictureThreadFunc(void)
         }
     }
 
+#ifdef SAMSUNG_DOF
+    if (m_exynosCameraParameters->getShotMode() == SHOT_MODE_OUTFOCUS &&
+            m_exynosCameraParameters->getMoveLensTotal() > 0) {
+        CLOGD("[DOF][%s][%d] Lens moved count: %d",
+                "m_pictureThreadFunc", __LINE__, m_lensmoveCount);
+        CLOGD("[DOF][%s][%d] Total count : %d",
+                "m_pictureThreadFunc", __LINE__, m_exynosCameraParameters->getMoveLensTotal());
+
+        ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
+
+        if(m_lensmoveCount < m_exynosCameraParameters->getMoveLensTotal()) {
+            CLOGD("[DOF][%s][%d] callback done!!: %d",
+                "m_pictureThreadFunc", __LINE__, m_lensmoveCount);
+            autoFocusMgr->setStartLensMove(true);
+            m_lensmoveCount++;
+            m_exynosCameraParameters->setMoveLensCount(m_lensmoveCount);
+            m_exynosCameraParameters->m_setLensPosition(m_lensmoveCount);
+        }
+        else if(m_lensmoveCount == m_exynosCameraParameters->getMoveLensTotal() ){
+            CLOGD("[DOF][%s][%d] Last callback done!!: %d",
+                "m_pictureThreadFunc", __LINE__, m_lensmoveCount);
+            autoFocusMgr->setStartLensMove(false);
+
+            m_lensmoveCount = 0;
+            m_exynosCameraParameters->setMoveLensCount(m_lensmoveCount);
+            m_exynosCameraParameters->setMoveLensTotal(m_lensmoveCount);
+        }else {
+            CLOGE("[DOF][%s][%d] unexpected error!!: %d",
+                "m_pictureThreadFunc", __LINE__, m_lensmoveCount);
+            autoFocusMgr->setStartLensMove(false);
+            m_lensmoveCount = 0;
+            m_exynosCameraParameters->setMoveLensCount(m_lensmoveCount);
+            m_exynosCameraParameters->setMoveLensTotal(m_lensmoveCount);
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_DNG
+    struct camera2_dm *dm;
+    struct camera2_udm *udm;
+
+    dm = new struct camera2_dm;
+    udm = new struct camera2_udm;
+
+    newFrame->getDynamicMeta(dm);
+    newFrame->getUserDynamicMeta(udm);
+
+    if(m_exynosCameraParameters->getDNGCaptureModeOn() &&
+        (m_dngFrameNumber == dm->request.frameCount ||
+        m_exynosCameraParameters->getCaptureExposureTime() > CAMERA_PREVIEW_EXPOSURE_TIME_LIMIT)) {
+        m_exynosCameraParameters->setDngChangedAttribute(dm, udm);
+        m_exynosCameraParameters->setIsUsefulDngInfo(true);
+    }
+
+    delete dm;
+    delete udm;
+#endif
+
+#ifdef SAMSUNG_DEBLUR
+    if (m_deblurCaptureCount == MAX_DEBLUR_CAPTURE_COUNT - 1) {
+        if (getUseDeblurCaptureOn()) {
+            m_pictureCounter.decCount();
+            CLOGE("DEBUG(%s[%d]):use De-blur Capture m_pictureCounter(%d)",
+                __FUNCTION__, __LINE__, m_pictureCounter.getCount());
+            goto CLEAN;
+        } else {
+            m_exynosCameraParameters->setIsThumbnailCallbackOn(true);
+            CLOGE("DEBUG(%s[%d]):Didn't use De-blur Capture m_pictureCounter(%d)",
+                __FUNCTION__, __LINE__, m_pictureCounter.getCount());
+        }
+    }
+#endif
+
     if (needGSCForCapture(getCameraId()) == true) {
         /* set GSC buffer */
         if (m_exynosCameraParameters->isReprocessing() == true)
@@ -8684,6 +12497,15 @@ bool ExynosCamera::m_pictureThreadFunc(void)
         }
 
         if (m_exynosCameraParameters->getIsThumbnailCallbackOn()
+#ifdef SAMSUNG_MAGICSHOT
+            || m_exynosCameraParameters->getShotMode() == SHOT_MODE_MAGIC
+#endif
+#ifdef SAMSUNG_DEBLUR
+            || (m_deblurCaptureCount == 0 && m_exynosCameraParameters->getLDCaptureMode() == MULTI_SHOT_MODE_DEBLUR)
+#endif
+#ifdef SAMSUNG_BD
+            || m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST
+#endif
         ) {
             int pipeId_postPictureGsc = PIPE_GSC_REPROCESSING2;
             ExynosCameraBuffer postgscReprocessingBuffer;
@@ -8864,12 +12686,32 @@ bool ExynosCamera::m_pictureThreadFunc(void)
 
         if(m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS
             || m_exynosCameraParameters->getShotMode() == SHOT_MODE_OUTFOCUS
+#ifdef SAMSUNG_LLS_DEBLUR
+            || (m_exynosCameraParameters->getLDCaptureMode()
+#ifdef SAMSUNG_DEBLUR
+                && (m_deblurCaptureCount < m_exynosCameraParameters->getLDCaptureCount() - 1)
+#endif
+                )
+#endif
         ) {
             pictureFormat = V4L2_PIX_FMT_NV21;
         } else {
             pictureFormat = JPEG_INPUT_COLOR_FMT;
         }
 
+#ifdef SR_CAPTURE
+        if(m_exynosCameraParameters->getSROn() &&
+            (m_exynosCameraParameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_ALWAYS_ON ||
+            m_exynosCameraParameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC)) {
+            dstRect.x = 0;
+            dstRect.y = 0;
+            dstRect.w = shot_stream->output_crop_region[2];
+            dstRect.h = shot_stream->output_crop_region[3];
+            dstRect.fullW = shot_stream->output_crop_region[2];
+            dstRect.fullH = shot_stream->output_crop_region[3];
+            dstRect.colorFormat = pictureFormat;
+        } else
+#endif
         {
             dstRect.x = 0;
             dstRect.y = 0;
@@ -8926,9 +12768,32 @@ bool ExynosCamera::m_pictureThreadFunc(void)
         CLOGI("INFO(%s[%d]):GSC output done", __FUNCTION__, __LINE__);
 
         if (m_exynosCameraParameters->getIsThumbnailCallbackOn()
+#ifdef SAMSUNG_MAGICSHOT
+            || m_exynosCameraParameters->getShotMode() == SHOT_MODE_MAGIC
+#endif
+#ifdef SAMSUNG_DEBLUR
+            || (m_deblurCaptureCount == 0 && m_exynosCameraParameters->getLDCaptureMode() == MULTI_SHOT_MODE_DEBLUR)
+#endif
+#ifdef SAMSUNG_BD
+            || m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST
+#endif
         ) {
             m_postPictureGscThread->join();
         }
+
+#ifdef SR_CAPTURE
+        if(m_exynosCameraParameters->getSROn()) {
+            if (m_exynosCameraParameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_ALWAYS_ON ||
+                m_exynosCameraParameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC) {
+                m_sr_cropped_width = shot_stream->output_crop_region[2];
+                m_sr_cropped_height = shot_stream->output_crop_region[3];
+            } else {
+                m_sr_cropped_width = pictureW;
+                m_sr_cropped_height = pictureH;
+            }
+            CLOGD("DEBUG(%s):size (%d, %d)", __FUNCTION__, m_sr_cropped_width, m_sr_cropped_height);
+        }
+#endif
 
         /* put SCC buffer */
         if (m_exynosCameraParameters->isReprocessing() == true)
@@ -8950,7 +12815,24 @@ bool ExynosCamera::m_pictureThreadFunc(void)
         }
     }
 
+#ifdef SAMSUNG_DEBLUR
+    if(m_exynosCameraParameters->getLDCaptureMode() == MULTI_SHOT_MODE_DEBLUR) {
+        m_deblurCaptureCount++;
+        CLOGD("DEBUG(%s[%d]): m_deblurCaptureCoun(%d)", __FUNCTION__, __LINE__, m_deblurCaptureCount);
+    }
+
+    if (m_exynosCameraParameters->getLDCaptureMode() == MULTI_SHOT_MODE_DEBLUR
+        && m_deblurCaptureCount < m_exynosCameraParameters->getLDCaptureCount()) {
+        m_deblurCaptureQ->pushProcessQ(&newFrame);
+    } else
+#endif
     {
+#ifdef SAMSUNG_LLS_DEBLUR
+        if (m_exynosCameraParameters->getLDCaptureMode() > 0
+            && m_exynosCameraParameters->getLDCaptureMode() != MULTI_SHOT_MODE_DEBLUR) {
+            m_LDCaptureQ->pushProcessQ(&newFrame);
+        } else
+#endif
         {
             /* push postProcess */
             m_postPictureQ->pushProcessQ(&newFrame);
@@ -8992,6 +12874,12 @@ CLEAN:
         m_putBuffers(bufferMgr, sccReprocessingBuffer.index);
     }
 
+#ifdef SAMSUNG_DEBLUR
+    if(!getUseDeblurCaptureOn()) {
+        CLOGI("INFO(%s[%d]):take picture fail, remaining count(%d)", __FUNCTION__, __LINE__, m_pictureCounter.getCount());
+    }
+#endif
+
     if (m_pictureCounter.getCount() > 0)
         loop = true;
 
@@ -9032,7 +12920,12 @@ camera_memory_t *ExynosCamera::m_getJpegCallbackHeap(ExynosCameraBuffer jpegBuf,
 
             memset(filePath, 0, sizeof(filePath));
 
+#if defined(SAMSUNG_INF_BURST)
+            snprintf(filePath, sizeof(filePath), "%s%s_%03d.jpg",
+                    m_burstSavePath, m_burstTime, seriesShotNumber);
+#else
             snprintf(filePath, sizeof(filePath), "%sBurst%02d.jpg", m_burstSavePath, seriesShotNumber);
+#endif
             CLOGD("DEBUG(%s[%d]):burst callback : size (%d), filePath(%s)", __FUNCTION__, __LINE__, jpegBuf.size[0], filePath);
 
             jpegCallbackHeap = m_getMemoryCb(-1, sizeof(filePath), 1, m_callbackCookie);
@@ -9146,6 +13039,35 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
 
     CLOGI("INFO(%s[%d]):postPictureQ output done", __FUNCTION__, __LINE__);
 
+#ifdef SAMSUNG_TN_FEATURE
+    /* Save the iso of capture frame to camera parameters for providing App/framework iso info. */
+    struct camera2_udm *udm;
+    udm = new struct camera2_udm;
+    memset(udm, 0x00, sizeof(struct camera2_udm));
+
+    newFrame->getUserDynamicMeta(udm);
+#ifdef ONE_SECOND_BURST_CAPTURE
+    if (m_exynosCameraParameters->getSeriesShotMode() != SERIES_SHOT_MODE_ONE_SECOND_BURST)
+#endif
+    {
+        m_exynosCameraParameters->setParamIso(udm);
+    }
+
+#ifdef LLS_REPROCESSING
+    if(m_exynosCameraParameters->getSamsungCamera() && m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS) {
+        if (m_exynosCameraParameters->msgTypeEnabled(MULTI_FRAME_SHOT_BV_INFO)) {
+            CLOGD("DEBUG(%s[%d]): MULTI_FRAME_SHOT_BV_INFO BV value %u", __FUNCTION__, __LINE__, udm->awb.vendorSpecific[11]);
+            m_notifyCb(MULTI_FRAME_SHOT_BV_INFO, udm->awb.vendorSpecific[11], 0, m_callbackCookie);
+        }
+    }
+#endif /* LLS_REPROCESSING */
+
+    if (udm != NULL) {
+        delete udm;
+        udm = NULL;
+    }
+#endif
+
     /* put picture callback buffer */
     /* get gsc dst buffers */
     ret = newFrame->getDstBuffer(pipeId_gsc, &gscReprocessingBuffer);
@@ -9156,6 +13078,9 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
 
     /* callback */
     if (m_hdrEnabled == false && m_exynosCameraParameters->getSeriesShotCount() <= 0
+#ifdef SAMSUNG_DNG
+        && !m_exynosCameraParameters->getDNGCaptureModeOn()
+#endif
         ) {
         if (m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_RAW_IMAGE)) {
             CLOGD("DEBUG(%s[%d]): RAW callback", __FUNCTION__, __LINE__);
@@ -9180,6 +13105,9 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
 
         if ((m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_POSTVIEW_FRAME))
             && !m_exynosCameraParameters->getIsThumbnailCallbackOn()
+#ifdef SAMSUNG_MAGICSHOT
+            && (m_exynosCameraParameters->getShotMode() != SHOT_MODE_MAGIC)
+#endif
            ) {
             CLOGD("DEBUG(%s[%d]): POSTVIEW callback", __FUNCTION__, __LINE__);
 
@@ -9197,7 +13125,122 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
         }
     }
 
+#if 0 // SAMSUNG_MAGICSHOT
+    if ((m_exynosCameraParameters->getShotMode() == SHOT_MODE_MAGIC) &&
+        (m_exynosCameraParameters->isReprocessing() == true)) {
+        CLOGD("magic shot rear postview callback star(%s)(%d)", __FUNCTION__, __LINE__);
+        int pipeId_postPictureGsc = 0;
+        ExynosCameraBuffer postgscReprocessingBuffer;
+        ExynosCameraBufferManager *bufferMgr1 = NULL;
+        struct camera2_stream *shot_stream = NULL;
+        ExynosRect srcRect, dstRect;
+        int previewW = 0, previewH = 0, previewFormat = 0;
+        int pictureW = 0, pictureH = 0, pictureFormat = 0;
+        float zoomRatio = m_exynosCameraParameters->getZoomRatio(0) / 1000;
+
+        postgscReprocessingBuffer.index = -2;
+        pipeId_postPictureGsc = PIPE_GSC_REPROCESSING;
+
+        shot_stream = (struct camera2_stream *)(gscReprocessingBuffer.addr[buffer_idx]);
+        if (shot_stream == NULL) {
+            CLOGE("ERR(%s[%d]):shot_stream is NULL. buffer(%d)",
+                    __FUNCTION__, __LINE__, gscReprocessingBuffer.index);
+            goto CLEAN;
+        }
+
+        int retry = 0;
+        ret = m_getBufferManager(pipeId_postPictureGsc, &bufferMgr1, DST_BUFFER_DIRECTION);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):getBufferManager(GSC) fail, pipeId(%d), ret(%d)",
+                __FUNCTION__, __LINE__, pipeId_postPictureGsc, ret);
+            return ret;
+        }
+
+        do {
+            ret = -1;
+            retry++;
+            if (bufferMgr1->getNumOfAvailableBuffer() > 0) {
+                ret = m_setupEntity(pipeId_postPictureGsc, newFrame, &gscReprocessingBuffer, NULL);
+            } else {
+                /* wait available SCC buffer */
+                usleep(WAITING_TIME);
+            }
+
+            if (retry % 10 == 0)
+                CLOGW("WRAN(%s[%d]):retry setupEntity for GSC", __FUNCTION__, __LINE__);
+        } while(ret < 0 && retry < (TOTAL_WAITING_TIME/WAITING_TIME));
+
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):setupEntity fail, pipeId(%d), retry(%d), ret(%d)",
+                __FUNCTION__, __LINE__, pipeId_postPictureGsc, retry, ret);
+            goto CLEAN;
+        }
+
+        m_exynosCameraParameters->getPreviewSize(&previewW, &previewH);
+        m_exynosCameraParameters->getPictureSize(&pictureW, &pictureH);
+        pictureFormat = m_exynosCameraParameters->getPictureFormat();
+        previewFormat = m_exynosCameraParameters->getPreviewFormat();
+
+        CLOGD("DEBUG(%s):size preview(%d, %d,format:%d)picture(%d, %d,format:%d)", __FUNCTION__,
+            previewW, previewH,previewFormat,pictureW, pictureH,pictureFormat);
+
+        srcRect.x = shot_stream->output_crop_region[0];
+        srcRect.y = shot_stream->output_crop_region[1];
+        srcRect.w = shot_stream->output_crop_region[2];
+        srcRect.h = shot_stream->output_crop_region[3];
+        srcRect.fullW = shot_stream->output_crop_region[2];
+        srcRect.fullH = shot_stream->output_crop_region[3];
+        srcRect.colorFormat = SCC_OUTPUT_COLOR_FMT;
+        // srcRect.colorFormat = pictureFormat;
+        dstRect.x = 0;
+        dstRect.y = 0;
+        dstRect.w = previewW;
+        dstRect.h = previewH;
+        dstRect.fullW = previewW;
+        dstRect.fullH = previewH;
+        dstRect.colorFormat = previewFormat;
+
+        ret = getCropRectAlign(srcRect.w,  srcRect.h,
+                previewW,   previewH,
+                &srcRect.x, &srcRect.y,
+                &srcRect.w, &srcRect.h,
+                2, 2, 0, zoomRatio);
+
+        ret = newFrame->setSrcRect(pipeId_postPictureGsc, &srcRect);
+        ret = newFrame->setDstRect(pipeId_postPictureGsc, &dstRect);
+
+        CLOGD("DEBUG(%s):size (%d, %d, %d, %d %d %d)", __FUNCTION__,
+            srcRect.x, srcRect.y, srcRect.w, srcRect.h, srcRect.fullW, srcRect.fullH);
+        CLOGD("DEBUG(%s):size (%d, %d, %d, %d %d %d)", __FUNCTION__,
+            dstRect.x, dstRect.y, dstRect.w, dstRect.h, dstRect.fullW, dstRect.fullH);
+
+        /* push frame to GSC pipe */
+        m_pictureFrameFactory->setOutputFrameQToPipe(dstPostPictureGscQ, pipeId_postPictureGsc);
+        m_pictureFrameFactory->pushFrameToPipe(&newFrame, pipeId_postPictureGsc);
+
+        ret = m_postPictureGscThread->run();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):couldn't run m_postPictureGscThread, ret(%d)", __FUNCTION__, __LINE__, ret);
+            return INVALID_OPERATION;
+        }
+    }
+#endif
+
     currentSeriesShotMode = m_exynosCameraParameters->getSeriesShotMode();
+
+#ifdef SAMSUNG_DEBLUR
+    if (m_exynosCameraParameters->getLDCaptureMode() == MULTI_SHOT_MODE_DEBLUR
+        && !getUseDeblurCaptureOn()) {
+        m_deblurCaptureCount = 0;
+        m_deblur_firstFrame = NULL;
+        m_deblur_secondFrame = NULL;
+        setUseDeblurCaptureOn(false);
+        m_exynosCameraParameters->setLDCaptureMode(MULTI_SHOT_MODE_NONE);
+        m_exynosCameraParameters->setLDCaptureCount(0);
+        m_exynosCameraParameters->setLDCaptureLLSValue(LLS_LEVEL_ZSL);
+        CLOGI("INFO(%s[%d]): deblur capture clear!", __FUNCTION__, __LINE__);
+    }
+#endif
 
     /* Make compressed image */
     if (m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_COMPRESSED_IMAGE) ||
@@ -9209,6 +13252,11 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
                 currentSeriesShotMode == SERIES_SHOT_MODE_LLS ||
                 currentSeriesShotMode == SERIES_SHOT_MODE_SIS ||
                 m_exynosCameraParameters->getShotMode() == SHOT_MODE_FRONT_PANORAMA) {
+#ifdef SR_CAPTURE
+            if(m_exynosCameraParameters->getSROn()) {
+                m_doSRCallbackFunc(newFrame);
+            }
+#endif
             CLOGD("DEBUG(%s[%d]): HDR callback", __FUNCTION__, __LINE__);
 
             /* send yuv image with jpeg callback */
@@ -9291,6 +13339,20 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
             /* 3. Q Set-up */
             m_pictureFrameFactory->setOutputFrameQToPipe(dstJpegReprocessingQ, pipeId_jpeg);
 
+#ifdef SAMSUNG_BD
+            if(m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST) {
+                UTstr bdInfo = {NULL, 0};
+                ret = m_BDbufferQ->waitAndPopProcessQ(&bdInfo);
+                if(ret == TIMED_OUT || ret < 0) {
+                    CLOGE("[BD](%s)(%d):wait and pop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+                }
+                else {
+                    CLOGD("[BD](%s[%d]): Pop the buffer(size: %d)", __FUNCTION__, __LINE__, bdInfo.size);
+                    m_exynosCameraParameters->setBlurInfo(bdInfo.data, bdInfo.size);
+                }
+            }
+#endif
+
             /* 4. push the newFrame to pipe */
             m_pictureFrameFactory->pushFrameToPipe(&newFrame, pipeId_jpeg);
 
@@ -9328,6 +13390,16 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
                 }
             }
 
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+            if (m_exynosCameraParameters->getLDCaptureMode()
+                && m_exynosCameraParameters->getIsThumbnailCallbackOn()) {
+                if (m_postPictureGscThread->isRunning()) {
+                    m_postPictureGscThread->join();
+                    CLOGD("DEBUG(%s[%d]): m_postPictureGscThread join", __FUNCTION__, __LINE__);
+                }
+            }
+#endif
+
             /* put GSC buffer */
             ret = m_putBuffers(bufferMgr, gscReprocessingBuffer.index);
             if (ret < 0) {
@@ -9346,6 +13418,13 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
 
             jpegReprocessingBuffer.size[0] = jpegOutputSize;
 
+#if 0 // SAMSUNG_MAGICSHOT
+            if ((m_exynosCameraParameters->getShotMode() == SHOT_MODE_MAGIC) &&
+                (m_exynosCameraParameters->isReprocessing() == true)) {
+                m_postPictureGscThread->join();
+            }
+#endif
+
             /* push postProcess to call CAMERA_MSG_COMPRESSED_IMAGE */
             jpeg_callback_buffer_t jpegCallbackBuf;
             jpegCallbackBuf.buffer = jpegReprocessingBuffer;
@@ -9355,6 +13434,12 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
 #endif
 retry:
             if ((m_exynosCameraParameters->getSeriesShotCount() > 0)
+#ifdef SAMSUNG_MAGICSHOT
+                && !((m_exynosCameraParameters->getShotMode() == SHOT_MODE_MAGIC) && (m_burstCaptureCallbackCount > m_magicshotMaxCount))
+#endif
+#ifdef ONE_SECOND_BURST_CAPTURE
+                && (m_exynosCameraParameters->getSeriesShotMode() != SERIES_SHOT_MODE_ONE_SECOND_BURST)
+#endif
                 ) {
                 int threadNum = 0;
 
@@ -9395,6 +13480,15 @@ retry:
     } else {
         CLOGD("DEBUG(%s[%d]): Disabled compressed image", __FUNCTION__, __LINE__);
 
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+        if (m_exynosCameraParameters->getLDCaptureMode() && m_exynosCameraParameters->getIsThumbnailCallbackOn()) {
+            if (m_postPictureGscThread->isRunning()) {
+                m_postPictureGscThread->join();
+                CLOGD("DEBUG(%s[%d]): m_postPictureGscThread join", __FUNCTION__, __LINE__);
+            }
+        }
+#endif
+
         /* put GSC buffer */
         ret = m_putBuffers(bufferMgr, gscReprocessingBuffer.index);
         if (ret < 0) {
@@ -9414,6 +13508,9 @@ retry:
             CLOGE("ERR(%s[%d]):remove frame from processList fail, ret(%d)", __FUNCTION__, __LINE__, ret);
         }
 
+#ifdef LLS_REPROCESSING
+        if (m_captureSelector->getIsLastFrame() == true)
+#endif
         {
             CLOGD("DEBUG(%s[%d]): Picture frame delete(%d)", __FUNCTION__, __LINE__, newFrame->getFrameCount());
             newFrame->decRef();
@@ -9434,6 +13531,28 @@ retry:
             currentSeriesShotMode == SERIES_SHOT_MODE_SIS) {
             CLOGI("INFO(%s[%d]): End of LLS/SIS capture!", __FUNCTION__, __LINE__);
             m_pictureEnabled = false;
+
+#ifdef SAMSUNG_DNG
+            if (m_exynosCameraParameters->getDNGCaptureModeOn()) {
+                int waitCount = 5;
+                while (m_previewFrameFactory->getRunningFrameCount(PIPE_FLITE) != 0 && 0 < waitCount) {
+                    CLOGD("DNG(%s[%d]): wait flite dqbuffer count(%d)",
+                        __FUNCTION__, __LINE__, m_previewFrameFactory->getRunningFrameCount(PIPE_FLITE));
+                    usleep(30000);
+                    waitCount--;
+                }
+
+                if (m_exynosCameraParameters->getCheckMultiFrame()) {
+                    CLOGE("[DNG](%s[%d]):PIPE_FLITE stop", __FUNCTION__, __LINE__);
+                    m_exynosCameraParameters->setUseDNGCapture(false);
+                    m_exynosCameraParameters->setCheckMultiFrame(false);
+                    m_previewFrameFactory->stopThread(PIPE_FLITE);
+                }
+
+                CLOGD("DNG(%s[%d]): reset m_fliteBuffer buffers", __FUNCTION__, __LINE__);
+                m_fliteBufferMgr->resetBuffers();
+            }
+#endif
         }
 
         if(m_exynosCameraParameters->getShotMode() == SHOT_MODE_FRONT_PANORAMA) {
@@ -9444,7 +13563,12 @@ retry:
         CLOGD("DEBUG(%s[%d]): free gsc buffers", __FUNCTION__, __LINE__);
         m_gscBufferMgr->resetBuffers();
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+        if (!(currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST ||
+            currentSeriesShotMode == SERIES_SHOT_MODE_BURST))
+#else
         if (currentSeriesShotMode != SERIES_SHOT_MODE_BURST)
+#endif
         {
             CLOGD("DEBUG(%s[%d]): clearList postProcessList, series shot mode(%d)", __FUNCTION__, __LINE__, currentSeriesShotMode);
             if (m_clearList(&m_postProcessList) < 0) {
@@ -9538,7 +13662,26 @@ bool ExynosCamera::m_jpegSaveThreadFunc(void)
             memset(burstFilePath, 0, sizeof(burstFilePath));
 
             m_burstCaptureCallbackCountLock.lock();
+#if defined(SAMSUNG_INF_BURST)
+            {
+                time_t rawtime;
+                struct tm *timeinfo;
+
+                time(&rawtime);
+                timeinfo = localtime(&rawtime);
+                if(seriesShotNumber == 1) {
+                    strftime(m_burstTime, 20, "%Y%m%d_%H%M%S", timeinfo);
+                }
+                else {
+                /* We don't do anything in this time */
+                }
+
+                snprintf(burstFilePath, sizeof(burstFilePath), "%s%s_%03d.jpg",
+                        m_burstSavePath, m_burstTime, seriesShotNumber);
+            }
+#else
             snprintf(burstFilePath, sizeof(burstFilePath), "%sBurst%02d.jpg", m_burstSavePath, seriesShotNumber);
+#endif
             m_burstCaptureCallbackCountLock.unlock();
 
             CLOGD("DEBUG(%s[%d]):%s fd:%d jpegSize : %d", __FUNCTION__, __LINE__, burstFilePath, jpegSaveBuffer.fd[0], jpegSaveBuffer.size[0]);
@@ -9627,6 +13770,10 @@ bool ExynosCamera::m_jpegCallbackThreadFunc(void)
 
     if (m_flashMgr->getNeedFlash() == true) {
         maxRetry = TOTAL_FLASH_WATING_COUNT;
+#ifdef ONE_SECOND_BURST_CAPTURE
+    } else if (currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST) {
+        maxRetry = ONE_SECOND_BURST_CAPTURE_MAX_RETRY;
+#endif
     } else {
         maxRetry = TOTAL_WAITING_COUNT;
     }
@@ -9646,7 +13793,13 @@ bool ExynosCamera::m_jpegCallbackThreadFunc(void)
 
     m_getBufferManager(PIPE_GSC_REPROCESSING3, &postviewBufferMgr, DST_BUFFER_DIRECTION);
     if ((m_exynosCameraParameters->getIsThumbnailCallbackOn()
+#if defined(SAMSUNG_DEBLUR) || defined(SAMSUNG_LLS_DEBLUR)
+        || m_exynosCameraParameters->getLDCaptureMode()
+#endif
         )
+#ifdef ONE_SECOND_BURST_CAPTURE
+        && currentSeriesShotMode != SERIES_SHOT_MODE_ONE_SECOND_BURST
+#endif
         && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_POSTVIEW_FRAME)) {
         /* One second burst will get thumbnail RGB after get jpegcallbackheap */
         if (m_cancelPicture) {
@@ -9686,6 +13839,31 @@ bool ExynosCamera::m_jpegCallbackThreadFunc(void)
         postviewCallbackHeap->release(postviewCallbackHeap);
     }
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+    if (currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST) {
+        retry = 0;
+        /* For launch COMPRESSED m_dataCb() faster*/
+        do {
+            if (m_one_second_burst_capture && m_one_second_jpegCallbackHeap != NULL) {
+                /* If there's saved jpegCallbackHeap */
+                CLOGD("DEBUG(%s[%d]):ONE SECOND CAPTURE coming.", __FUNCTION__, __LINE__);
+		        ret = 0;
+                break;
+            }
+            ret = m_jpegCallbackQ->popProcessQ(&jpegCallbackBuf);
+            if (ret < 0) {
+                /* If there's no saved jpegCallbackHeap, ret value will smaller than 0
+                   This will launch "goto CLEAN" */
+                retry++;
+                CLOGW("WARN(%s[%d]):jpegCallbackQ pop fail, retry(%d)", __FUNCTION__, __LINE__, retry);
+                usleep(ONE_SECOND_BURST_CAPTURE_RETRY_DELAY);
+            }
+        } while(ret < 0 && retry < maxRetry && m_jpegCounter.getCount() > 0 && m_stopBurstShot == false);
+
+        if (m_stopBurstShot)
+            goto CLEAN;
+    } else
+#endif
     {
         if (m_cancelPicture) {
             loop = false;
@@ -9700,6 +13878,28 @@ bool ExynosCamera::m_jpegCallbackThreadFunc(void)
             }
         } while(ret < 0 && retry < maxRetry && m_jpegCounter.getCount() > 0 && !m_cancelPicture);
     }
+
+#ifdef ONE_SECOND_BURST_CAPTURE
+    if (currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST
+        && m_exynosCameraParameters->getIsThumbnailCallbackOn()
+        && jpegCallbackBuf.callbackNumber != -1) {
+        do {
+            ret = m_postviewCallbackQ->waitAndPopProcessQ(&postviewCallbackBuffer);
+            if (ret < 0) {
+                retry++;
+                CLOGW("WARN(%s[%d]):postviewCallbackQ pop fail, retry(%d)", __FUNCTION__, __LINE__, retry);
+            }
+        } while (ret < 0 && retry < maxRetry && m_flagThreadStop != true && m_stopBurstShot == false);
+
+        postviewCallbackHeap = m_getMemoryCb(postviewCallbackBuffer.fd[0], postviewCallbackBuffer.size[0], 1, m_callbackCookie);
+
+        if (!postviewCallbackHeap || postviewCallbackHeap->data == MAP_FAILED) {
+            CLOGE("ERR(%s[%d]): get postviewCallbackHeap(%d) fail", __FUNCTION__, __LINE__);
+            loop = true;
+            goto CLEAN;
+        }
+    }
+#endif
 
     m_captureLock.lock();
     if (ret < 0) {
@@ -9721,12 +13921,67 @@ bool ExynosCamera::m_jpegCallbackThreadFunc(void)
             if (jpegCallbackBuf.callbackNumber != -1) {
                 jpegCallbackHeap = m_getJpegCallbackHeap(jpegCallbackBuffer, seriesShotNumber);
             }
+#ifdef ONE_SECOND_BURST_CAPTURE
+            if (currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST) {
+                if (jpegCallbackHeap != NULL) {
+                    if (m_one_second_jpegCallbackHeap != NULL) {
+                        /* if last jpegCallbackHeap is remained */
+                        m_one_second_jpegCallbackHeap->release(m_one_second_jpegCallbackHeap);
+                    }
+                    /* Save last jpegCallbackHeap */
+                    m_one_second_jpegCallbackHeap = jpegCallbackHeap;
+                } else {
+                    /* Ready for COMPRESSED m_dataCb() */
+                    jpegCallbackHeap = m_one_second_jpegCallbackHeap;
+                }
+                if (m_exynosCameraParameters->getIsThumbnailCallbackOn()) {
+                    if (postviewCallbackHeap != NULL) {
+                        if (m_one_second_postviewCallbackHeap != NULL) {
+                            m_one_second_postviewCallbackHeap->release(m_one_second_postviewCallbackHeap);
+                        }
+                        m_one_second_postviewCallbackHeap = postviewCallbackHeap;
+                    } else {
+                        postviewCallbackHeap = m_one_second_postviewCallbackHeap;
+                    }
+                }
+            }
+#endif
             if (jpegCallbackHeap == NULL) {
                 CLOGE("ERR(%s[%d]):wait and pop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
                 /* TODO: doing exception handling */
                 android_printAssert(NULL, LOG_TAG, "Cannot recoverable, assert!!!!");
             }
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+            if (currentSeriesShotMode != SERIES_SHOT_MODE_ONE_SECOND_BURST ||
+                (currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST && m_one_second_burst_capture)) {
+                if (currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST) {
+                    m_one_second_burst_capture = false;
+                    if (m_burstShutterLocation == BURST_SHUTTER_JPEGCB) {
+                        m_shutterCallbackThread->join();
+                        CLOGD("One Second Shutter callback start(%s)(%d)", __FUNCTION__, __LINE__);
+                        m_shutterCallbackThreadFunc();
+                        CLOGD("One Second Shutter callback end(%s)(%d)", __FUNCTION__, __LINE__);
+                    } else if (m_burstShutterLocation == BURST_SHUTTER_PREPICTURE_DONE) {
+                        m_burstShutterLocation = BURST_SHUTTER_JPEGCB;
+                    }
+                    if (m_exynosCameraParameters->getIsThumbnailCallbackOn()) {
+                        if (m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_POSTVIEW_FRAME)) {
+                            CLOGD("thumbnail POSTVIEW callback start(%s)(%d)", __FUNCTION__, __LINE__);
+                            setBit(&m_callbackState, CALLBACK_STATE_POSTVIEW_FRAME, true);
+                            m_dataCb(CAMERA_MSG_POSTVIEW_FRAME, postviewCallbackHeap, 0, NULL, m_callbackCookie);
+                            clearBit(&m_callbackState, CALLBACK_STATE_POSTVIEW_FRAME, true);
+                            CLOGD("thumbnail POSTVIEW callback end(%s)(%d)", __FUNCTION__, __LINE__);
+                        }
+                        if (m_one_second_postviewCallbackHeap != NULL) {
+                            /* release saved buffer when COMPRESSED m_dataCb() called. */
+                            m_one_second_postviewCallbackHeap->release(m_one_second_postviewCallbackHeap);
+                            m_one_second_postviewCallbackHeap = NULL;
+                        }
+                    }
+                    CLOGD("DEBUG(%s[%d]): before compressed - TimeCheck", __FUNCTION__, __LINE__);
+                }
+#endif
                 if (!m_cancelPicture) {
                     setBit(&m_callbackState, CALLBACK_STATE_COMPRESSED_IMAGE, true);
                     m_dataCb(CAMERA_MSG_COMPRESSED_IMAGE, jpegCallbackHeap, 0, NULL, m_callbackCookie);
@@ -9735,12 +13990,27 @@ bool ExynosCamera::m_jpegCallbackThreadFunc(void)
                             __FUNCTION__, __LINE__, m_burstCaptureCallbackCount);
                 }
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+                if (currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST) {
+                    CLOGD("DEBUG(%s[%d]): After compressed - TimeCheck", __FUNCTION__, __LINE__);
+                    if (m_one_second_jpegCallbackHeap != NULL) {
+                        /* release saved buffer when COMPRESSED m_dataCb() called. */
+                        m_one_second_jpegCallbackHeap->release(m_one_second_jpegCallbackHeap);
+                        m_one_second_jpegCallbackHeap = NULL;
+                    }
+                }
+            }
+#endif
             if (jpegCallbackBuf.callbackNumber != -1) {
                 /* put JPEG callback buffer */
                 if (m_jpegBufferMgr->putBuffer(jpegCallbackBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_NONE) != NO_ERROR)
                     CLOGE("ERR(%s[%d]):putBuffer(%d) fail", __FUNCTION__, __LINE__, jpegCallbackBuffer.index);
             }
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+            /* One second burst operation will release m_one_second_jpegCallbackHeap */
+            if (currentSeriesShotMode != SERIES_SHOT_MODE_ONE_SECOND_BURST)
+#endif
             jpegCallbackHeap->release(jpegCallbackHeap);
     } else {
         CLOGD("DEBUG(%s[%d]): Disabled compressed image", __FUNCTION__, __LINE__);
@@ -9754,9 +14024,35 @@ CLEAN:
         m_putBuffers(postviewBufferMgr, postviewCallbackBuffer.index);
     }
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+    if (currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST) {
+        m_jpegCallbackCounter.decCount();
+        CLOGD("DEBUG(%s[%d]):ONE SECOND BURST remaining count(%d)", __FUNCTION__, __LINE__, m_jpegCallbackCounter.getCount());
+        if (m_jpegCallbackCounter.getCount() <= 1) {
+            if (m_one_second_burst_capture) {
+                loop = true;
+                m_jpegCallbackCounter.setCount(2);
+                m_reprocessingCounter.setCount(2);
+                m_jpegCounter.setCount(2);
+                m_pictureCounter.setCount(2);
+                CLOGD("DEBUG(%s[%d]):Waiting once more...", __FUNCTION__, __LINE__);
+            } else {
+                loop = false;
+                m_clearOneSecondBurst(true);
+            }
+        } else {
+            loop = true;
+        }
+    }
+#endif
+
     if (m_takePictureCounter.getCount() == 0) {
         m_pictureEnabled = false;
         loop = false;
+#ifdef ONE_SECOND_BURST_CAPTURE
+        /* m_clearJpegCallbackThread() already called in m_clearOneSecondBurst() */
+        if (currentSeriesShotMode != SERIES_SHOT_MODE_ONE_SECOND_BURST)
+#endif
         m_clearJpegCallbackThread(true);
         m_captureLock.unlock();
     } else {
@@ -9787,10 +14083,51 @@ void ExynosCamera::m_clearJpegCallbackThread(bool callFromJpeg)
             m_previewFrameFactory->setRequestISPC(false);
     }
 
+#ifdef SAMSUNG_DEBLUR
+    if (m_exynosCameraParameters->getLDCaptureMode() == MULTI_SHOT_MODE_DEBLUR
+        && getUseDeblurCaptureOn()) {
+        m_deblurCaptureCount = 0;
+        m_deblur_firstFrame = NULL;
+        m_deblur_secondFrame = NULL;
+        setUseDeblurCaptureOn(false);
+        m_exynosCameraParameters->setLDCaptureMode(MULTI_SHOT_MODE_NONE);
+        m_exynosCameraParameters->setLDCaptureCount(0);
+        m_exynosCameraParameters->setLDCaptureLLSValue(LLS_LEVEL_ZSL);
+        CLOGI("INFO(%s[%d]): deblur capture clear!", __FUNCTION__, __LINE__);
+    }
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    if(m_exynosCameraParameters->getLDCaptureMode()) {
+        m_LDCaptureCount = 0;
+
+        for (int i = 0; i < MAX_LD_CAPTURE_COUNT; i++) {
+            m_LDBufIndex[i] = 0;
+        }
+
+        m_exynosCameraParameters->setLDCaptureMode(MULTI_SHOT_MODE_NONE);
+        m_exynosCameraParameters->setLDCaptureCount(0);
+        m_exynosCameraParameters->setLDCaptureLLSValue(LLS_LEVEL_ZSL);
+#ifdef SET_LLS_CAPTURE_SETFILE
+        m_exynosCameraParameters->setLLSCaptureOn(false);
+#endif
+    }
+#endif
+
     m_prePictureThread->requestExit();
     m_pictureThread->requestExit();
+#ifdef SAMSUNG_LLS_DEBLUR
+    m_LDCaptureThread->requestExit();
+#endif
     m_postPictureGscThread->requestExit();
+#ifdef SAMSUNG_DEBLUR
+    m_detectDeblurCaptureThread->requestExit();
+    m_deblurCaptureThread->requestExit();
+#endif
     m_ThumbnailCallbackThread->requestExit();
+#ifdef SAMSUNG_DNG
+    m_DNGCaptureThread->requestExit();
+#endif
     m_postPictureThread->requestExit();
     m_jpegCallbackThread->requestExit();
 
@@ -9798,13 +14135,24 @@ void ExynosCamera::m_clearJpegCallbackThread(bool callFromJpeg)
     m_prePictureThread->requestExitAndWait();
     CLOGI("INFO(%s[%d]): wait m_pictureThrad", __FUNCTION__, __LINE__);
     m_pictureThread->requestExitAndWait();
-
+#ifdef SAMSUNG_LLS_DEBLUR
+    CLOGI("INFO(%s[%d]): wait m_LDCaptureThread", __FUNCTION__, __LINE__);
+    m_LDCaptureThread->requestExitAndWait();
+#endif
     CLOGI("INFO(%s[%d]): wait m_postPictureGscThread", __FUNCTION__, __LINE__);
     m_postPictureGscThread->requestExitAndWait();
-
+#ifdef SAMSUNG_DEBLUR
+    CLOGI("INFO(%s[%d]): wait m_detectDeblurCaptureThread", __FUNCTION__, __LINE__);
+    m_detectDeblurCaptureThread->requestExitAndWait();
+    CLOGI("INFO(%s[%d]): wait m_deblurCaptureThread", __FUNCTION__, __LINE__);
+    m_deblurCaptureThread->requestExitAndWait();
+#endif
     CLOGI("INFO(%s[%d]): wait m_ThumbnailCallbackThread", __FUNCTION__, __LINE__);
     m_ThumbnailCallbackThread->requestExitAndWait();
-
+#ifdef SAMSUNG_DNG
+    CLOGI("INFO(%s[%d]): wait m_DNGCaptureThread", __FUNCTION__, __LINE__);
+    m_DNGCaptureThread->requestExitAndWait();
+#endif
     CLOGI("INFO(%s[%d]): wait m_postPictureThrad", __FUNCTION__, __LINE__);
     m_postPictureThread->requestExitAndWait();
 
@@ -9827,6 +14175,20 @@ void ExynosCamera::m_clearJpegCallbackThread(bool callFromJpeg)
         m_reprocessingFrameFactory->stopThread(pipe);
     }
 
+#ifdef SAMSUNG_MAGICSHOT
+    if (m_exynosCameraParameters->getShotMode() == SHOT_MODE_MAGIC) {
+        if(m_exynosCameraParameters->isReprocessing() == true) {
+            m_reprocessingFrameFactory->stopThread(PIPE_GSC_REPROCESSING2);
+            CLOGI("INFO(%s[%d]):rear gsc , pipe stop(%d)",__FUNCTION__, __LINE__, PIPE_GSC_REPROCESSING2);
+        } else {
+            enum pipeline pipe = PIPE_GSC_VIDEO;
+
+            m_previewFrameFactory->stopThread(pipe);
+            CLOGI("INFO(%s[%d]):front gsc , pipe stop(%d)",__FUNCTION__, __LINE__, pipe);
+        }
+    }
+#endif
+
     if(m_exynosCameraParameters->isReprocessing() == true) {
             m_reprocessingFrameFactory->stopThread(PIPE_GSC_REPROCESSING3);
             CLOGI("INFO(%s[%d]):rear gsc , pipe stop(%d)",__FUNCTION__, __LINE__, PIPE_GSC_REPROCESSING3);
@@ -9841,15 +14203,25 @@ void ExynosCamera::m_clearJpegCallbackThread(bool callFromJpeg)
             CLOGE("ERR(%s[%d]):putBuffer(%d) fail", __FUNCTION__, __LINE__, jpegCallbackBuffer.index);
         }
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+        if (m_exynosCameraParameters->getSeriesShotMode() != SERIES_SHOT_MODE_ONE_SECOND_BURST) {
+#endif
             int seriesShotSaveLocation = m_exynosCameraParameters->getSeriesShotSaveLocation();
             char command[CAMERA_FILE_PATH_SIZE];
             memset(command, 0, sizeof(command));
 
+#ifdef SAMSUNG_INF_BURST
+            snprintf(command, sizeof(command), "rm %s%s_%03d.jpg", m_burstSavePath, m_burstTime, jpegCallbackBuf.callbackNumber);
+#else
             snprintf(command, sizeof(command), "rm %sBurst%02d.jpg", m_burstSavePath, jpegCallbackBuf.callbackNumber);
+#endif
 
             CLOGD("DEBUG(%s[%d]):run %s - start", __FUNCTION__, __LINE__, command);
             system(command);
             CLOGD("DEBUG(%s[%d]):run %s - end", __FUNCTION__, __LINE__, command);
+#ifdef ONE_SECOND_BURST_CAPTURE
+        }
+#endif
     }
 
     m_getBufferManager(PIPE_GSC_REPROCESSING3, &thumbnailBufferMgr, SRC_BUFFER_DIRECTION);
@@ -9867,6 +14239,16 @@ void ExynosCamera::m_clearJpegCallbackThread(bool callFromJpeg)
         CLOGD("DEBUG(%s[%d]):put remaining postview buffer(index: %d)", __FUNCTION__, __LINE__, postviewCallbackBuffer.index);
         m_putBuffers(postviewBufferMgr, postviewCallbackBuffer.index);
     }
+
+#ifdef SAMSUNG_DNG
+    ExynosCameraBuffer dngBuffer;
+    while (m_dngCaptureQ->getSizeOfProcessQ() > 0) {
+        m_dngCaptureQ->popProcessQ(&dngBuffer);
+
+        CLOGD("DEBUG(%s[%d]):put remaining dngBuffer buffer(index: %d)", __FUNCTION__, __LINE__, dngBuffer.index);
+        m_putBuffers(m_fliteBufferMgr, dngBuffer.index);
+    }
+#endif
 
     for (int threadNum = JPEG_SAVE_THREAD0; threadNum < JPEG_SAVE_THREAD_MAX_COUNT; threadNum++) {
         while (m_jpegSaveQ[threadNum]->getSizeOfProcessQ() > 0) {
@@ -9948,6 +14330,18 @@ void ExynosCamera::m_clearJpegCallbackThread(bool callFromJpeg)
     }
 #endif
 
+#ifdef SAMSUNG_DEBLUR
+    CLOGD("DEBUG(%s[%d]): clear m_deblurCaptureQ", __FUNCTION__, __LINE__);
+    m_deblurCaptureQ->release();
+    CLOGD("DEBUG(%s[%d]): clear m_detectDeblurCaptureQ", __FUNCTION__, __LINE__);
+    m_detectDeblurCaptureQ->release();
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    CLOGD("DEBUG(%s[%d]): clear m_LDCaptureQ", __FUNCTION__, __LINE__);
+    m_LDCaptureQ->release();
+#endif
+
     if (needGSCForCapture(getCameraId()) == true) {
         CLOGD("DEBUG(%s[%d]): reset postPictureGsc buffers", __FUNCTION__, __LINE__);
         m_postPictureGscBufferMgr->resetBuffers();
@@ -9962,6 +14356,29 @@ void ExynosCamera::m_clearJpegCallbackThread(bool callFromJpeg)
     m_jpegBufferMgr->resetBuffers();
     CLOGD("DEBUG(%s[%d]): reset buffer sccReprocessing buffers", __FUNCTION__, __LINE__);
     m_sccReprocessingBufferMgr->resetBuffers();
+
+#ifdef SAMSUNG_DNG
+    if (m_exynosCameraParameters->getDNGCaptureModeOn()) {
+        int waitCount = 100;
+        while (m_previewFrameFactory->getRunningFrameCount(PIPE_FLITE) != 0 && 0 < waitCount) {
+            CLOGD("DNG(%s[%d]): wait flite dqbuffer count(%d)",
+                __FUNCTION__, __LINE__, m_previewFrameFactory->getRunningFrameCount(PIPE_FLITE));
+            usleep(30000);
+            waitCount--;
+        }
+
+        if (m_exynosCameraParameters->getCheckMultiFrame()) {
+            CLOGE("[DNG](%s[%d]):PIPE_FLITE stop", __FUNCTION__, __LINE__);
+            m_exynosCameraParameters->setUseDNGCapture(false);
+            m_exynosCameraParameters->setCheckMultiFrame(false);
+            m_previewFrameFactory->stopThread(PIPE_FLITE);
+            m_previewFrameFactory->stopThreadAndWait(PIPE_FLITE);
+        }
+
+        CLOGD("DNG(%s[%d]): reset m_fliteBuffer buffers", __FUNCTION__, __LINE__);
+        m_fliteBufferMgr->resetBuffers();
+    }
+#endif
 
 #ifdef BURST_CAPTURE
     m_burstShutterLocation = BURST_SHUTTER_PREPICTURE;
@@ -10424,8 +14841,6 @@ bool ExynosCamera::m_recordingThreadFunc(void)
         && (m_recordingStartTimeStamp <= timeStamp)) {
         if (m_getRecordingEnabled() == true
             && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)) {
-            int heapIndex = -1;
-            native_handle* handle = NULL;
 #ifdef CHECK_MONOTONIC_TIMESTAMP
             CLOGD("DEBUG(%s[%d]):m_dataCbTimestamp::recordingFrameIndex=%d, recordingTimeStamp=%lld",
                 __FUNCTION__, __LINE__, buffer.index, timeStamp);
@@ -10439,38 +14854,33 @@ bool ExynosCamera::m_recordingThreadFunc(void)
 #endif
             struct VideoNativeHandleMetadata *recordAddrs = NULL;
 
-            ret = m_getAvailableRecordingCallbackHeapIndex(&heapIndex);
-            if (ret != NO_ERROR || heapIndex < 0 || heapIndex >= m_recordingBufferCount) {
-                CLOGE("ERR(%s[%d]):Failed to getAvailableRecordingCallbackHeapIndex %d",
-                        __FUNCTION__, __LINE__,
-                        heapIndex);
-                goto func_exit;
-            }
-
             recordAddrs = (struct VideoNativeHandleMetadata *)m_recordingCallbackHeap->data;
-            recordAddrs[heapIndex].eType = kMetadataBufferTypeNativeHandleSource;
+            recordAddrs[buffer.index].eType = kMetadataBufferTypeNativeHandleSource;
 
-            handle = native_handle_create(2, 1);
+            native_handle* handle = native_handle_create(2, 1);
             handle->data[0] = (int32_t) buffer.fd[0];
             handle->data[1] = (int32_t) buffer.fd[1];
             handle->data[2] = (int32_t) buffer.index;
 
-            recordAddrs[heapIndex].pHandle = handle;
+            recordAddrs[buffer.index].pHandle = handle;
 
             m_recordingBufAvailable[buffer.index] = false;
 
             m_lastRecordingTimeStamp = timeStamp;
 
+#ifdef SAMSUNG_HLV
+            if (m_HLV) {
+                /* Ignore the ERROR .. HLV solution is smart */
+                m_ProgramAndProcessHLV(&buffer);
+            }
+#endif
+
             m_dataCbTimestamp(
                     timeStamp,
                     CAMERA_MSG_VIDEO_FRAME,
                     m_recordingCallbackHeap,
-                    heapIndex,
+                    buffer.index,
                     m_callbackCookie);
-
-            if (handle != NULL) {
-                native_handle_delete(handle);
-            }
         }
     } else {
         CLOGW("WARN(%s[%d]):recordingFrameIndex=%d, timeStamp(%lld) invalid -"
@@ -10497,86 +14907,6 @@ func_exit:
     m_recordingListLock.unlock();
 
     return m_recordingEnabled;
-}
-status_t ExynosCamera::m_getAvailableRecordingCallbackHeapIndex(int *index)
-{
-    if (m_recordingBufferCount <= 0 || m_recordingBufferCount > MAX_BUFFERS) {
-        CLOGE("ERR(%s[%d]):Invalid recordingBufferCount %d",
-                __FUNCTION__, __LINE__,
-                m_recordingBufferCount);
-
-        return INVALID_OPERATION;
-    } else if (m_recordingCallbackHeap == NULL) {
-        CLOGE("ERR(%s[%d]):RecordingCallbackHeap is NULL",
-                __FUNCTION__, __LINE__);
-
-        return INVALID_OPERATION;
-    }
-
-    Mutex::Autolock aLock(m_recordingCallbackHeapAvailableLock);
-    for (int i = 0; i < m_recordingBufferCount; i++) {
-        if (m_recordingCallbackHeapAvailable[i] == true) {
-            CLOGV("DEBUG(%s[%d]):Found recordingCallbackHeapIndex %d",
-                    __FUNCTION__, __LINE__, i);
-
-            *index = i;
-            m_recordingCallbackHeapAvailable[i] = false;
-            return NO_ERROR;
-        }
-    }
-
-    CLOGW("WARN(%s[%d]):There is no available recordingCallbackHeapIndex",
-            __FUNCTION__, __LINE__);
-
-    return INVALID_OPERATION;
-}
-
-status_t ExynosCamera::m_releaseRecordingCallbackHeap(struct VideoNativeHandleMetadata *addr)
-{
-    struct VideoNativeHandleMetadata *baseAddr = NULL;
-    int recordingCallbackHeapIndex = -1;
-
-    if (addr == NULL) {
-        CLOGE("ERR(%s[%d]):Addr is NULL",
-                __FUNCTION__, __LINE__);
-
-        return BAD_VALUE;
-    } else if (m_recordingCallbackHeap == NULL) {
-        CLOGE("ERR(%s[%d]):RecordingCallbackHeap is NULL",
-                __FUNCTION__, __LINE__);
-
-        return INVALID_OPERATION;
-    }
-
-    /* Calculate the recordingCallbackHeap index base on address offest. */
-    baseAddr = (struct VideoNativeHandleMetadata *) m_recordingCallbackHeap->data;
-    recordingCallbackHeapIndex = (int) (addr - baseAddr);
-
-    Mutex::Autolock aLock(m_recordingCallbackHeapAvailableLock);
-    if (recordingCallbackHeapIndex < 0 || recordingCallbackHeapIndex >= m_recordingBufferCount) {
-        CLOGE("ERR(%s[%d]):Invalid index %d. base %p addr %p offset %d",
-                __FUNCTION__, __LINE__,
-                recordingCallbackHeapIndex,
-                baseAddr,
-                addr,
-                (int) (addr - baseAddr));
-
-        return INVALID_OPERATION;
-    } else if (m_recordingCallbackHeapAvailable[recordingCallbackHeapIndex] == true) {
-        CLOGW("WARN(%s[%d]):Already available index %d. base %p addr %p offset %d",
-                __FUNCTION__, __LINE__,
-                recordingCallbackHeapIndex,
-                baseAddr,
-                addr,
-                (int) (addr - baseAddr));
-    }
-
-    CLOGV("DEBUG(%s[%d]):Release recordingCallbackHeapIndex %d.",
-            __FUNCTION__, __LINE__, recordingCallbackHeapIndex);
-
-    m_recordingCallbackHeapAvailable[recordingCallbackHeapIndex] = true;
-
-    return NO_ERROR;
 }
 
 status_t ExynosCamera::m_releaseRecordingBuffer(int bufIndex)
@@ -10915,6 +15245,11 @@ bool ExynosCamera::m_releasebuffersForRealloc()
     if (m_bayerBufferMgr != NULL) {
         m_bayerBufferMgr->deinit();
     }
+#ifdef SAMSUNG_DNG
+    if (m_fliteBufferMgr != NULL) {
+        m_fliteBufferMgr->deinit();
+    }
+#endif
     if (m_3aaBufferMgr != NULL) {
         m_3aaBufferMgr->deinit();
     }
@@ -10942,6 +15277,12 @@ bool ExynosCamera::m_releasebuffersForRealloc()
     if (m_thumbnailGscBufferMgr != NULL) {
         m_thumbnailGscBufferMgr->deinit();
     }
+
+#ifdef SAMSUNG_LBP
+    if (m_lbpBufferMgr != NULL) {
+        m_lbpBufferMgr->deinit();
+    }
+#endif
 
     if (m_previewCallbackBufferMgr != NULL) {
         m_previewCallbackBufferMgr->deinit();
@@ -11241,6 +15582,23 @@ status_t ExynosCamera::m_setBuffers(void)
             __FUNCTION__, __LINE__, bdsRect.w, bdsRect.h, planeCount, maxBufferCount);
     }
 
+#ifdef SAMSUNG_LBP
+    planeSize[0] = hwPreviewW * hwPreviewH;
+    planeSize[1] = hwPreviewW * hwPreviewH / 2;
+    planeCount  = 3;
+
+    maxBufferCount = m_exynosCameraParameters->getHoldFrameCount();
+
+    type = EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE;
+
+    ret = m_allocBuffers(m_lbpBufferMgr, planeCount, planeSize, bytesPerLine, maxBufferCount, maxBufferCount, type, true, true);
+    if (ret < 0) {
+        CLOGE("[LBP]ERR(%s[%d]):m_lbpBufferMgr m_allocBuffers(bufferCount=%d) fail",
+            __FUNCTION__, __LINE__, maxBufferCount);
+        return ret;
+    }
+#endif
+
     planeSize[0] = hwPreviewW * hwPreviewH;
     planeSize[1] = hwPreviewW * hwPreviewH / 2;
     planeCount  = 3;
@@ -11282,6 +15640,32 @@ status_t ExynosCamera::m_setBuffers(void)
             return ret;
         }
     }
+#ifdef SUPPORT_SW_VDIS
+    if(m_swVDIS_Mode) {
+        VDIS_LOG("VDIS_HAL: m_allocBuffers(m_scpBufferMgr): %d x %d", hwPreviewW, hwPreviewH);
+
+        m_swVDIS_AdjustPreviewSize(&hwPreviewW, &hwPreviewH);
+
+        planeSize[0] = ROUND_UP(hwPreviewW, CAMERA_MAGIC_ALIGN) * ROUND_UP(hwPreviewH, CAMERA_MAGIC_ALIGN) + MFC_7X_BUFFER_OFFSET;
+        planeSize[1] = ROUND_UP(hwPreviewW, CAMERA_MAGIC_ALIGN) * ROUND_UP(hwPreviewH / 2, CAMERA_MAGIC_ALIGN) +  + MFC_7X_BUFFER_OFFSET;
+        planeCount = 3;
+        maxBufferCount = NUM_VDIS_BUFFERS;
+        exynos_camera_buffer_type_t swVDIS_type = EXYNOS_CAMERA_BUFFER_ION_NONCACHED_TYPE;
+        buffer_manager_allocation_mode_t swVDIS_allocMode = BUFFER_MANAGER_ALLOCATION_ATONCE;
+
+        VDIS_LOG("VDIS_HAL: m_allocBuffers(m_swVDIS_BufferMgr): %d x %d", hwPreviewW, hwPreviewH);
+
+        ret = m_allocBuffers(m_swVDIS_BufferMgr, planeCount, planeSize, bytesPerLine, maxBufferCount, maxBufferCount, swVDIS_type, swVDIS_allocMode, true, true);
+
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):m_swVDIS_BufferMgr m_allocBuffers(bufferCount=%d) fail",
+                __FUNCTION__, __LINE__, maxBufferCount);
+            return ret;
+        }
+
+        m_exynosCameraParameters->getHwPreviewSize(&hwPreviewW, &hwPreviewH);
+    }
+#endif /*SUPPORT_SW_VDIS*/
 
 #ifdef USE_BUFFER_WITH_STRIDE
     int stride = m_scpBufferMgr->getBufStride();
@@ -11471,8 +15855,36 @@ status_t ExynosCamera::m_setPictureBuffer(void)
     m_exynosCameraParameters->getMaxSensorSize(&sensorMaxW, &sensorMaxH);
     CLOGI("(%s):Sensor MAX width x height = %dx%d", __FUNCTION__, sensorMaxW, sensorMaxH);
 
+#ifdef SAMSUNG_DNG
+    if(m_exynosCameraParameters->getDNGCaptureModeOn()) {
+        type = EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE;
+        bytesPerLine[0] = sensorMaxW * 2;
+        planeSize[0] = sensorMaxW * sensorMaxH * 2 + DNG_HEADER_LIMIT_SIZE;
+        planeCount  = 2;
+        maxBufferCount = 4;
+
+        ret = m_allocBuffers(m_fliteBufferMgr, planeCount, planeSize, bytesPerLine, maxBufferCount, maxBufferCount, type, true, true);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):bayerBuffer m_allocBuffers(bufferCount=%d) fail",
+                __FUNCTION__, __LINE__, maxBufferCount);
+            return ret;
+        }
+    }
+#endif
+
     if ((needGSCForCapture(getCameraId()) == true)
+#if 0 // SAMSUNG_MAGICSHOT
+        || ((m_exynosCameraParameters->isReprocessing() == true) && (m_exynosCameraParameters->getShotMode() == SHOT_MODE_MAGIC))
+#endif
         ) {
+#if 0 // SAMSUNG_MAGICSHOT_OLD
+        if ((m_exynosCameraParameters->isReprocessing() == true) && (m_exynosCameraParameters->getShotMode() == SHOT_MODE_MAGIC)) {
+            int previewW = 0, previewH = 0;
+            m_exynosCameraParameters->getPreviewSize(&previewW, &previewH);
+            planeSize[0] = previewW * previewH * 1.5;
+            planeCount = 1;
+        } else
+#endif
         {
             if (JPEG_INPUT_COLOR_FMT == V4L2_PIX_FMT_NV21M) {
                 planeSize[0] = ALIGN_UP(pictureW, GSCALER_IMG_ALIGN) * ALIGN_UP(pictureH, GSCALER_IMG_ALIGN);
@@ -11487,12 +15899,17 @@ status_t ExynosCamera::m_setPictureBuffer(void)
             }
         }
         minBufferCount = 1;
+#ifdef SAMSUNG_LLS_DEBLUR
+        maxBufferCount = MAX_LD_CAPTURE_COUNT;
+#else
         maxBufferCount = m_exynosconfig->current->bufInfo.num_picture_buffers;
+#endif
 
         // Pre-allocate certain amount of buffers enough to fed into 3 JPEG save threads.
         if (m_exynosCameraParameters->getSeriesShotCount() > 0)
             minBufferCount = NUM_BURST_GSC_JPEG_INIT_BUFFER;
 
+#if !defined(SAMSUNG_DEBLUR) && !defined(SAMSUNG_LLS_DEBLUR)
         type = EXYNOS_CAMERA_BUFFER_ION_NONCACHED_TYPE;
         ret = m_allocBuffers(m_gscBufferMgr, planeCount, planeSize,
                     bytesPerLine, minBufferCount, maxBufferCount, type, allocMode, false, false);
@@ -11501,6 +15918,16 @@ status_t ExynosCamera::m_setPictureBuffer(void)
                 __FUNCTION__, __LINE__, minBufferCount, maxBufferCount);
             return ret;
         }
+#else
+        type = EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE;
+        ret = m_allocBuffers(m_gscBufferMgr, planeCount, planeSize,
+                    bytesPerLine, minBufferCount, maxBufferCount, type, allocMode, false, true);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):m_gscBufferMgr m_allocBuffers(minBufferCount=%d, maxBufferCount=%d) fail",
+                __FUNCTION__, __LINE__, minBufferCount, maxBufferCount);
+            return ret;
+        }
+#endif
     }
 
     if (needGSCForCapture(getCameraId()) == true) {
@@ -11508,7 +15935,17 @@ status_t ExynosCamera::m_setPictureBuffer(void)
         m_exynosCameraParameters->getPreviewSize(&f_previewW, &f_previewH);
         planeSize[0] = f_previewW * f_previewH * 1.5;
         planeCount = 1;
-
+#if defined (SAMSUNG_BD) || defined (SAMSUNG_DEBLUR)
+        /* Change the MagicGSCBuffer type to mmap & cached for the performance enhancement*/
+        type = EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE;
+        ret = m_allocBuffers(m_postPictureGscBufferMgr, planeCount, planeSize,
+                    bytesPerLine, minBufferCount, maxBufferCount, type, allocMode, false, true);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):m_gscBufferMgr m_allocBuffers(minBufferCount=%d, maxBufferCount=%d) fail",
+                __FUNCTION__, __LINE__, minBufferCount, maxBufferCount);
+            return ret;
+        }
+#else
         type = EXYNOS_CAMERA_BUFFER_ION_NONCACHED_TYPE;
         ret = m_allocBuffers(m_postPictureGscBufferMgr, planeCount, planeSize,
                     bytesPerLine, minBufferCount, maxBufferCount, type, allocMode, false, false);
@@ -11516,6 +15953,26 @@ status_t ExynosCamera::m_setPictureBuffer(void)
             CLOGE("ERR(%s[%d]):m_gscBufferMgr m_allocBuffers(minBufferCount=%d, maxBufferCount=%d) fail",
                 __FUNCTION__, __LINE__, minBufferCount, maxBufferCount);
             return ret;
+        }
+#endif
+    }
+
+    if(m_exynosCameraParameters->getSamsungCamera()) {
+        int thumbnailW = 0, thumbnailH = 0;
+        m_exynosCameraParameters->getThumbnailSize(&thumbnailW, &thumbnailH);
+        if (thumbnailW > 0 && thumbnailH > 0) {
+            planeSize[0] = FRAME_SIZE(HAL_PIXEL_FORMAT_RGBA_8888, thumbnailW, thumbnailH);
+            planeCount  = 1;
+            maxBufferCount = NUM_THUMBNAIL_POSTVIEW_BUFFERS;
+            type = EXYNOS_CAMERA_BUFFER_ION_NONCACHED_TYPE;
+
+            ret = m_allocBuffers(m_thumbnailGscBufferMgr, planeCount, planeSize,
+                        bytesPerLine, maxBufferCount, maxBufferCount, type, allocMode, false, true);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):m_gscBufferMgr m_allocBuffers(minBufferCount=%d, maxBufferCount=%d) fail",
+                    __FUNCTION__, __LINE__, maxBufferCount, maxBufferCount);
+                return ret;
+            }
         }
     }
 
@@ -11602,6 +16059,11 @@ status_t ExynosCamera::m_releaseBuffers(void)
     if (m_bayerBufferMgr != NULL) {
         m_bayerBufferMgr->deinit();
     }
+#ifdef SAMSUNG_DNG
+    if (m_fliteBufferMgr != NULL) {
+        m_fliteBufferMgr->deinit();
+    }
+#endif
     if (m_3aaBufferMgr != NULL) {
         m_3aaBufferMgr->deinit();
     }
@@ -11635,6 +16097,12 @@ status_t ExynosCamera::m_releaseBuffers(void)
         m_thumbnailGscBufferMgr->deinit();
     }
 
+#ifdef SAMSUNG_LBP
+    if (m_lbpBufferMgr != NULL) {
+        m_lbpBufferMgr->deinit();
+    }
+#endif
+
     if (m_jpegBufferMgr != NULL) {
         m_jpegBufferMgr->deinit();
     }
@@ -11647,6 +16115,11 @@ status_t ExynosCamera::m_releaseBuffers(void)
     if (m_highResolutionCallbackBufferMgr != NULL) {
         m_highResolutionCallbackBufferMgr->deinit();
     }
+#ifdef SUPPORT_SW_VDIS
+    if (m_swVDIS_BufferMgr != NULL) {
+        m_swVDIS_BufferMgr->deinit();
+    }
+#endif /*SUPPORT_SW_VDIS*/
 
     CLOGI("INFO(%s[%d]):free buffer done", __FUNCTION__, __LINE__);
 
@@ -11874,8 +16347,15 @@ bool ExynosCamera::m_monitorThreadFunc(void)
         CLOGD("DEBUG(%s[%d]):DTP Detected. dtpStatus(%d)", __FUNCTION__, __LINE__, dtpStatus);
         dump();
 
+#ifdef CAMERA_GED_FEATURE
         /* in GED */
         m_notifyCb(CAMERA_MSG_ERROR, 100, 0, m_callbackCookie);
+#else
+        /* specifically defined */
+        m_notifyCb(CAMERA_MSG_ERROR, 1002, 0, m_callbackCookie);
+        /* or */
+        /* android_printAssert(NULL, LOG_TAG, "killed by itself"); */
+#endif
 
         return false;
     }
@@ -11900,7 +16380,46 @@ bool ExynosCamera::m_monitorThreadFunc(void)
     m_previewFrameFactory->getThreadState(&threadState, pipeIdErrorCheck);
     m_previewFrameFactory->getThreadRenew(&countRenew, pipeIdErrorCheck);
 
-    {
+    if (m_exynosCameraParameters->getSamsungCamera() && ((*threadState == ERROR_POLLING_DETECTED) || (*countRenew > ERROR_DQ_BLOCKED_COUNT))) {
+        CLOGD("DEBUG(%s[%d]):ESD Detected. threadState(%d) *countRenew(%d)", __FUNCTION__, __LINE__, *threadState, *countRenew);
+        dump();
+#ifdef SAMSUNG_TN_FEATURE
+        if (m_recordingEnabled == true
+          && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)
+          && m_recordingCallbackHeap != NULL
+          && m_callbackCookie != NULL) {
+
+          CLOGD("DEBUG(%s[%d]):Timestamp callback with CAMERA_MSG_ERROR start", __FUNCTION__, __LINE__);
+
+          m_dataCbTimestamp(
+              0,
+              CAMERA_MSG_ERROR | CAMERA_MSG_VIDEO_FRAME,
+              m_recordingCallbackHeap,
+              0,
+              m_callbackCookie);
+
+          CLOGD("DEBUG(%s[%d]):Timestamp callback with CAMERA_MSG_ERROR end", __FUNCTION__, __LINE__);
+        }
+#endif
+
+#ifdef CAMERA_GED_FEATURE
+        /* in GED */
+        /* skip error callback */
+        /* m_notifyCb(CAMERA_MSG_ERROR, 100, 0, m_callbackCookie); */
+#else
+        /* specifically defined */
+        m_notifyCb(CAMERA_MSG_ERROR, 1001, 0, m_callbackCookie);
+        /* or */
+        /* android_printAssert(NULL, LOG_TAG, "killed by itself"); */
+#endif
+
+        ret = m_previewFrameFactory->setControl(V4L2_CID_IS_CAMERA_TYPE, IS_COLD_RESET, PIPE_3AA);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):PIPE_%d V4L2_CID_IS_CAMERA_TYPE fail, ret(%d)", __FUNCTION__, __LINE__, PIPE_3AA, ret);
+        }
+
+        return false;
+    } else {
         CLOGV("[%s] (%d) (%d)", __FUNCTION__, __LINE__, *threadState);
     }
 
@@ -11982,6 +16501,15 @@ uint32_t ExynosCamera::m_getSyncLogId(void)
 
 bool ExynosCamera::m_autoFocusResetNotify(__unused int focusMode)
 {
+#ifdef SAMSUNG_TN_FEATURE
+    /* show restart */
+    CLOGD("DEBUG(%s):CAMERA_MSG_FOCUS(%d) mode(%d)", __func__, FOCUS_RESULT_RESTART, focusMode);
+    m_notifyCb(CAMERA_MSG_FOCUS, FOCUS_RESULT_RESTART, 0, m_callbackCookie);
+
+    /* show focusing */
+    CLOGD("DEBUG(%s):CAMERA_MSG_FOCUS(%d) mode(%d)", __func__, FOCUS_RESULT_FOCUSING, focusMode);
+    m_notifyCb(CAMERA_MSG_FOCUS, FOCUS_RESULT_FOCUSING, 0, m_callbackCookie);
+#endif
     return true;
 }
 
@@ -12054,6 +16582,14 @@ bool ExynosCamera::m_autoFocusThreadFunc(void)
 
         if (m_notifyCb != NULL) {
             int afFinalResult = (int)afResult;
+#ifdef SAMSUNG_TN_FEATURE
+            /* if inactive detected, tell it */
+            if (m_exynosCameraParameters->getSamsungCamera() == true && focusMode == FOCUS_MODE_CONTINUOUS_PICTURE) {
+                if (m_exynosCameraActivityControl->getCAFResult() == FOCUS_RESULT_CANCEL) {
+                    afFinalResult = FOCUS_RESULT_CANCEL;
+                }
+            }
+#endif
             CLOGD("DEBUG(%s):CAMERA_MSG_FOCUS(%d) mode(%d)", __FUNCTION__, afFinalResult, focusMode);
             m_autoFocusLock.unlock();
             m_notifyCb(CAMERA_MSG_FOCUS, afFinalResult, 0, m_callbackCookie);
@@ -12071,6 +16607,23 @@ bool ExynosCamera::m_autoFocusThreadFunc(void)
 
     CLOGV("DEBUG(%s):exiting with no error", __FUNCTION__);
 
+#ifdef SAMSUNG_TN_FEATURE
+    if (focusMode == FOCUS_MODE_CONTINUOUS_PICTURE || focusMode == FOCUS_MODE_CONTINUOUS_VIDEO) {
+        bool prev_afInMotion = autoFocusMgr->getAfInMotionResult();
+        bool afInMotion = false;
+
+        autoFocusMgr->setAfInMotionResult(afInMotion);
+
+        if (m_notifyCb != NULL && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_FOCUS_MOVE)
+            && (prev_afInMotion != afInMotion)) {
+            CLOGD("DEBUG(%s):CAMERA_MSG_FOCUS_MOVE(%d) mode(%d)",
+                __FUNCTION__, afInMotion, m_exynosCameraParameters->getFocusMode());
+            m_autoFocusLock.unlock();
+            m_notifyCb(CAMERA_MSG_FOCUS_MOVE, afInMotion, 0, m_callbackCookie);
+            m_autoFocusLock.lock();
+        }
+    }
+#endif
 done:
     m_autoFocusLock.unlock();
 
@@ -12114,6 +16667,54 @@ bool ExynosCamera::m_autoFocusContinousThreadFunc(void)
         return true;
     }
 
+#ifdef SAMSUNG_TN_FEATURE
+    /* Continuous Auto-focus */
+    if(m_exynosCameraParameters->getSamsungCamera() == true) {
+        if (m_exynosCameraParameters->getFocusMode() == FOCUS_MODE_CONTINUOUS_PICTURE) {
+            ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
+            int afstatus = FOCUS_RESULT_FAIL;
+            static int afResult = FOCUS_RESULT_SUCCESS;
+            int prev_afstatus = afResult;
+            afstatus = m_exynosCameraActivityControl->getCAFResult();
+            afResult = afstatus;
+
+            if (afstatus == FOCUS_RESULT_FOCUSING &&
+                (prev_afstatus == FOCUS_RESULT_FAIL || prev_afstatus == FOCUS_RESULT_SUCCESS)) {
+                afResult = FOCUS_RESULT_RESTART;
+            }
+
+            if (m_notifyCb != NULL && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_FOCUS)
+                && (prev_afstatus != afstatus)) {
+                CLOGD("DEBUG(%s):CAMERA_MSG_FOCUS(%d) mode(%d)",
+                    __FUNCTION__, afResult, m_exynosCameraParameters->getFocusMode());
+                m_notifyCb(CAMERA_MSG_FOCUS, afResult, 0, m_callbackCookie);
+                autoFocusMgr->displayAFStatus();
+            }
+        }
+    } else {
+        if (m_exynosCameraParameters->getFocusMode() == FOCUS_MODE_CONTINUOUS_PICTURE
+            || m_exynosCameraParameters->getFocusMode() == FOCUS_MODE_CONTINUOUS_VIDEO) {
+            ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
+            bool prev_afInMotion = autoFocusMgr->getAfInMotionResult();
+            bool afInMotion = false;
+            switch (m_exynosCameraActivityControl->getCAFResult()) {
+                case FOCUS_RESULT_FAIL: // AA_AFSTATE_PASSIVE_UNFOCUSED
+                case FOCUS_RESULT_SUCCESS: // AA_AFSTATE_PASSIVE_FOCUSED
+                    afInMotion = false;
+                    break;
+                case FOCUS_RESULT_FOCUSING: // AA_AFSTATE_PASSIVE_SCAN, AA_AFSTATE_ACTIVE_SCAN
+                    afInMotion = true;
+                    break;
+            }
+            autoFocusMgr->setAfInMotionResult(afInMotion);
+
+            if (m_notifyCb != NULL && m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_FOCUS_MOVE)
+                && (prev_afInMotion != afInMotion)) {
+                m_notifyCb(CAMERA_MSG_FOCUS_MOVE, afInMotion, 0, m_callbackCookie);
+            }
+        }
+    }
+#endif
     return true;
 }
 
@@ -12135,6 +16736,10 @@ void ExynosCamera::dump()
 
     if (m_bayerBufferMgr != NULL)
         m_bayerBufferMgr->dump();
+#ifdef SAMSUNG_DNG
+    if (m_fliteBufferMgr != NULL)
+        m_fliteBufferMgr->dump();
+#endif
     if (m_3aaBufferMgr != NULL)
         m_3aaBufferMgr->dump();
     if (m_ispBufferMgr != NULL)
@@ -12153,6 +16758,10 @@ void ExynosCamera::dump()
     if (m_gscBufferMgr != NULL)
         m_gscBufferMgr->dump();
 
+#ifdef SUPPORT_SW_VDIS
+    if (m_swVDIS_BufferMgr != NULL)
+        m_swVDIS_BufferMgr->dump();
+#endif /*SUPPORT_SW_VDIS*/
     return;
 }
 
@@ -12173,6 +16782,12 @@ status_t ExynosCamera::m_getBufferManager(uint32_t pipeId, ExynosCameraBufferMan
 
     switch (internalPipeId) {
     case PIPE_FLITE:
+#ifdef SAMSUNG_DNG
+        if(m_exynosCameraParameters->getDNGCaptureModeOn()) {
+            bufMgrList[0] = NULL;
+            bufMgrList[1] = &m_fliteBufferMgr;
+        } else
+#endif
         {
             bufMgrList[0] = NULL;
             bufMgrList[1] = &m_bayerBufferMgr;
@@ -12257,6 +16872,11 @@ status_t ExynosCamera::m_getBufferManager(uint32_t pipeId, ExynosCameraBufferMan
         bufMgrList[1] = &m_gscBufferMgr;
         break;
     case PIPE_GSC_REPROCESSING2:
+#ifdef SAMSUNG_DEBLUR
+        if (getUseDeblurCaptureOn()) {
+            bufMgrList[0] = &m_gscBufferMgr;
+        } else
+#endif
         {
             bufMgrList[0] = &m_sccReprocessingBufferMgr;
         }
@@ -12335,6 +16955,452 @@ status_t ExynosCamera::m_convertingStreamToShotExt(ExynosCameraBuffer *buffer, s
     return ret;
 }
 
+#ifdef SAMSUNG_DNG
+unsigned int ExynosCamera::getDNGFcount()
+{
+    unsigned int shotFcount = 0;
+    ExynosCameraActivitySpecialCapture *m_sCaptureMgr = NULL;
+    ExynosCameraActivityFlash *m_flashMgr = m_exynosCameraActivityControl->getFlashMgr();
+    m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
+
+    CLOGV("[DNG](%s[%d]):getOISCaptureModeOn(%d) getOISCaptureFcount(%d)",
+        __FUNCTION__, __LINE__, m_exynosCameraParameters->getOISCaptureModeOn(), m_sCaptureMgr->getOISCaptureFcount());
+
+    if (m_sCaptureMgr->getOISCaptureFcount() > 0) {
+        shotFcount = m_sCaptureMgr->getOISCaptureFcount() + OISCAPTURE_DELAY;
+    } else if (m_flashMgr->getNeedCaptureFlash() == true && m_flashMgr->getShotFcount()) {
+        shotFcount = m_flashMgr->getShotFcount() + 1;
+    } else if (m_exynosCameraParameters->getCaptureExposureTime() > CAMERA_PREVIEW_EXPOSURE_TIME_LIMIT) {
+        shotFcount = m_dngFrameNumberForManualExposure;
+    }
+
+    return shotFcount;
+}
+
+bool ExynosCamera::m_DNGCaptureThreadFunc(void)
+{
+    ExynosCameraBuffer dngBuffer[3];
+    ExynosCameraBuffer *saveDngBuffer[3];
+    ExynosCameraBuffer *tempDngBuffer;
+    int loop = false;
+    int ret = 0;
+    int count;
+    int saveCount;
+    unsigned int fliteFcount = 0;
+    camera2_shot_ext *shot_ext = NULL;
+    ExynosRect srcRect, dstRect;
+
+    m_exynosCameraParameters->getPictureBayerCropSize(&srcRect, &dstRect);
+
+    for (int i = 0; i < 3; i++) {
+        dngBuffer[i].index = -2;
+        saveDngBuffer[i] = &dngBuffer[i];
+    }
+    saveCount = 0;
+    tempDngBuffer = NULL;
+
+    CLOGD("[DNG](%s[%d]):-- IN --", __FUNCTION__, __LINE__);
+
+DNG_RETRY:
+    if (m_exynosCameraParameters->getCaptureExposureTime() != 0 && m_stopLongExposure) {
+        CLOGD("[DNG](%s[%d]):flite emergency stop", __FUNCTION__, __LINE__);
+        m_longExposureEnds = true;
+        m_searchDNGFrame = false;
+        m_pictureEnabled = false;
+        CLOGD("[DNG](%s[%d]):request flite stop", __FUNCTION__, __LINE__);
+        m_previewFrameFactory->setRequestFLITE(false);
+        goto CLEAN;
+    }
+    tempDngBuffer = saveDngBuffer[saveCount];
+
+    /* wait flite */
+    CLOGV("INFO(%s[%d]):wait flite output", __FUNCTION__, __LINE__);
+    ret = m_dngCaptureQ->waitAndPopProcessQ(tempDngBuffer);
+    CLOGD("[DNG](%s[%d]):flite output done pipe", __FUNCTION__, __LINE__);
+    if (ret < 0) {
+        CLOGE("ERR(%s)(%d):wait and pop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        /* TODO: doing exception handling */
+       goto CLEAN;
+    }
+
+    saveCount++;
+
+    /* Rawdump capture is available in pure bayer only */
+    shot_ext = (camera2_shot_ext *)(tempDngBuffer->addr[1]);
+    if (shot_ext != NULL)
+        fliteFcount = shot_ext->shot.dm.request.frameCount;
+    else
+        ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+
+    if (fliteFcount == 0) {
+        ALOGE("ERR(%s[%d]):fliteFcount is null", __FUNCTION__, __LINE__);
+        goto DNG_RETRY;
+    }
+
+    if (m_exynosCameraParameters->getCaptureExposureTime() != 0 &&
+        m_exynosCameraParameters->getCheckMultiFrame() &&
+        getDNGFcount() == 0) {
+        if (saveCount >= 3) {
+            shot_ext = (camera2_shot_ext *)(saveDngBuffer[0]->addr[1]);
+            if (shot_ext->shot.dm.request.frameCount != 0) {
+                ret = m_putBuffers(m_fliteBufferMgr, saveDngBuffer[0]->index);
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):m_putBuffers(%d) fail", __FUNCTION__, __LINE__, saveDngBuffer[0]->index);
+                    goto CLEAN;
+                }
+            }
+            tempDngBuffer = saveDngBuffer[0];
+            saveDngBuffer[0] = saveDngBuffer[1];
+            saveDngBuffer[1] = saveDngBuffer[2];
+            saveDngBuffer[2] = tempDngBuffer;
+            saveDngBuffer[2]->index = -2;
+            saveCount--;
+        }
+        goto DNG_RETRY;
+    } else if (m_exynosCameraParameters->getCaptureExposureTime() != 0 &&
+        m_exynosCameraParameters->getCheckMultiFrame() &&
+        getDNGFcount() != 0 && fliteFcount < getDNGFcount()) {
+        for (count = 0; count < saveCount; count++) {
+            shot_ext = (camera2_shot_ext *)(saveDngBuffer[count]->addr[1]);
+            if (shot_ext->shot.dm.request.frameCount != 0) {
+                ret = m_putBuffers(m_fliteBufferMgr, saveDngBuffer[count]->index);
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):m_putBuffers(%d) fail", __FUNCTION__, __LINE__, saveDngBuffer[count]->index);
+                    goto CLEAN;
+                }
+            }
+            saveDngBuffer[count]->index = -2;
+        }
+        saveCount = 0;
+        goto DNG_RETRY;
+    } else if (m_exynosCameraParameters->getCaptureExposureTime() != 0 &&
+        m_exynosCameraParameters->getCheckMultiFrame() &&
+        getDNGFcount() != 0 && fliteFcount >= getDNGFcount()) {
+        for (count = 0; count < saveCount; count++) {
+            shot_ext = (camera2_shot_ext *)(saveDngBuffer[count]->addr[1]);
+            if (shot_ext->shot.dm.request.frameCount >= getDNGFcount()) {
+                break;
+            } else {
+                if (shot_ext->shot.dm.request.frameCount != 0) {
+                    ret = m_putBuffers(m_fliteBufferMgr, saveDngBuffer[count]->index);
+                    if (ret < 0) {
+                        CLOGE("ERR(%s[%d]):m_putBuffers(%d) fail", __FUNCTION__, __LINE__, saveDngBuffer[count]->index);
+                        goto CLEAN;
+                    }
+                }
+                saveDngBuffer[count]->index = -2;
+            }
+        }
+        saveCount = 0;
+        for (int i = 0; i < 3; i++) {
+            if (saveDngBuffer[i]->index != -2) {
+                saveCount++;
+            }
+        }
+        if (saveCount == 2 && saveDngBuffer[0]->index == -2) {
+            tempDngBuffer = saveDngBuffer[0];
+            saveDngBuffer[0] = saveDngBuffer[1];
+            saveDngBuffer[1] = saveDngBuffer[2];
+            saveDngBuffer[2] = tempDngBuffer;
+        } else if (saveCount == 1 && saveDngBuffer[0]->index == -2) {
+            if (saveDngBuffer[1]->index == -2) {
+                tempDngBuffer = saveDngBuffer[0];
+                saveDngBuffer[0] = saveDngBuffer[2];
+                saveDngBuffer[2] = tempDngBuffer;
+            } else {
+                tempDngBuffer = saveDngBuffer[0];
+                saveDngBuffer[0] = saveDngBuffer[1];
+                saveDngBuffer[1] = tempDngBuffer;
+            }
+        }
+        if (m_dngLongExposureRemainCount <= 0) {
+            for (count = 1; count < saveCount; count++) {
+                if (saveDngBuffer[count]->index != -2) {
+                    shot_ext = (camera2_shot_ext *)(saveDngBuffer[count]->addr[1]);
+                    if (shot_ext->shot.dm.request.frameCount != 0) {
+                        ret = m_putBuffers(m_fliteBufferMgr, saveDngBuffer[count]->index);
+                        if (ret < 0) {
+                            CLOGE("ERR(%s[%d]):m_putBuffers(%d) fail", __FUNCTION__, __LINE__, saveDngBuffer[count]->index);
+                            goto CLEAN;
+                        }
+                    }
+                    saveDngBuffer[count]->index = -2;
+                }
+            }
+            saveCount = 1;
+        }
+    }
+
+    if (m_dngLongExposureRemainCount > 0 && saveDngBuffer[2]->index != -2) {
+        ret = addBayerBuffer(saveDngBuffer[2], saveDngBuffer[0], &dstRect);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):addBayerBuffer() fail", __FUNCTION__, __LINE__);
+        }
+
+        ret = m_putBuffers(m_fliteBufferMgr, saveDngBuffer[2]->index);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):m_putBuffers(%d) fail", __FUNCTION__, __LINE__, saveDngBuffer[2]->index);
+            goto CLEAN;
+        }
+        saveDngBuffer[2]->index = -2;
+        saveCount--;
+        m_dngLongExposureRemainCount--;
+    }
+
+    if (m_dngLongExposureRemainCount > 0 && saveDngBuffer[1]->index != -2) {
+        ret = addBayerBuffer(saveDngBuffer[1], saveDngBuffer[0], &dstRect);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):addBayerBuffer() fail", __FUNCTION__, __LINE__);
+        }
+
+        ret = m_putBuffers(m_fliteBufferMgr, saveDngBuffer[1]->index);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):m_putBuffers(%d) fail", __FUNCTION__, __LINE__, saveDngBuffer[1]->index);
+            goto CLEAN;
+        }
+        saveDngBuffer[1]->index = -2;
+        saveCount--;
+        m_dngLongExposureRemainCount--;
+        if (m_dngLongExposureRemainCount > 0) {
+            goto DNG_RETRY;
+        }
+    } else if (m_dngLongExposureRemainCount > 0 && saveDngBuffer[1]->index == -2) {
+        goto DNG_RETRY;
+    }
+
+#ifdef CAMERA_ADD_BAYER_ENABLE
+    if (mIonClient >= 0)
+        ion_sync_fd(mIonClient, saveDngBuffer[0]->fd[0]);
+#endif
+
+    m_longExposureEnds = true;
+
+    CLOGD("[DNG](%s[%d]):frame count (%d)", __FUNCTION__, __LINE__, fliteFcount);
+
+#if 0
+    int sensorMaxW, sensorMaxH;
+    int sensorMarginW, sensorMarginH;
+    bool bRet;
+    char filePath[70];
+
+    memset(filePath, 0, sizeof(filePath));
+    snprintf(filePath, sizeof(filePath), "/data/media/0/fliteCapture%d_%d.dng",
+        m_exynosCameraParameters->getCameraId(), fliteFcount);
+    /* Pure Bayer Buffer Size == MaxPictureSize + Sensor Margin == Max Sensor Size */
+    m_exynosCameraParameters->getMaxSensorSize(&sensorMaxW, &sensorMaxH);
+
+    CLOGD("[DNG](%s[%d]):Raw frame count (%d)", __FUNCTION__, __LINE__, fliteFcount);
+
+    CLOGD("[DNG](%s[%d]):Raw Dump start (%s)", __FUNCTION__, __LINE__, filePath);
+
+    bRet = dumpToFile((char *)filePath,
+        dngBuffer.addr[0],
+        dngBuffer.size[0]);
+    if (bRet != true)
+        ALOGE("couldn't make a raw file", __FUNCTION__, __LINE__);
+    CLOGD("[DNG](%s[%d]):Raw Dump end (%s)", __FUNCTION__, __LINE__, filePath);
+#endif
+
+    if (m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_RAW_IMAGE)) {
+        // Make Dng format
+        m_dngCreator.makeDng(m_exynosCameraParameters, saveDngBuffer[0]->addr[0], &saveDngBuffer[0]->size[0]);
+
+        // Check DNG save path
+        char default_path[20];
+        memset(default_path, 0, sizeof(default_path));
+        strncpy(default_path, CAMERA_SAVE_PATH_PHONE, sizeof(default_path)-1);
+        m_CheckCameraSavingPath(default_path,
+            m_exynosCameraParameters->getDngFilePath(),
+            m_dngSavePath, sizeof(m_dngSavePath));
+
+        CLOGD("DNG(%s[%d]): RAW callback", __FUNCTION__, __LINE__);
+        // Make Callback Buffer
+        camera_memory_t *rawCallbackHeap = NULL;
+        rawCallbackHeap = m_getDngCallbackHeap(saveDngBuffer[0]);
+        if (!rawCallbackHeap || rawCallbackHeap->data == MAP_FAILED) {
+            CLOGE("ERR(%s[%d]):m_getMemoryCb(%d) fail", __FUNCTION__, __LINE__, saveDngBuffer[0]->size[0]);
+            goto CLEAN;
+        }
+
+        if (!m_cancelPicture) {
+            setBit(&m_callbackState, CALLBACK_STATE_RAW_IMAGE, true);
+            m_dataCb(CAMERA_MSG_RAW_IMAGE, rawCallbackHeap, 0, NULL, m_callbackCookie);
+            clearBit(&m_callbackState, CALLBACK_STATE_RAW_IMAGE, true);
+        }
+        rawCallbackHeap->release(rawCallbackHeap);
+    }
+
+CLEAN:
+    for (count = 0; count < 3; count++) {
+        if (saveDngBuffer[count]->index != -2) {
+            ret = m_putBuffers(m_fliteBufferMgr, saveDngBuffer[count]->index);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):m_putBuffers(%d) fail", __FUNCTION__, __LINE__, saveDngBuffer[count]->index);
+            }
+        }
+    }
+
+    return loop;
+}
+
+camera_memory_t *ExynosCamera::m_getDngCallbackHeap(ExynosCameraBuffer *dngBuf)
+{
+    camera_memory_t *dngCallbackHeap = NULL;
+    int dngSaveLocation = m_exynosCameraParameters->getDngSaveLocation();
+
+    CLOGI("INFO(%s[%d]):", __FUNCTION__, __LINE__);
+
+    if (dngSaveLocation == BURST_SAVE_CALLBACK) {
+        CLOGD("DEBUG(%s[%d]):burst callback : size (%d)", __FUNCTION__, __LINE__, dngBuf->size[0]);
+
+        dngCallbackHeap = m_getMemoryCb(dngBuf->fd[0], dngBuf->size[0], 1, m_callbackCookie);
+        if (!dngCallbackHeap || dngCallbackHeap->data == MAP_FAILED) {
+            CLOGE("ERR(%s[%d]):m_getMemoryCb(%d) fail", __FUNCTION__, __LINE__, dngBuf->size[0]);
+            goto done;
+        }
+        if (dngBuf->fd[0] < 0)
+            memcpy(dngCallbackHeap->data, dngBuf->addr[0], dngBuf->size[0]);
+    } else {
+        char filePath[CAMERA_FILE_PATH_SIZE];
+        time_t rawtime;
+        struct tm *timeinfo;
+
+        // Get current local time
+        time(&rawtime);
+        timeinfo = localtime(&rawtime);
+        strftime(m_dngTime, 20, "%Y%m%d_%H%M%S", timeinfo);
+
+        // Get Full Path Name (Path + FileName)
+        memset(filePath, 0, sizeof(filePath));
+        snprintf(filePath, sizeof(filePath), "%s%s_hal.dng", m_dngSavePath, m_dngTime);
+        CLOGD("DEBUG(%s[%d]):burst callback : size (%d), filePath(%s)",
+            __FUNCTION__, __LINE__, dngBuf->size[0], filePath);
+
+        if(m_FileSaveFunc(filePath, dngBuf) == false) {
+            CLOGE("ERR(%s[%d]): FILE save ERROR", __FUNCTION__, __LINE__);
+            goto done;
+        }
+
+        dngCallbackHeap = m_getMemoryCb(-1, sizeof(filePath), 1, m_callbackCookie);
+        if (!dngCallbackHeap || dngCallbackHeap->data == MAP_FAILED) {
+            CLOGE("ERR(%s[%d]):m_getMemoryCb(%s) fail", __FUNCTION__, __LINE__, filePath);
+            goto done;
+        }
+
+        memcpy(dngCallbackHeap->data, filePath, sizeof(filePath));
+    }
+
+done:
+
+    if (dngCallbackHeap == NULL || dngCallbackHeap->data == MAP_FAILED) {
+        if (dngCallbackHeap) {
+            dngCallbackHeap->release(dngCallbackHeap);
+            dngCallbackHeap = NULL;
+        }
+
+        m_notifyCb(CAMERA_MSG_ERROR, -1, 0, m_callbackCookie);
+    }
+
+    CLOGD("INFO(%s[%d]):making callback buffer done", __FUNCTION__, __LINE__);
+
+    return dngCallbackHeap;
+}
+#endif
+
+#ifdef RAWDUMP_CAPTURE
+bool ExynosCamera::m_RawCaptureDumpThreadFunc(void)
+{
+    ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+    CLOGI("DEBUG(%s[%d]):", __FUNCTION__, __LINE__);
+
+    int ret = 0;
+    int sensorMaxW, sensorMaxH;
+    int sensorMarginW, sensorMarginH;
+    bool bRet;
+    char filePath[70];
+    ExynosCameraBufferManager *bufferMgr = NULL;
+    int bayerPipeId = 0;
+    ExynosCameraBuffer bayerBuffer;
+    ExynosCameraFrame *newFrame = NULL;
+    ExynosCameraFrame *inListFrame = NULL;
+    unsigned int fliteFcount = 0;
+
+    ret = m_RawCaptureDumpQ->waitAndPopProcessQ(&newFrame);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):wait and pop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        // TODO: doing exception handling
+        goto CLEAN;
+    }
+    if (newFrame == NULL) {
+        CLOGE("ERR(%s[%d]):newFrame is NULL", __FUNCTION__, __LINE__);
+        goto CLEAN;
+    }
+
+    bayerPipeId = newFrame->getFirstEntity()->getPipeId();
+    ret = newFrame->getDstBuffer(bayerPipeId, &bayerBuffer);
+    ret = m_getBufferManager(bayerPipeId, &bufferMgr, DST_BUFFER_DIRECTION);
+
+    /* Rawdump capture is available in pure bayer only */
+    if (m_exynosCameraParameters->getUsePureBayerReprocessing() == true) {
+        camera2_shot_ext *shot_ext = NULL;
+        shot_ext = (camera2_shot_ext *)(bayerBuffer.addr[1]);
+        if (shot_ext != NULL)
+            fliteFcount = shot_ext->shot.dm.request.frameCount;
+        else
+            ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+    } else {
+        camera2_stream *shot_stream = NULL;
+        shot_stream = (camera2_stream *)(bayerBuffer.addr[1]);
+        if (shot_stream != NULL)
+            fliteFcount = shot_stream->fcount;
+        else
+            ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
+    }
+
+    memset(filePath, 0, sizeof(filePath));
+    snprintf(filePath, sizeof(filePath), "/data/media/0/RawCapture%d_%d.raw",
+        m_exynosCameraParameters->getCameraId(), fliteFcount);
+    /* Pure Bayer Buffer Size == MaxPictureSize + Sensor Margin == Max Sensor Size */
+    m_exynosCameraParameters->getMaxSensorSize(&sensorMaxW, &sensorMaxH);
+
+    CLOGD("INFO(%s[%d]):Raw Dump start (%s)", __FUNCTION__, __LINE__, filePath);
+
+    bRet = dumpToFile((char *)filePath,
+        bayerBuffer.addr[0],
+        sensorMaxW * sensorMaxH * 2);
+    if (bRet != true)
+        ALOGE("couldn't make a raw file", __FUNCTION__, __LINE__);
+
+    ret = bufferMgr->putBuffer(bayerBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+    if (ret < 0) {
+        ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, bayerBuffer.index);
+        bufferMgr->printBufferState();
+        bufferMgr->printBufferQState();
+    }
+
+CLEAN:
+
+    if (newFrame != NULL) {
+        newFrame->frameUnlock();
+
+        ret = m_searchFrameFromList(&m_processList, newFrame->getFrameCount(), &inListFrame);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):searchFrameFromList fail", __FUNCTION__, __LINE__);
+        } else {
+            if (inListFrame == NULL) {
+                CLOGD("DEBUG(%s[%d]): Selected frame(%d) complete, Delete",
+                    __FUNCTION__, __LINE__, newFrame->getFrameCount());
+                newFrame->decRef();
+                m_frameMgr->deleteFrame(newFrame);
+            }
+            newFrame = NULL;
+        }
+    }
+
+    return ret;
+}
+#endif
+
 status_t ExynosCamera::m_getBayerBuffer(uint32_t pipeId, ExynosCameraBuffer *buffer, camera2_shot_ext *updateDmShot)
 {
     status_t ret = NO_ERROR;
@@ -12348,10 +17414,23 @@ status_t ExynosCamera::m_getBayerBuffer(uint32_t pipeId, ExynosCameraBuffer *buf
     ExynosCameraBuffer tempBuffer;
     ExynosRect srcRect, dstRect;
 
+#ifdef LLS_REPROCESSING
+    unsigned int fliteFcount = 0;
+#endif
     int trycount = 0;
     m_exynosCameraParameters->getPictureBayerCropSize(&srcRect, &dstRect);
 
 BAYER_RETRY:
+#ifdef ONE_SECOND_BURST_CAPTURE
+    if (m_exynosCameraParameters->getCaptureExposureTime() != 0 &&
+        m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_ONE_SECOND_BURST) {
+        CLOGD("DEBUG(%s[%d]): manual exposure mode. Stop one second burst.", __FUNCTION__, __LINE__);
+        m_stopLongExposure = true;
+        m_jpegCallbackCounter.clearCount();
+        m_stopBurstShot = true;
+    }
+#endif
+
     if (m_exynosCameraParameters->getCaptureExposureTime() != 0 && m_stopLongExposure) {
         CLOGD("DEBUG(%s[%d]): Emergency stop", __FUNCTION__, __LINE__);
         m_reprocessingCounter.clearCount();
@@ -12359,16 +17438,56 @@ BAYER_RETRY:
         goto CLEAN;
     }
 
+#ifdef OIS_CAPTURE
+    if (m_exynosCameraParameters->getOISCaptureModeOn() == true) {
+        retryCount = 7;
+#ifdef SAMSUNG_LLS_DEBLUR
+        if (m_exynosCameraParameters->getLDCaptureMode() > 0
+            && m_exynosCameraParameters->getLDCaptureMode() < MULTI_SHOT_MODE_MULTI3) {
+            m_captureSelector->setWaitTimeOISCapture(70000000);
+        } else
+#endif
+        {
+            m_captureSelector->setWaitTimeOISCapture(130000000);
+        }
+    }
+#endif
+
     m_captureSelector->setWaitTime(200000000);
+#ifdef RAWDUMP_CAPTURE
+    for (int i = 0; i < 2; i++) {
+        bayerFrame = m_captureSelector->selectFrames(m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount);
+
+        if(i == 0) {
+            m_RawCaptureDumpQ->pushProcessQ(&bayerFrame);
+        } else if (i == 1) {
+            m_exynosCameraParameters->setRawCaptureModeOn(false);
+        }
+    }
+#else
+#ifdef SAMSUNG_QUICKSHOT
+    if (m_exynosCameraParameters->getQuickShot() && m_quickShotStart) {
+        for (int i = 0; i < FRAME_SKIP_COUNT_QUICK_SHOT; i++) {
+            bayerFrame = m_captureSelector->selectFrames(m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount);
+        }
+    } else
+#endif
     {
         bayerFrame = m_captureSelector->selectFrames(m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount);
     }
+#ifdef SAMSUNG_QUICKSHOT
+    m_quickShotStart = false;
+#endif
+#endif
     if (bayerFrame == NULL) {
         CLOGE("ERR(%s[%d]):bayerFrame is NULL", __FUNCTION__, __LINE__);
         ret = INVALID_OPERATION;
         goto CLEAN;
     }
 
+#ifdef LLS_REPROCESSING
+    m_exynosCameraParameters->setSetfileYuvRange();
+#endif
 
     if (pipeId == PIPE_3AA) {
         ret = bayerFrame->getDstBuffer(pipeId, buffer, m_previewFrameFactory->getNodeType(pipeId));
@@ -12448,6 +17567,10 @@ BAYER_RETRY:
         goto BAYER_RETRY;
     }
 
+#ifdef SAMSUNG_DNG
+    if (m_dngFrameNumberForManualExposure == 0)
+        m_dngFrameNumberForManualExposure = shot_ext->shot.dm.request.frameCount;
+#endif
     if (m_exynosCameraParameters->getCaptureExposureTime() != 0 &&
         m_longExposureRemainCount > 0) {
         if (saveBuffer == NULL) {
@@ -12533,11 +17656,47 @@ BAYER_RETRY:
 
     m_exynosCameraParameters->setPreviewExposureTime();
 
+#ifdef SAMSUNG_DNG
+    if (m_exynosCameraParameters->getDNGCaptureModeOn() && !m_exynosCameraParameters->getCheckMultiFrame()) {
+        m_exynosCameraParameters->setUseDNGCapture(false);
+        m_captureSelector->resetDNGFrameCount();
+        CLOGD("DNG(%s[%d]): getUseDNGCapture(%d) flitecount(%d)", __FUNCTION__, __LINE__,
+                m_exynosCameraParameters->getUseDNGCapture(), shot_stream->fcount);
+    }
+#endif
+
+#ifdef LLS_REPROCESSING
+    if(m_captureSelector->getIsLastFrame() == false) {
+        if (m_captureSelector->getIsConvertingMeta() == false) {
+            camera2_shot_ext *shot_ext = NULL;
+            shot_ext = (camera2_shot_ext *)(buffer->addr[1]);
+            if (shot_ext != NULL)
+                fliteFcount = shot_ext->shot.dm.request.frameCount;
+        } else {
+            camera2_stream *shot_stream = NULL;
+            shot_stream = (camera2_stream *)(buffer->addr[1]);
+            if (shot_stream != NULL)
+                fliteFcount = shot_stream->fcount;
+        }
+
+        CLOGD("DEBUG(%s[%d]): LLS Capture ...ing(hal : %d / driver : %d)", __FUNCTION__, __LINE__,
+            bayerFrame->getFrameCount(), fliteFcount);
+        return ret;
+    }
+#endif
+
 CLEAN:
     if (saveBuffer != NULL && saveBuffer->index != -2 && m_bayerBufferMgr != NULL) {
         m_putBuffers(m_bayerBufferMgr, saveBuffer->index);
         saveBuffer->index = -2;
     }
+
+#ifdef LLS_REPROCESSING
+    if (m_exynosCameraParameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS && m_captureSelector->getIsLastFrame() == true) {
+        m_captureSelector->resetFrameCount();
+        m_exynosCameraParameters->setLLSCaptureCount(0);
+    }
+#endif
 
     if (bayerFrame != NULL) {
         bayerFrame->frameUnlock();
@@ -13247,11 +18406,82 @@ void ExynosCamera::m_printExynosCameraInfo(const char *funcName)
 
 status_t ExynosCamera::m_startCompanion(void)
 {
+#if defined(SAMSUNG_COMPANION)
+    if(m_use_companion == true) {
+        if (m_companionNode == NULL) {
+            m_companionThread = new mainCameraThread(this, &ExynosCamera::m_companionThreadFunc,
+                                                      "companionshotThread", PRIORITY_URGENT_DISPLAY);
+            if (m_companionThread != NULL) {
+                m_companionThread->run();
+                CLOGD("DEBUG(%s): companionThread starts", __FUNCTION__);
+            } else {
+                CLOGE("(%s):failed the m_companionThread.", __FUNCTION__);
+            }
+        } else {
+            CLOGW("WRN(%s[%d]):m_companionNode != NULL. so, it already running", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
+#if defined(SAMSUNG_EEPROM)
+    if ((m_use_companion == false) && (isEEprom(getCameraId()) == true)) {
+        m_eepromThread = new mainCameraThread(this, &ExynosCamera::m_eepromThreadFunc,
+                                                  "cameraeepromThread", PRIORITY_URGENT_DISPLAY);
+        if (m_eepromThread != NULL) {
+            m_eepromThread->run();
+            CLOGD("DEBUG(%s): eepromThread starts", __FUNCTION__);
+        } else {
+            CLOGE("(%s): failed the m_eepromThread", __FUNCTION__);
+        }
+    }
+#endif
+
     return NO_ERROR;
 }
 
 status_t ExynosCamera::m_stopCompanion(void)
 {
+#if defined(SAMSUNG_COMPANION)
+    if(m_use_companion == true) {
+        if (m_companionThread != NULL) {
+            CLOGI("INFO(%s[%d]): wait m_companionThread", __FUNCTION__, __LINE__);
+            m_companionThread->requestExitAndWait();
+            CLOGI("INFO(%s[%d]): wait m_companionThread end", __FUNCTION__, __LINE__);
+        } else {
+            CLOGI("INFO(%s[%d]): m_companionThread is NULL", __FUNCTION__, __LINE__);
+        }
+
+        if (m_companionNode != NULL) {
+            ExynosCameraDurationTimer timer;
+
+            timer.start();
+
+            if (m_companionNode->close() != NO_ERROR) {
+                CLOGE("ERR(%s):close fail", __FUNCTION__);
+            }
+            delete m_companionNode;
+            m_companionNode = NULL;
+
+            CLOGD("DEBUG(%s):Companion Node(%d) closed", __FUNCTION__, MAIN_CAMERA_COMPANION_NUM);
+
+            timer.stop();
+            CLOGD("DEBUG(%s[%d]):duration time(%5d msec)", __FUNCTION__, __LINE__, (int)timer.durationMsecs());
+
+        }
+    }
+#endif
+
+#if defined(SAMSUNG_EEPROM)
+    if ((m_use_companion == false) && (isEEprom(getCameraId()) == true)) {
+        if (m_eepromThread != NULL) {
+            CLOGI("INFO(%s[%d]): wait m_eepromThread", __FUNCTION__, __LINE__);
+            m_eepromThread->requestExitAndWait();
+        } else {
+            CLOGI("INFO(%s[%d]): m_eepromThread is NULL", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
     return NO_ERROR;
 }
 
@@ -13261,6 +18491,16 @@ status_t ExynosCamera::m_waitCompanionThreadEnd(void)
 
     timer.start();
 
+#ifdef SAMSUNG_COMPANION
+    if(m_use_companion == true) {
+        if (m_companionThread != NULL) {
+            m_companionThread->join();
+        } else {
+            CLOGI("INFO(%s[%d]):m_companionThread is NULL", __FUNCTION__, __LINE__);
+        }
+    }
+#endif
+
     timer.stop();
     CLOGD("DEBUG(%s[%d]):companion waiting time : duration time(%5d msec)", __FUNCTION__, __LINE__, (int)timer.durationMsecs());
 
@@ -13268,6 +18508,225 @@ status_t ExynosCamera::m_waitCompanionThreadEnd(void)
 
     return NO_ERROR;
 }
+
+#ifdef SAMSUNG_SENSOR_LISTENER
+bool ExynosCamera::m_sensorListenerThreadFunc(void)
+{
+    CLOGI("INFO(%s[%d]):", __FUNCTION__, __LINE__);
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+
+    m_timer.start();
+
+    uint32_t curMinFps = 0;
+    uint32_t curMaxFps = 0;
+
+    m_exynosCameraParameters->getPreviewFpsRange(&curMinFps, &curMaxFps);
+    if(curMinFps > 60 && curMaxFps > 60)
+        goto skip_sensor_listener;
+
+#ifdef SAMSUNG_HRM
+    if(getCameraId() == CAMERA_ID_BACK && m_exynosCameraParameters->getSamsungCamera() == true &&
+            m_exynosCameraParameters->getVtMode() == 0) {
+        if(m_uv_rayHandle == NULL) {
+            m_uv_rayHandle = sensor_listener_load();
+            if(m_uv_rayHandle != NULL) {
+                if(sensor_listener_enable_sensor(m_uv_rayHandle, ST_UV_RAY, 10*1000) < 0) {
+                    sensor_listener_unload(&m_uv_rayHandle);
+                } else {
+                    m_exynosCameraParameters->m_setHRM_Hint(true);
+                }
+            }
+        } else {
+            m_exynosCameraParameters->m_setHRM_Hint(true);
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_LIGHT_IR
+    if(getCameraId() == CAMERA_ID_FRONT && m_exynosCameraParameters->getSamsungCamera() == true &&
+            m_exynosCameraParameters->getVtMode() == 0) {
+        if(m_light_irHandle == NULL) {
+            m_light_irHandle = sensor_listener_load();
+            if(m_light_irHandle != NULL) {
+                if(sensor_listener_enable_sensor(m_light_irHandle, ST_LIGHT_IR, 120*1000) < 0) {
+                    sensor_listener_unload(&m_light_irHandle);
+                } else {
+                    m_exynosCameraParameters->m_setLight_IR_Hint(true);
+                }
+            }
+        } else {
+            m_exynosCameraParameters->m_setLight_IR_Hint(true);
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_GYRO
+    if(getCameraId() == CAMERA_ID_BACK && m_exynosCameraParameters->getSamsungCamera() == true &&
+            m_exynosCameraParameters->getVtMode() == 0) {
+        if(m_gyroHandle == NULL) {
+            m_gyroHandle = sensor_listener_load();
+            if(m_gyroHandle != NULL) {
+                /* HACK
+                 * Below event rate(7700) is set to let gyro timestamp operate
+                 * for VDIS performance. Real event rate is 10ms not 7.7ms
+                 */
+                if(sensor_listener_enable_sensor(m_gyroHandle,ST_GYROSCOPE, 7700) < 0) {
+                    sensor_listener_unload(&m_gyroHandle);
+                } else {
+                    m_exynosCameraParameters->m_setGyroHint(true);
+                }
+            }
+        } else {
+            m_exynosCameraParameters->m_setGyroHint(true);
+        }
+    }
+#endif
+
+skip_sensor_listener:
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+    CLOGD("DEBUG(%s):duration time(%5d msec)", __FUNCTION__, (int)durationTime);
+
+    return false;
+}
+#endif /* SAMSUNG_SENSOR_LISTENER */
+
+#ifdef SAMSUNG_LLV_TUNING
+status_t ExynosCamera::m_checkLLVtuning(void)
+{
+    FILE *fp = NULL;
+    int i;
+    char filePath[30];
+    status_t ret = NO_ERROR;
+
+    for(i = UNI_PLUGIN_POWER_CONTROL_OFF; i <= UNI_PLUGIN_POWER_CONTROL_4; i++) {
+        memset(filePath, 0, sizeof(filePath));
+        sprintf(filePath, "%s_%d.txt", "/mnt/sdcard/LLVKEY", i);
+        fp = fopen(filePath, "r");
+        if (fp == NULL) {
+            CLOGE("(%s[%d]):failed to open LLVKEY_%d", __FUNCTION__, __LINE__, i);
+        }
+        else {
+            CLOGD("(%s[%d]):succeeded to open LLVKEY_%d", __FUNCTION__, __LINE__, i);
+            m_LLVpowerLevel = i;
+            fclose(fp);
+            break;
+        }
+    }
+
+    return NO_ERROR;
+}
+#endif
+
+#ifdef SAMSUNG_HLV
+status_t ExynosCamera::m_ProgramAndProcessHLV(ExynosCameraBuffer *FrameBuffer)
+{
+    UniPluginBufferData_t BufferInfo;
+    int curVideoW = 0, curVideoH = 0;
+    int numValid = 0;
+    int ret = 0;
+    UniPluginFocusData_t *focusData = NULL;
+
+    m_HLVprocessStep = HLV_PROCESS_PRE;
+    if (FrameBuffer == NULL) {
+        ALOGE("HLV: [%s-%d]: FrameBuffer is NULL - Exit", __FUNCTION__, __LINE__);
+        return -1;
+    }
+
+    int maxNumFocusAreas = m_exynosCameraParameters->getMaxNumFocusAreas();
+    if (maxNumFocusAreas <= 0) {
+        ALOGE("HLV: [%s-%d]: maxNumFocusAreas is <= 0 - Exit", __FUNCTION__, __LINE__);
+        return -1;
+    }
+
+    focusData = new UniPluginFocusData_t[maxNumFocusAreas];
+
+    memset(&BufferInfo, 0, sizeof(UniPluginBufferData_t));
+    memset(focusData, 0, sizeof(UniPluginFocusData_t) *  maxNumFocusAreas);
+
+    m_exynosCameraParameters->getVideoSize(&curVideoW, &curVideoH);
+
+    BufferInfo.InWidth = curVideoW;
+    BufferInfo.InHeight = curVideoH;
+    BufferInfo.InBuffY = FrameBuffer->addr[0];
+    BufferInfo.InBuffU = FrameBuffer->addr[1];
+    BufferInfo.ZoomLevel = m_exynosCameraParameters->getZoomLevel();
+    BufferInfo.Timestamp = m_lastRecordingTimeStamp / 1000000;  /* in MilliSec */
+
+    ALOGV("HLV: [%s-%d]: uni_plugin_set BUFFER_INFO", __FUNCTION__, __LINE__);
+    m_HLVprocessStep = HLV_PROCESS_SET;
+    ret = uni_plugin_set(m_HLV,
+                HIGHLIGHT_VIDEO_PLUGIN_NAME,
+                UNI_PLUGIN_INDEX_BUFFER_INFO,
+                &BufferInfo);
+    if (ret < 0)
+        ALOGE("HLV: uni_plugin_set fail!");
+
+
+    ALOGV("HLV: uni_plugin_set FOCUS_INFO");
+
+    if (m_exynosCameraParameters->getObjectTrackingEnable())
+    {
+        ExynosRect2 *objectTrackingArea = new ExynosRect2[maxNumFocusAreas];
+        int* objectTrackingWeight = new int[maxNumFocusAreas];
+        int validNumber;
+
+        m_exynosCameraParameters->getObjectTrackingAreas(&validNumber,
+            objectTrackingArea, objectTrackingWeight);
+
+        for (int i = 0; i < validNumber; i++) {
+            focusData[i].FocusROILeft = objectTrackingArea[i].x1;
+            focusData[i].FocusROIRight = objectTrackingArea[i].x2;
+            focusData[i].FocusROITop = objectTrackingArea[i].y1;
+            focusData[i].FocusROIBottom = objectTrackingArea[i].y2;
+            focusData[i].FocusWeight = objectTrackingWeight[i];
+        }
+
+        if (validNumber > 1)
+            ALOGW("HLV: Valid Focus Area > 1");
+
+        delete[] objectTrackingArea;
+        delete[] objectTrackingWeight;
+    }
+    else
+    {
+        int FocusAreaWeight = 0;
+        ExynosRect2 CurrentFocusArea;
+        ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
+
+        memset(&CurrentFocusArea, 0, sizeof(ExynosRect2));
+        autoFocusMgr->getFocusAreas(&CurrentFocusArea, &FocusAreaWeight);
+
+        focusData[0].FocusROILeft = CurrentFocusArea.x1;
+        focusData[0].FocusROIRight = CurrentFocusArea.x2;
+        focusData[0].FocusROITop = CurrentFocusArea.y1;
+        focusData[0].FocusROIBottom = CurrentFocusArea.y2;
+        focusData[0].FocusWeight = FocusAreaWeight;
+
+        ALOGV("HLV: CurrentFocusArea : %d, %d, %d, %d",
+            CurrentFocusArea.x1, CurrentFocusArea.x2,
+            CurrentFocusArea.y1, CurrentFocusArea.y2);
+    }
+
+    ret = uni_plugin_set(m_HLV,
+                HIGHLIGHT_VIDEO_PLUGIN_NAME,
+                UNI_PLUGIN_INDEX_FOCUS_INFO,
+                focusData);
+    if (ret < 0)
+        ALOGE("HLV: uni_plugin_set fail!");
+
+    m_HLVprocessStep = HLV_PROCESS_START;
+    ret = uni_plugin_process(m_HLV);
+    if (ret < 0)
+        ALOGE("HLV: uni_plugin_process FAIL");
+
+    delete[] focusData;
+
+    m_HLVprocessStep = HLV_PROCESS_DONE;
+    return ret;
+}
+#endif
 
 void ExynosCamera::m_checkEntranceLux(struct camera2_shot_ext *meta_shot_ext) {
     uint32_t data = 0;
@@ -13311,5 +18770,751 @@ status_t ExynosCamera::m_copyMetaFrameToFrame(ExynosCameraFrame *srcframe, Exyno
 
     return NO_ERROR;
 }
+
+
+#ifdef SAMSUNG_DEBLUR
+void ExynosCamera::setUseDeblurCaptureOn(bool enable)
+{
+    m_useDeblurCaptureOn = enable;
+}
+
+bool ExynosCamera::getUseDeblurCaptureOn(void)
+{
+    return m_useDeblurCaptureOn;
+}
+
+bool ExynosCamera::m_deblurCaptureThreadFunc(void)
+{
+    ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+    CLOGI("INFO(%s[%d]):", __FUNCTION__, __LINE__);
+
+    int ret = 0;
+    int loop = false;
+    ExynosCameraFrame *newFrame = NULL;
+    ExynosCameraBuffer gscReprocessingBuffer1;
+    ExynosCameraBuffer gscReprocessingBuffer2;
+
+    gscReprocessingBuffer1.index = -2;
+    gscReprocessingBuffer2.index = -2;
+
+    int pipeId_gsc = 0;
+    int currentSeriesShotMode = 0;
+
+    if (m_exynosCameraParameters->isReprocessing() == true) {
+        if (needGSCForCapture(getCameraId()) == true) {
+            pipeId_gsc = PIPE_GSC_REPROCESSING;
+        } else {
+            pipeId_gsc = (isOwnScc(getCameraId()) == true) ? PIPE_SCC_REPROCESSING : PIPE_ISP_REPROCESSING;
+        }
+    } else {
+        if (needGSCForCapture(getCameraId()) == true) {
+            pipeId_gsc = PIPE_GSC_PICTURE;
+        } else {
+            if (isOwnScc(getCameraId()) == true) {
+                pipeId_gsc = PIPE_SCC;
+            } else {
+                pipeId_gsc = PIPE_ISPC;
+            }
+        }
+    }
+
+    ExynosCameraBufferManager *bufferMgr = NULL;
+    ret = m_getBufferManager(pipeId_gsc, &bufferMgr, DST_BUFFER_DIRECTION);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):getBufferManager(SRC) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId_gsc, ret);
+        return ret;
+    }
+
+    CLOGI("INFO(%s[%d]):wait m_deblurCaptureQ output", __FUNCTION__, __LINE__);
+    ret = m_deblurCaptureQ->waitAndPopProcessQ(&newFrame);
+    if (ret < 0) {
+        CLOGW("WARN(%s[%d]):wait and pop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        /* TODO: doing exception handling */
+        goto CLEAN;
+    }
+    if (newFrame == NULL) {
+        CLOGE("ERR(%s[%d]):newFrame is NULL", __FUNCTION__, __LINE__);
+        goto CLEAN;
+    }
+
+    if (m_jpegCounter.getCount() <= 0) {
+        CLOGD("DEBUG(%s[%d]): Picture canceled", __FUNCTION__, __LINE__);
+        goto CLEAN;
+    }
+
+    CLOGI("INFO(%s[%d]):m_deblurCaptureQ output done", __FUNCTION__, __LINE__);
+
+    if (m_deblur_firstFrame == NULL) {
+        CLOGI("INFO(%s[%d]): first", __FUNCTION__, __LINE__);
+        m_deblur_firstFrame = newFrame;
+    } else {
+        m_deblur_secondFrame = newFrame;
+
+        if (getUseDeblurCaptureOn()) {
+            CLOGI("INFO(%s[%d]):second getUseDeblurCaptureOn(%d)", __FUNCTION__, __LINE__, getUseDeblurCaptureOn());
+            /* Library */
+            int pipeId_postPictureGsc = PIPE_GSC_REPROCESSING2;
+            int previewW = 0, previewH = 0, previewFormat = 0;
+            int pictureW = 0, pictureH = 0, pictureFormat = 0;
+            ExynosRect srcRect_postPicturegGsc, dstRect_postPicturegGsc;
+            float zoomRatio = m_exynosCameraParameters->getZoomRatio(0) / 1000;
+
+            CLOGD("[Deblur](%s[%d]):-- Start Library --", __FUNCTION__, __LINE__);
+            ExynosCameraDurationTimer m_timer;
+            long long durationTime = 0;
+
+            m_timer.start();
+
+            ret = m_deblur_firstFrame->getDstBuffer(pipeId_gsc, &gscReprocessingBuffer1);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):getDstBuffer fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId_gsc, ret);
+                goto CLEAN;
+            }
+
+            ret = m_deblur_secondFrame->getDstBuffer(pipeId_gsc, &gscReprocessingBuffer2);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):getDstBuffer fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId_gsc, ret);
+                goto CLEAN;
+            }
+
+            m_exynosCameraParameters->getPictureSize(&pictureW, &pictureH);
+            pictureFormat = m_exynosCameraParameters->getPictureFormat();
+
+            if(m_DeblurpluginHandle != NULL) {
+                UniPluginBufferData_t pluginData;
+                memset(&pluginData, 0, sizeof(UniPluginBufferData_t));
+                pluginData.InBuffY = gscReprocessingBuffer1.addr[0];
+                pluginData.InBuffU = gscReprocessingBuffer1.addr[0] + (pictureW * pictureH);
+                pluginData.InWidth = pictureW;
+                pluginData.InHeight = pictureH;
+                pluginData.InFormat = UNI_PLUGIN_FORMAT_NV21;
+                pluginData.Index = 0;
+                CLOGD("[Deblur](%s[%d]): Buffer1 Width: %d, Height: %d", __FUNCTION__, __LINE__,
+                            pluginData.InWidth, pluginData.InHeight);
+                ret = uni_plugin_set(m_DeblurpluginHandle,
+                        DEBLUR_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &pluginData);
+                if(ret < 0) {
+                    CLOGE("[Deblur](%s[%d]): Deblur Plugin set UNI_PLUGIN_INDEX_BUFFER_INFO failed!!",
+                                __FUNCTION__, __LINE__);
+                }
+#if 0
+                char filePath[70] = "/data/media/0/deblur_input1.yuv";
+                dumpToFile((char *)filePath,
+                    gscReprocessingBuffer1.addr[0],
+                    (pictureW * pictureH * 3) / 2);
+#endif
+                memset(&pluginData, 0, sizeof(UniPluginBufferData_t));
+                pluginData.InBuffY = gscReprocessingBuffer2.addr[0];
+                pluginData.InBuffU = gscReprocessingBuffer2.addr[0] + (pictureW * pictureH);
+                pluginData.InWidth = pictureW;
+                pluginData.InHeight = pictureH;
+                pluginData.InFormat = UNI_PLUGIN_FORMAT_NV21;
+                pluginData.Index = 1;
+                CLOGD("[Deblur](%s[%d]): Buffer2 Width: %d, Height: %d", __FUNCTION__, __LINE__,
+                            pluginData.InWidth, pluginData.InHeight);
+                ret = uni_plugin_set(m_DeblurpluginHandle,
+                        DEBLUR_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &pluginData);
+                if(ret < 0) {
+                    CLOGE("[Deblur](%s[%d]): Deblur Plugin set UNI_PLUGIN_INDEX_BUFFER_INFO failed!!",
+                                __FUNCTION__, __LINE__);
+                }
+#if 0
+                char filePath2[70] = "/data/media/0/deblur_input2.yuv";
+                dumpToFile((char *)filePath2,
+                    gscReprocessingBuffer2.addr[0],
+                    (pictureW * pictureH * 3) / 2);
+#endif
+                UniPluginExtraBufferInfo_t extraData;
+                memset(&extraData, 0, sizeof(UniPluginExtraBufferInfo_t));
+
+                struct camera2_dm *dm = new struct camera2_dm;
+                memset(dm, 0, sizeof(camera2_dm));
+
+                m_deblur_firstFrame->getDynamicMeta(dm);
+                extraData.iso[0] = dm->sensor.sensitivity;
+                extraData.exposureTime.num = 1;
+                if (dm->sensor.exposureTime != 0)
+                    extraData.exposureTime.den = (uint32_t) 1e9 / dm->sensor.exposureTime;
+                else
+                    extraData.exposureTime.num = 0;
+                CLOGD("[Deblur](%s[%d]): ISO: %d, exposure: %d/%d", __FUNCTION__, __LINE__,
+                            extraData.iso[0], extraData.exposureTime.num, extraData.exposureTime.den);
+                ret = uni_plugin_set(m_DeblurpluginHandle,
+                        DEBLUR_PLUGIN_NAME, UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO, &extraData);
+                if(ret < 0) {
+                    CLOGE("[Deblur](%s[%d]): Deblur Plugin set UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO failed!!", __FUNCTION__, __LINE__);
+                }
+
+                delete dm;
+
+                ret = uni_plugin_process(m_DeblurpluginHandle);
+                if(ret < 0) {
+                    CLOGE("[Deblur](%s[%d]): Deblur Plugin process failed!!", __FUNCTION__, __LINE__);
+                }
+#if 0
+                char filePath3[70] = "/data/media/0/deblur_output2.yuv";
+                dumpToFile((char *)filePath3,
+                    gscReprocessingBuffer2.addr[0],
+                    (pictureW * pictureH * 3) / 2);
+#endif
+            }
+            m_timer.stop();
+            durationTime = m_timer.durationMsecs();
+            CLOGD("[Deblur](%s[%d]):duration time(%5d msec)", __FUNCTION__, __LINE__, (int)durationTime);
+            CLOGD("[Deblur](%s[%d]):-- end Library --", __FUNCTION__, __LINE__);
+
+            if (m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_POSTVIEW_FRAME)) {
+                m_exynosCameraParameters->setIsThumbnailCallbackOn(true);
+            }
+
+            if (m_exynosCameraParameters->getIsThumbnailCallbackOn()) {
+                CLOGD("POSTVIEW callback start, m_postPictureGscThread run (%s)(%d) pipe(%d)",
+                    __FUNCTION__, __LINE__, pipeId_postPictureGsc);
+
+                int retry1 = 0;
+                do {
+                    ret = -1;
+                    retry1++;
+                    if (m_postPictureGscBufferMgr->getNumOfAvailableBuffer() > 0) {
+                        ret = m_setupEntity(pipeId_postPictureGsc, m_deblur_secondFrame, &gscReprocessingBuffer2, NULL);
+                    } else {
+                        /* wait available SCC buffer */
+                        usleep(WAITING_TIME);
+                    }
+                    if (retry1 % 10 == 0)
+                        CLOGW("WRAN(%s[%d]):retry setupEntity for GSC", __FUNCTION__, __LINE__);
+                } while(ret < 0 && retry1 < (TOTAL_WAITING_TIME/WAITING_TIME));
+
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):setupEntity fail, pipeId(%d), retry(%d), ret(%d)",
+                        __FUNCTION__, __LINE__, pipeId_postPictureGsc, retry1, ret);
+                    goto CLEAN;
+                }
+
+                m_exynosCameraParameters->getPreviewSize(&previewW, &previewH);
+                m_exynosCameraParameters->getPictureSize(&pictureW, &pictureH);
+                pictureFormat = m_exynosCameraParameters->getPictureFormat();
+                previewFormat = m_exynosCameraParameters->getPreviewFormat();
+
+                CLOGD("DEBUG(%s):size preview(%d, %d,format:%d)picture(%d, %d,format:%d)", __FUNCTION__,
+                    previewW, previewH, previewFormat, pictureW, pictureH, pictureFormat);
+
+                srcRect_postPicturegGsc.x = 0;
+                srcRect_postPicturegGsc.y = 0;
+                srcRect_postPicturegGsc.w = pictureW;
+                srcRect_postPicturegGsc.h = pictureH;
+                srcRect_postPicturegGsc.fullW = pictureW;
+                srcRect_postPicturegGsc.fullH = pictureH;
+                srcRect_postPicturegGsc.colorFormat = HAL_PIXEL_FORMAT_2_V4L2_PIX(HAL_PIXEL_FORMAT_YCrCb_420_SP);
+                dstRect_postPicturegGsc.x = 0;
+                dstRect_postPicturegGsc.y = 0;
+                dstRect_postPicturegGsc.w = previewW;
+                dstRect_postPicturegGsc.h = previewH;
+                dstRect_postPicturegGsc.fullW = previewW;
+                dstRect_postPicturegGsc.fullH = previewH;
+                dstRect_postPicturegGsc.colorFormat = HAL_PIXEL_FORMAT_2_V4L2_PIX(HAL_PIXEL_FORMAT_YCrCb_420_SP);
+
+                ret = getCropRectAlign(srcRect_postPicturegGsc.w,  srcRect_postPicturegGsc.h,
+                    previewW,   previewH,
+                    &srcRect_postPicturegGsc.x, &srcRect_postPicturegGsc.y,
+                    &srcRect_postPicturegGsc.w, &srcRect_postPicturegGsc.h,
+                    2, 2, 0, zoomRatio);
+
+                ret = m_deblur_secondFrame->setSrcRect(pipeId_postPictureGsc, &srcRect_postPicturegGsc);
+                ret = m_deblur_secondFrame->setDstRect(pipeId_postPictureGsc, &dstRect_postPicturegGsc);
+
+                CLOGD("DEBUG(%s):size (%d, %d, %d, %d %d %d)", __FUNCTION__,
+                    srcRect_postPicturegGsc.x, srcRect_postPicturegGsc.y, srcRect_postPicturegGsc.w,
+                    srcRect_postPicturegGsc.h, srcRect_postPicturegGsc.fullW, srcRect_postPicturegGsc.fullH);
+                CLOGD("DEBUG(%s):size (%d, %d, %d, %d %d %d)", __FUNCTION__,
+                    dstRect_postPicturegGsc.x, dstRect_postPicturegGsc.y, dstRect_postPicturegGsc.w,
+                    dstRect_postPicturegGsc.h, dstRect_postPicturegGsc.fullW, dstRect_postPicturegGsc.fullH);
+
+                /* push frame to GSC pipe */
+                m_pictureFrameFactory->setOutputFrameQToPipe(dstPostPictureGscQ, pipeId_postPictureGsc);
+                m_pictureFrameFactory->pushFrameToPipe(&m_deblur_secondFrame, pipeId_postPictureGsc);
+
+                ret = m_postPictureGscThread->run();
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):couldn't run m_postPictureGscThread, ret(%d)", __FUNCTION__, __LINE__, ret);
+                    goto CLEAN;
+                }
+            }
+
+            m_postPictureQ->pushProcessQ(&m_deblur_secondFrame);
+            m_deblur_secondFrame = NULL;
+        } else {
+            CLOGI("INFO(%s[%d]):second getUseDeblurCaptureOn(%d)", __FUNCTION__, __LINE__, getUseDeblurCaptureOn());
+            ret = m_deblur_firstFrame->getDstBuffer(pipeId_gsc, &gscReprocessingBuffer1);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):getDstBuffer fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId_gsc, ret);
+                goto CLEAN;
+            }
+
+            ret = m_deblur_secondFrame->getDstBuffer(pipeId_gsc, &gscReprocessingBuffer2);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):getDstBuffer fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId_gsc, ret);
+                goto CLEAN;
+            }
+
+            /* put GSC buffer */
+            ret = m_putBuffers(bufferMgr, gscReprocessingBuffer2.index);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):bufferMgr->putBuffers() fail, pipeId(%d), ret(%d)",
+                        __FUNCTION__, __LINE__, pipeId_gsc, ret);
+                goto CLEAN;
+            }
+
+            if (m_deblur_secondFrame != NULL) {
+                m_deblur_secondFrame->printEntity();
+                m_deblur_secondFrame->frameUnlock();
+                ret = m_removeFrameFromList(&m_postProcessList, m_deblur_secondFrame);
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):remove frame from processList fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+                }
+
+                CLOGD("DEBUG(%s[%d]): Picture frame delete(%d)", __FUNCTION__, __LINE__, m_deblur_secondFrame->getFrameCount());
+                m_deblur_secondFrame->decRef();
+                m_frameMgr->deleteFrame(m_deblur_secondFrame);
+                m_deblur_secondFrame = NULL;
+            }
+        }
+
+        /* put GSC 1st buffer */
+        ret = m_putBuffers(bufferMgr, gscReprocessingBuffer1.index);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):bufferMgr->putBuffers() fail, pipeId(%d), ret(%d)",
+                    __FUNCTION__, __LINE__, pipeId_gsc, ret);
+            goto CLEAN;
+        }
+
+        if (m_deblur_firstFrame != NULL) {
+            m_deblur_firstFrame->printEntity();
+            m_deblur_firstFrame->frameUnlock();
+            ret = m_removeFrameFromList(&m_postProcessList, m_deblur_firstFrame);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):remove frame from processList fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            }
+
+            CLOGD("DEBUG(%s[%d]): Picture frame delete(%d)", __FUNCTION__, __LINE__, m_deblur_firstFrame->getFrameCount());
+            m_deblur_firstFrame->decRef();
+            m_frameMgr->deleteFrame(m_deblur_firstFrame);
+            m_deblur_firstFrame = NULL;
+        }
+    }
+
+CLEAN:
+
+    return loop;
+}
+
+bool ExynosCamera::m_detectDeblurCaptureThreadFunc(void)
+{
+#ifdef DEBUG
+    ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+#endif
+    int32_t previewFormat = 0;
+    status_t ret = NO_ERROR;
+    ExynosCameraBuffer postgscReprocessingBuffer;
+    ExynosCameraBufferManager *bufferMgr = NULL;
+    int gscPipe = PIPE_GSC_REPROCESSING3;
+    int loop = false;
+
+    postgscReprocessingBuffer.index = -2;
+
+    CLOGD("DEBUG(%s[%d]):-- IN --", __FUNCTION__, __LINE__);
+
+    /* wait GSC */
+    CLOGV("INFO(%s[%d]):wait GSC output pipe(%d)", __FUNCTION__, __LINE__);
+    ret = m_detectDeblurCaptureQ->waitAndPopProcessQ(&postgscReprocessingBuffer);
+    CLOGD("INFO(%s[%d]):GSC output done pipe(%d)", __FUNCTION__, __LINE__);
+    if (ret < 0) {
+        CLOGE("ERR(%s)(%d):wait and pop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        /* TODO: doing exception handling */
+       goto CLEAN;
+    }
+
+    m_getBufferManager(gscPipe, &bufferMgr, SRC_BUFFER_DIRECTION);
+
+    /* Library */
+    CLOGD("DEBUG(%s[%d]):-- wait Library --", __FUNCTION__, __LINE__);
+    usleep(40000);
+    CLOGD("DEBUG(%s[%d]):-- end Library --", __FUNCTION__, __LINE__);
+
+#if 1
+    setUseDeblurCaptureOn(true);
+#else
+    setUseDeblurCaptureOn(false);
+#endif
+
+    CLOGD("DEBUG(%s[%d]):--OUT--", __FUNCTION__, __LINE__);
+
+CLEAN:
+
+    if (postgscReprocessingBuffer.index != -2)
+        m_putBuffers(bufferMgr, postgscReprocessingBuffer.index);
+
+    return loop;
+}
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+bool ExynosCamera::m_LDCaptureThreadFunc(void)
+{
+    ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+    CLOGI("[LDC](%s[%d]):", __FUNCTION__, __LINE__);
+
+    int ret = 0;
+    int loop = false;
+    ExynosCameraFrame *newFrame = NULL;
+    ExynosCameraBuffer gscReprocessingBuffer;
+    int pipeId_gsc = 0;
+    int pipeId_postPictureGsc = PIPE_GSC_REPROCESSING2;
+    int previewW = 0, previewH = 0, previewFormat = 0;
+    int pictureW = 0, pictureH = 0, pictureFormat = 0;
+    ExynosRect srcRect_postPicturegGsc, dstRect_postPicturegGsc;
+    float zoomRatio = m_exynosCameraParameters->getZoomRatio(0) / 1000;
+    int retry1 = 0;
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+
+    gscReprocessingBuffer.index = -2;
+
+    if (m_exynosCameraParameters->isReprocessing() == true) {
+        if (needGSCForCapture(getCameraId()) == true) {
+            pipeId_gsc = PIPE_GSC_REPROCESSING;
+        } else {
+            pipeId_gsc = (isOwnScc(getCameraId()) == true) ? PIPE_SCC_REPROCESSING : PIPE_ISP_REPROCESSING;
+        }
+    } else {
+        if (needGSCForCapture(getCameraId()) == true) {
+            pipeId_gsc = PIPE_GSC_PICTURE;
+        } else {
+            if (isOwnScc(getCameraId()) == true) {
+                pipeId_gsc = PIPE_SCC;
+            } else {
+                pipeId_gsc = PIPE_ISPC;
+            }
+        }
+    }
+
+    ExynosCameraBufferManager *bufferMgr = NULL;
+    ret = m_getBufferManager(pipeId_gsc, &bufferMgr, DST_BUFFER_DIRECTION);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):getBufferManager(SRC) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId_gsc, ret);
+        return ret;
+    }
+
+    CLOGI("INFO(%s[%d]):wait m_deblurCaptureQ output", __FUNCTION__, __LINE__);
+    ret = m_LDCaptureQ->waitAndPopProcessQ(&newFrame);
+    if (ret < 0) {
+        CLOGW("WARN(%s[%d]):wait and pop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        /* TODO: doing exception handling */
+        goto CLEAN;
+    }
+
+    if (newFrame == NULL) {
+        CLOGE("ERR(%s[%d]):newFrame is NULL", __FUNCTION__, __LINE__);
+        goto CLEAN;
+    }
+
+    if (m_jpegCounter.getCount() <= 0) {
+        CLOGD("DEBUG(%s[%d]): Picture canceled", __FUNCTION__, __LINE__);
+        goto CLEAN;
+    }
+
+    ret = newFrame->getDstBuffer(pipeId_gsc, &gscReprocessingBuffer);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):getDstBuffer fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId_gsc, ret);
+        goto CLEAN;
+    }
+
+    m_LDBufIndex[m_LDCaptureCount] = gscReprocessingBuffer.index;
+    m_LDCaptureCount++;
+
+    CLOGI("[LDC](%s[%d]):m_deblurCaptureQ output done m_LDCaptureCount(%d) index(%d)",
+        __FUNCTION__, __LINE__, m_LDCaptureCount, gscReprocessingBuffer.index);
+
+    /* Library */
+    CLOGD("[LDC](%s[%d]):-- Start Library --", __FUNCTION__, __LINE__);
+    m_timer.start();
+    if (m_LLSpluginHandle != NULL) {
+        int totalCount = 0;
+        UNI_PLUGIN_OPERATION_MODE opMode = UNI_PLUGIN_OP_END;
+
+        int llsMode = m_exynosCameraParameters->getLDCaptureLLSValue();
+        switch(llsMode) {
+        case LLS_LEVEL_MULTI_MERGE_2:
+        case LLS_LEVEL_MULTI_MERGE_INDICATOR_2:
+            totalCount = 2;
+            opMode = UNI_PLUGIN_OP_COMPOSE_IMAGE;
+            break;
+        case LLS_LEVEL_MULTI_MERGE_3:
+        case LLS_LEVEL_MULTI_MERGE_INDICATOR_3:
+            totalCount = 3;
+            opMode = UNI_PLUGIN_OP_COMPOSE_IMAGE;
+            break;
+        case LLS_LEVEL_MULTI_MERGE_4:
+        case LLS_LEVEL_MULTI_MERGE_INDICATOR_4:
+            totalCount = 4;
+            opMode = UNI_PLUGIN_OP_COMPOSE_IMAGE;
+            break;
+        case LLS_LEVEL_MULTI_PICK_2:
+            totalCount = 2;
+            opMode = UNI_PLUGIN_OP_SELECT_IMAGE;
+            break;
+        case LLS_LEVEL_MULTI_PICK_3:
+            totalCount = 3;
+            opMode = UNI_PLUGIN_OP_SELECT_IMAGE;
+            break;
+        case LLS_LEVEL_MULTI_PICK_4:
+            totalCount = 4;
+            opMode = UNI_PLUGIN_OP_SELECT_IMAGE;
+            break;
+        default:
+            CLOGE("[LDC](%s[%d]): Wrong LLS mode has been get!!", __FUNCTION__, __LINE__);
+            goto CLEAN;
+        }
+
+        /* First shot */
+        if (m_LDCaptureCount == 1) {
+            ret = uni_plugin_init(m_LLSpluginHandle);
+            if (ret < 0) {
+                CLOGE("[LDC](%s[%d]): LLS Plugin init failed!!", __FUNCTION__, __LINE__);
+            }
+
+            CLOGD("[LDC](%s[%d]): Set capture num: %d", __FUNCTION__, __LINE__, totalCount);
+            ret = uni_plugin_set(m_LLSpluginHandle,
+                    LLS_PLUGIN_NAME, UNI_PLUGIN_INDEX_TOTAL_BUFFER_NUM, &totalCount);
+            if (ret < 0) {
+                CLOGE("[LDC](%s[%d]): LLS Plugin set UNI_PLUGIN_INDEX_TOTAL_BUFFER_NUM failed!!", __FUNCTION__, __LINE__);
+            }
+
+            CLOGD("[LDC](%s[%d]): Set capture mode: %d", __FUNCTION__, __LINE__, opMode);
+            ret = uni_plugin_set(m_LLSpluginHandle,
+                    LLS_PLUGIN_NAME, UNI_PLUGIN_INDEX_OPERATION_MODE, &opMode);
+            if (ret < 0) {
+                CLOGE("[LDC](%s[%d]): LLS Plugin set UNI_PLUGIN_INDEX_OPERATION_MODE failed!!", __FUNCTION__, __LINE__);
+            }
+
+            UniPluginCameraInfo_t cameraInfo;
+            cameraInfo.CameraType = (UNI_PLUGIN_CAMERA_TYPE)getCameraId();
+            cameraInfo.SensorType = (UNI_PLUGIN_SENSOR_TYPE)m_cameraSensorId;
+            CLOGD("[LDC](%s[%d]): Set camera info: %d:%d", __FUNCTION__, __LINE__,
+                    cameraInfo.CameraType, cameraInfo.SensorType);
+            ret = uni_plugin_set(m_LLSpluginHandle,
+                    LLS_PLUGIN_NAME, UNI_PLUGIN_INDEX_CAMERA_INFO, &cameraInfo);
+            if (ret < 0) {
+                CLOGE("[LDC](%s[%d]): LLS Plugin set UNI_PLUGIN_INDEX_CAMERA_INFO failed!!", __FUNCTION__, __LINE__);
+            }
+
+            struct camera2_udm *udm = new struct camera2_udm;
+
+            if (udm != NULL) {
+                UniPluginExtraBufferInfo_t extraData;
+                memset(&extraData, 0, sizeof(UniPluginExtraBufferInfo_t));
+                memset(udm, 0x00, sizeof(struct camera2_udm));
+                newFrame->getUserDynamicMeta(udm);
+                extraData.brightnessValue.num = udm->ae.vendorSpecific[5];
+                extraData.brightnessValue.den = 256;
+                /* short shutter speed(us) */
+                extraData.shutterSpeed[0].num = udm->ae.vendorSpecific[390];
+                extraData.shutterSpeed[0].den = 1000000;
+                /* long shutter speed(us) */
+                extraData.shutterSpeed[1].num = udm->ae.vendorSpecific[392];
+                extraData.shutterSpeed[1].den = 1000000;
+                /* short ISO */
+                extraData.iso[0] = udm->ae.vendorSpecific[391];
+                /* long ISO */
+                extraData.iso[1] = udm->ae.vendorSpecific[393];
+                extraData.DRCstrength = udm->ae.vendorSpecific[394];
+                ret = uni_plugin_set(m_LLSpluginHandle,
+                    LLS_PLUGIN_NAME, UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO, &extraData);
+                if(ret < 0) {
+                    CLOGE("[LDC](%s[%d]): LLS Plugin set UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO failed!!", __FUNCTION__, __LINE__);
+                }
+
+                delete udm;
+            }
+        }
+
+        UniPluginBufferData_t pluginData;
+        memset(&pluginData, 0, sizeof(UniPluginBufferData_t));
+        m_exynosCameraParameters->getPictureSize(&pictureW, &pictureH);
+        pluginData.InBuffY = gscReprocessingBuffer.addr[0];
+        pluginData.InBuffU = gscReprocessingBuffer.addr[0] + (pictureW * pictureH);
+        pluginData.InWidth = pictureW;
+        pluginData.InHeight = pictureH;
+        pluginData.InFormat = UNI_PLUGIN_FORMAT_NV21;
+#if 0
+        char filePath[100] = {'\0',};
+        sprintf(filePath, "/data/media/0/LLS_input_%d.yuv", m_LDCaptureCount);
+        dumpToFile((char *)filePath,
+                gscReprocessingBuffer.addr[0],
+                (pictureW * pictureH * 3) / 2);
+#endif
+        CLOGD("[LDC](%s[%d]): Set buffer info, Width: %d, Height: %d", __FUNCTION__, __LINE__,
+                pluginData.InWidth, pluginData.InHeight);
+        ret = uni_plugin_set(m_LLSpluginHandle,
+                LLS_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &pluginData);
+        if (ret < 0) {
+            CLOGE("[LDC](%s[%d]): LLS Plugin set UNI_PLUGIN_INDEX_BUFFER_INFO failed!!", __FUNCTION__, __LINE__);
+        }
+
+        /* Last shot */
+        if (m_LDCaptureCount == totalCount) {
+            ret = uni_plugin_process(m_LLSpluginHandle);
+            if (ret < 0) {
+                CLOGE("[LDC](%s[%d]): LLS Plugin process failed!!", __FUNCTION__, __LINE__);
+            }
+
+            UTstr debugData;
+            debugData.data = new unsigned char[LLS_EXIF_SIZE];
+
+            ret = uni_plugin_get(m_LLSpluginHandle,
+                LLS_PLUGIN_NAME, UNI_PLUGIN_INDEX_DEBUG_INFO, &debugData);
+            CLOGD("[LDC](%s[%d]): Debug buffer size: %d", __FUNCTION__, __LINE__, debugData.size);
+            m_exynosCameraParameters->setLLSdebugInfo(debugData.data, debugData.size);
+
+            if (debugData.data != NULL)
+                delete []debugData.data;
+
+            ret = uni_plugin_deinit(m_LLSpluginHandle);
+            if (ret < 0) {
+                CLOGE("[LDC](%s[%d]): LLS Plugin deinit failed!!", __FUNCTION__, __LINE__);
+            }
+        }
+    }
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+    CLOGD("[LDC](%s[%d]):duration time(%5d msec)", __FUNCTION__, __LINE__, (int)durationTime);
+    CLOGD("[LDC](%s[%d]):-- end Library --", __FUNCTION__, __LINE__);
+
+    if (m_LDCaptureCount < m_exynosCameraParameters->getLDCaptureCount()) {
+        if (newFrame != NULL) {
+            newFrame->printEntity();
+            newFrame->frameUnlock();
+            ret = m_removeFrameFromList(&m_postProcessList, newFrame);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):remove frame from processList fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            }
+
+            CLOGD("DEBUG(%s[%d]): Picture frame delete(%d)", __FUNCTION__, __LINE__, newFrame->getFrameCount());
+            newFrame->decRef();
+            m_frameMgr->deleteFrame(newFrame);
+            newFrame = NULL;
+        }
+        goto CLEAN;
+    }
+
+    if (m_exynosCameraParameters->msgTypeEnabled(CAMERA_MSG_POSTVIEW_FRAME)) {
+        m_exynosCameraParameters->setIsThumbnailCallbackOn(true);
+    }
+
+    if (m_exynosCameraParameters->getIsThumbnailCallbackOn()) {
+        CLOGD("[LDC](%s[%d]): POSTVIEW callback start, m_postPictureGscThread run(%d)",
+            __FUNCTION__, __LINE__ , pipeId_postPictureGsc);
+
+        do {
+            ret = -1;
+            retry1++;
+            if (m_postPictureGscBufferMgr->getNumOfAvailableBuffer() > 0) {
+                ret = m_setupEntity(pipeId_postPictureGsc, newFrame, &gscReprocessingBuffer, NULL);
+            } else {
+                /* wait available SCC buffer */
+                usleep(WAITING_TIME);
+            }
+            if (retry1 % 10 == 0)
+                CLOGW("WRAN(%s[%d]):retry setupEntity for GSC", __FUNCTION__, __LINE__);
+        } while(ret < 0 && retry1 < (TOTAL_WAITING_TIME/WAITING_TIME));
+
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):setupEntity fail, pipeId(%d), retry(%d), ret(%d)",
+                __FUNCTION__, __LINE__, pipeId_postPictureGsc, retry1, ret);
+            goto CLEAN;
+        }
+
+        m_exynosCameraParameters->getPreviewSize(&previewW, &previewH);
+        m_exynosCameraParameters->getPictureSize(&pictureW, &pictureH);
+        pictureFormat = m_exynosCameraParameters->getPictureFormat();
+        previewFormat = m_exynosCameraParameters->getPreviewFormat();
+
+        CLOGD("[LDC](%s):size preview(%d, %d,format:%d)picture(%d, %d,format:%d)", __FUNCTION__,
+            previewW, previewH, previewFormat, pictureW, pictureH, pictureFormat);
+
+        srcRect_postPicturegGsc.x = 0;
+        srcRect_postPicturegGsc.y = 0;
+        srcRect_postPicturegGsc.w = pictureW;
+        srcRect_postPicturegGsc.h = pictureH;
+        srcRect_postPicturegGsc.fullW = pictureW;
+        srcRect_postPicturegGsc.fullH = pictureH;
+        srcRect_postPicturegGsc.colorFormat = HAL_PIXEL_FORMAT_2_V4L2_PIX(HAL_PIXEL_FORMAT_YCrCb_420_SP);
+        dstRect_postPicturegGsc.x = 0;
+        dstRect_postPicturegGsc.y = 0;
+        dstRect_postPicturegGsc.w = previewW;
+        dstRect_postPicturegGsc.h = previewH;
+        dstRect_postPicturegGsc.fullW = previewW;
+        dstRect_postPicturegGsc.fullH = previewH;
+        dstRect_postPicturegGsc.colorFormat = HAL_PIXEL_FORMAT_2_V4L2_PIX(HAL_PIXEL_FORMAT_YCrCb_420_SP);
+
+        ret = getCropRectAlign(srcRect_postPicturegGsc.w,  srcRect_postPicturegGsc.h,
+            previewW,   previewH,
+            &srcRect_postPicturegGsc.x, &srcRect_postPicturegGsc.y,
+            &srcRect_postPicturegGsc.w, &srcRect_postPicturegGsc.h,
+            2, 2, 0, zoomRatio);
+
+        ret = newFrame->setSrcRect(pipeId_postPictureGsc, &srcRect_postPicturegGsc);
+        ret = newFrame->setDstRect(pipeId_postPictureGsc, &dstRect_postPicturegGsc);
+
+        CLOGD("[LDC](%s):size (%d, %d, %d, %d %d %d)", __FUNCTION__,
+            srcRect_postPicturegGsc.x, srcRect_postPicturegGsc.y, srcRect_postPicturegGsc.w,
+            srcRect_postPicturegGsc.h, srcRect_postPicturegGsc.fullW, srcRect_postPicturegGsc.fullH);
+        CLOGD("[LDC](%s):size (%d, %d, %d, %d %d %d)", __FUNCTION__,
+            dstRect_postPicturegGsc.x, dstRect_postPicturegGsc.y, dstRect_postPicturegGsc.w,
+            dstRect_postPicturegGsc.h, dstRect_postPicturegGsc.fullW, dstRect_postPicturegGsc.fullH);
+
+        /* push frame to GSC pipe */
+        m_pictureFrameFactory->setOutputFrameQToPipe(dstPostPictureGscQ, pipeId_postPictureGsc);
+        m_pictureFrameFactory->pushFrameToPipe(&newFrame, pipeId_postPictureGsc);
+
+        ret = m_postPictureGscThread->run();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):couldn't run m_postPictureGscThread, ret(%d)", __FUNCTION__, __LINE__, ret);
+            goto CLEAN;
+        }
+    }
+
+    m_postPictureQ->pushProcessQ(&newFrame);
+
+    for (int i = 0; i < m_exynosCameraParameters->getLDCaptureCount() - 1; i++) {
+        /* put GSC 1st buffer */
+        ret = m_putBuffers(bufferMgr, m_LDBufIndex[i]);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):bufferMgr->putBuffers() fail, pipeId(%d), ret(%d)",
+                    __FUNCTION__, __LINE__, pipeId_gsc, ret);
+        }
+    }
+
+CLEAN:
+    int waitCount = 15;
+    if (m_LDCaptureCount == m_exynosCameraParameters->getLDCaptureCount()) {
+        waitCount = 0;
+    }
+
+    while (m_LDCaptureQ->getSizeOfProcessQ() == 0 && 0 < waitCount) {
+        usleep(10000);
+        waitCount--;
+    }
+
+    if (m_LDCaptureQ->getSizeOfProcessQ()) {
+        CLOGD("[LDC](%s[%d]):m_LDCaptureThread thread will run again. m_LDCaptureQ size(%d)",
+            __func__, __LINE__, m_LDCaptureQ->getSizeOfProcessQ());
+        loop = true;
+    }
+
+    return loop;
+}
+
+#endif
 
 }; /* namespace android */

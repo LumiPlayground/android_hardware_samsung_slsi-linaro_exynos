@@ -20,68 +20,14 @@
 
 #include "PlugInCommonExt.h"
 
-enum VendorID{
-    SLSI = 1,
-    ARCSOFT = 2,
+namespace PLUGIN {
+    enum MODE {
+        BASE,
+        BOKEH = 1,
+        ZOOM = 2,
+        MAX
+    };
 };
-
-enum Type {
-    TYPE_PREVIEW = 1,
-    TYPE_REPROCESSING,
-};
-
-enum Handle {
-    LIB_FAKEFUSION = 1,
-    LIB_ARCSOFTFUSION,
-    LIB_LOW_LIGHTSHOT,
-    LIB_VDIS,
-    LIB_HIFI_LLS,
-};
-
-enum ScenarioID {
-    FAKE_FUSION =1,
-    DUAL_ZOOM_FUSION,
-    DUAL_BOKEH_FUSION,
-    BAYER_LLS,
-    SW_VDIS,
-    HIFI_LLS,
-};
-
-/* */
-#define PLUGIN_VENDORID_OFFSET   (24)
-#define PLUGIN_VENDORID_MASK     (0XFF000000)
-#define PLUGIN_TYPE_OFFSET       (20)
-#define PLUGIN_TYPE_MASK         (0X00F00000)
-#define PLUGIN_HANDLE_OFFSET     (12)
-#define PLUGIN_HANDLE_MASK       (0x000FF000)
-#define PLUGIN_SCENARIO_OFFSET   ( 0)
-#define PLUGIN_SCENARIO_MASK     (0x00000FFF)
-
-#define MAKE_LIBRARY_ID(VENDORID, TYPE, HANDLE, SCENARIOID) (VENDORID<<24 | TYPE<<20 | HANDLE<<12 | SCENARIOID)
-
-enum PlugInScenario {
-    PLUGIN_SCENARIO_FAKEFUSION_PREVIEW      = MAKE_LIBRARY_ID(SLSI,     TYPE_PREVIEW,      LIB_FAKEFUSION,    FAKE_FUSION), /* for fake fusion for dual camera. */
-    PLUGIN_SCENARIO_FAKEFUSION_REPROCESSING = MAKE_LIBRARY_ID(SLSI,     TYPE_REPROCESSING, LIB_FAKEFUSION,    FAKE_FUSION), /* for fake fusion for dual camera. */
-    PLUGIN_SCENARIO_ZOOMFUSION_PREVIEW      = MAKE_LIBRARY_ID(ARCSOFT,  TYPE_PREVIEW,      LIB_ARCSOFTFUSION, DUAL_ZOOM_FUSION), /* for arcsoft zoom fusion for dual camera */
-    PLUGIN_SCENARIO_ZOOMFUSION_REPROCESSING = MAKE_LIBRARY_ID(ARCSOFT,  TYPE_PREVIEW,      LIB_ARCSOFTFUSION, DUAL_BOKEH_FUSION), /* for arcsoft zoom fusion for dual camera */
-    PLUGIN_SCENARIO_BOKEHFUSION_PREVIEW     = MAKE_LIBRARY_ID(ARCSOFT,  TYPE_REPROCESSING, LIB_ARCSOFTFUSION, DUAL_ZOOM_FUSION), /* for arcsoft zoom fusion for dual camera */
-    PLUGIN_SCENARIO_BOKEHFUSION_REPROCESSING= MAKE_LIBRARY_ID(ARCSOFT,  TYPE_REPROCESSING, LIB_ARCSOFTFUSION, DUAL_BOKEH_FUSION), /* for arcsoft zoom fusion for dual camera */
-    PLUGIN_SCENARIO_BAYERLLS_REPROCESSING   = MAKE_LIBRARY_ID(SLSI,     TYPE_REPROCESSING, LIB_LOW_LIGHTSHOT, BAYER_LLS), /* for LSI Bayer LLS solution */
-    PLUGIN_SCENARIO_SWVDIS_PREVIEW          = MAKE_LIBRARY_ID(SLSI,     TYPE_PREVIEW,      LIB_VDIS,          SW_VDIS), /* for LSI SW VDIS solution */
-    PLUGIN_SCENARIO_HIFILLS_REPROCESSING    = MAKE_LIBRARY_ID(SLSI,     TYPE_REPROCESSING, LIB_HIFI_LLS,      HIFI_LLS), /* for LSI HIFI LLS solution */
-};
-
-/*
-   VendorID : algorithm vendor
-   Type     : algorithm type for preview / reprocessing
-   Handle   : library handle managing infomation
-   Scenario : algorithm functionality(LLS/VDIS/etc)
-*/
-
-#define getLibVendorID(info) ((info & PLUGIN_VENDORID_MASK) >> PLUGIN_VENDORID_OFFSET)
-#define getLibType(info)     ((info & PLUGIN_TYPE_MASK) >> PLUGIN_TYPE_OFFSET)
-#define getLibHandleID(info) ((info & PLUGIN_HANDLE_MASK) >> PLUGIN_HANDLE_OFFSET)
-#define getLibScenario(info) ((info & PLUGIN_SCENARIO_MASK) >> PLUGIN_SCENARIO_OFFSET)
 
 /*
  * define
@@ -336,36 +282,7 @@ enum PLUGIN_LLS_INTENT_ENUM {
 #define PLUGIN_OPTICAL_STABILIZATION_MODE_DM  5114    /* Data_int32_t        / int          */
 #define PLUGIN_GYRO_DATA                    5115    /*Array_pointer_gyro_data_t  /plugin_gyro_data_t*    */
 #define PLUGIN_GYRO_DATA_SIZE                    5116    /* Data_int32_t        / int          */
-#define PLUGIN_ISO_LIST                     5117    /* Array_buf_t         / int          */
 
-
-#define PLUGIN_HIFI_TOTAL_BUFFER_NUM        5200
-#define PLUGIN_HIFI_CUR_BUFFER_NUM          5250
-#define PLUGIN_HIFI_OPERATION_MODE          5201
-#define PLUGIN_HIFI_MAX_SENSOR_WIDTH        5202
-#define PLUGIN_HIFI_MAX_SENSOR_HEIGHT       5203
-#define PLUGIN_HIFI_CROP_FLAG               5204
-#define PLUGIN_HIFI_CAMERA_TYPE             5205
-#define PLUGIN_HIFI_SENSOR_TYPE             5206
-#define PLUGIN_HIFI_HDR_MODE                5207
-#define PLUGIN_HIFI_ZOOM                    5208
-#define PLUGIN_HIFI_EXPOSURE_TIME           5209
-#define PLUGIN_HIFI_EXPOSURE_VALUE          5210
-#define PLUGIN_HIFI_BV                      5211
-#define PLUGIN_HIFI_SHUTTER_SPEED           5212
-#define PLUGIN_HIFI_FRAME_ISO               5213
-
-#define PLUGIN_HIFI_FOV_RECT                5214
-#define PLUGIN_HIFI_FRAME_FACENUM           5215
-#define PLUGIN_HIFI_FRAME_FACERECT          5216
-/* PLUGIN_HIFI_INPUT_BUFFER_PTR : already define */
-/* PLUGIN_HIFI_INPUT_BUFFER_FD : already define */
-#define PLUGIN_HIFI_INPUT_WIDTH             5219
-#define PLUGIN_HIFI_INPUT_HEIGHT            5220
-/* PLUGIN_HIFI_OUTPUT_BUFFER_PTR : already define */
-/* PLUGIN_HIFI_OUTPUT_BUFFER_FD : already define */
-#define PLUGIN_HIFI_OUTPUT_WIDTH            5223
-#define PLUGIN_HIFI_OUTPUT_HEIGHT           5224
 
 #define PLUGIN_WIDE_FULLSIZE_W              6001    /* Data_int32_t        / int          */
 #define PLUGIN_WIDE_FULLSIZE_H              6002    /* Data_int32_t        / int          */

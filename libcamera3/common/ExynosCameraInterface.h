@@ -179,6 +179,16 @@ static int HAL3_camera_device_flush(const struct camera3_device *dev);
 static void HAL3_camera_device_get_metadata_vendor_tag_ops(const struct camera3_device *dev,
                                                             vendor_tag_query_ops_t* ops);
 
+#ifdef SAMSUNG_TN_FEATURE
+/**
+ * Set the camera parameters. This returns BAD_VALUE if any parameter is
+ * invalid or not supported.
+ */
+static int HAL3_camera_device_set_parameters(
+        const struct camera3_device *dev,
+        const char *parms);
+#endif
+
 /**
  * dump
  * Print out debugging state for the camera device.
@@ -208,6 +218,12 @@ static int HAL_set_torch_mode(const char* camera_id, bool enabled);
 
 static int HAL_init(void);
 
+static int HAL_getPhysicalCameraInfo(int physical_camera_id,
+           camera_metadata_t **static_metadata);
+
+static int HAL_isStreamCombinationSupported(int camera_id,
+           const camera_stream_combination_t *streams);
+
 static camera3_device_ops_t camera_device3_ops = {
         SET_METHOD3(initialize),
         SET_METHOD3(configure_streams),
@@ -217,7 +233,10 @@ static camera3_device_ops_t camera_device3_ops = {
         SET_METHOD3(get_metadata_vendor_tag_ops),
         SET_METHOD3(dump),
         SET_METHOD3(flush),
-        {0} /* reserved for future use */
+#ifdef SAMSUNG_TN_FEATURE
+        SET_METHOD3(set_parameters),
+#endif
+        0 /* reserved for future use */
 };
 
 static hw_module_methods_t mCameraHwModuleMethods = {
@@ -231,7 +250,7 @@ extern "C" {
     camera_module_t HAL_MODULE_INFO_SYM = {
         .common = {
             .tag                = HARDWARE_MODULE_TAG,
-            .module_api_version = CAMERA_MODULE_API_VERSION_2_4,
+            .module_api_version = CAMERA_MODULE_API_VERSION_2_5,
             .hal_api_version    = HARDWARE_HAL_API_VERSION,
             .id                 = CAMERA_HARDWARE_MODULE_ID,
             .name               = "Exynos Camera HAL3",
@@ -247,6 +266,8 @@ extern "C" {
         .open_legacy           = NULL,
         .set_torch_mode        = HAL_set_torch_mode,
         .init                  = HAL_init,
+        .get_physical_camera_info = HAL_getPhysicalCameraInfo,
+        .is_stream_combination_supported = HAL_isStreamCombinationSupported,
         .reserved              = {0},
     };
 }

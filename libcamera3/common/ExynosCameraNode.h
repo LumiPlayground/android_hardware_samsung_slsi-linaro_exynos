@@ -50,7 +50,7 @@
 #include <utils/List.h>
 #include <utils/Log.h>
 #include "cutils/properties.h"
-#include <ion/ion.h>
+#include <hardware/exynos/ion.h>
 
 #include "exynos_format.h"
 #include "ExynosCameraObject.h"

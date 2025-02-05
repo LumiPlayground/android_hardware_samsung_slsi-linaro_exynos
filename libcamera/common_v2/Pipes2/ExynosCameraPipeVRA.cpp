@@ -244,6 +244,12 @@ status_t ExynosCameraPipeVRA::m_runScaler(void)
         CLOGE("ERR(%s[%d]):getSrcBuffer fail, ret(%d)", __FUNCTION__, __LINE__, ret);
         /* TODO: doing exception handling */
         goto FUNC_EXIT;
+    } else if (srcBuf.index < 0) {
+        CLOGW("WARN(%s[%d]):[F%d B%d]No Src buffer. Skip VRA",
+                __FUNCTION__, __LINE__,
+                newFrame->getFrameCount(),
+                srcBuf.index);
+        goto FUNC_EXIT;
     }
 
     shot_ext = (camera2_shot_ext*)srcBuf.addr[srcBuf.planeCount-1];

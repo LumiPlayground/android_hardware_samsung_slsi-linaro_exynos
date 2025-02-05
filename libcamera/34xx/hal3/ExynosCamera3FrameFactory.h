@@ -80,12 +80,18 @@ public:
     virtual ~ExynosCamera3FrameFactory();
 
     virtual status_t        create(bool active = true) = 0;
+#ifdef SAMSUNG_COMPANION
+    virtual status_t        precreate(void);
+    virtual status_t        postcreate(void);
+#endif
 
     virtual status_t        setFrameManager(ExynosCameraFrameManager *manager);
     virtual status_t        getFrameManager(ExynosCameraFrameManager **manager);
     virtual status_t        destroy(void);
     virtual bool            isCreated(void);
     virtual enum NODE_TYPE  getNodeType(uint32_t pipeId) = 0;
+
+    virtual status_t        fastenAeStable(int32_t numFrames, ExynosCameraBuffer *buffers);
 
     virtual ExynosCameraFrame *createNewFrameOnlyOnePipe(int pipeId, int frameCnt=-1);
     virtual ExynosCameraFrame *createNewFrameVideoOnly(void);

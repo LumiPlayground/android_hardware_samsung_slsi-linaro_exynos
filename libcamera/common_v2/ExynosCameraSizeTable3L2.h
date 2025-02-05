@@ -393,6 +393,7 @@ static int S5K3L2_PICTURE_LIST[][SIZE_OF_RESOLUTION] =
     { 1280,  720, SIZE_RATIO_16_9},
     {  960,  720, SIZE_RATIO_4_3},
     {  640,  480, SIZE_RATIO_4_3},
+    {  320,  240, SIZE_RATIO_4_3},
 };
 
 static int S5K3L2_HIDDEN_PICTURE_LIST[][SIZE_OF_RESOLUTION] =
@@ -439,6 +440,36 @@ static int S5K3L2_HIDDEN_VIDEO_LIST[][SIZE_OF_RESOLUTION] =
 #endif
 };
 
+static int S5K3L2_YUV_LIST[][SIZE_OF_RESOLUTION] =
+{
+    { 4128, 3096, SIZE_RATIO_4_3},
+    { 4128, 2322, SIZE_RATIO_16_9},
+    { 3264, 2448, SIZE_RATIO_4_3},
+    { 3264, 1836, SIZE_RATIO_16_9},
+    { 3088, 3088, SIZE_RATIO_1_1},
+    { 2048, 1536, SIZE_RATIO_4_3},
+    { 2048, 1152, SIZE_RATIO_16_9},
+    { 1920, 1080, SIZE_RATIO_16_9},
+    { 1280,  720, SIZE_RATIO_16_9},
+    {  960,  720, SIZE_RATIO_4_3},
+    {  720,  480, SIZE_RATIO_3_2},
+    {  640,  480, SIZE_RATIO_4_3},
+    {  352,  288, SIZE_RATIO_11_9},
+    {  320,  240, SIZE_RATIO_4_3},
+    {  256,  144, SIZE_RATIO_16_9},
+};
+
+static int S5K3L2_HIGH_SPEED_VIDEO_LIST[][SIZE_OF_RESOLUTION] =
+{
+    { 1280,  720, SIZE_RATIO_16_9},
+};
+
+static int S5K3L2_HIGH_SPEED_VIDEO_FPS_RANGE_LIST[][2] =
+{
+    {  30000, 120000},
+    { 120000, 120000},
+};
+
 static int S5K3L2_FPS_RANGE_LIST[][2] =
 {
     {   5000,   5000},
@@ -457,5 +488,36 @@ static int S5K3L2_HIDDEN_FPS_RANGE_LIST[][2] =
     {  60000,  60000},
     {  60000, 120000},
     { 120000, 120000},
+};
+
+static camera_metadata_rational UNIT_MATRIX_3L2_3X3[] =
+{
+    {128, 128}, {0, 128}, {0, 128},
+    {0, 128}, {128, 128}, {0, 128},
+    {0, 128}, {0, 128}, {128, 128}
+};
+
+static camera_metadata_rational COLOR_MATRIX1_3L2_3X3[] = {
+    {1094, 1024}, {-306, 1024}, {-146, 1024},
+    {-442, 1024}, {1388, 1024}, {52, 1024},
+    {-104, 1024}, {250, 1024}, {600, 1024}
+};
+
+static camera_metadata_rational COLOR_MATRIX2_3L2_3X3[] = {
+    {2263, 1024}, {-1364, 1024}, {-145, 1024},
+    {-194, 1024}, {1257, 1024}, {-56, 1024},
+    {-24, 1024}, {187, 1024}, {618, 1024}
+};
+
+static camera_metadata_rational FORWARD_MATRIX1_3L2_3X3[] = {
+    {612, 1024}, {233, 1024}, {139, 1024},
+    {199, 1024}, {831, 1024}, {-6, 1024},
+    {15, 1024}, {-224, 1024}, {1049, 1024}
+};
+
+static camera_metadata_rational FORWARD_MATRIX2_3L2_3X3[] = {
+    {441, 1024}, {317, 1024}, {226, 1024},
+    {29, 1024}, {908, 1024}, {87, 1024},
+    {9, 1024}, {-655, 1024}, {1486, 1024}
 };
 #endif

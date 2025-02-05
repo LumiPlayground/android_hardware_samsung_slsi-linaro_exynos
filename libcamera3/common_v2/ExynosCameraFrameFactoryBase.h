@@ -25,6 +25,9 @@
 #include "ExynosCameraPipePP.h"
 #ifdef USE_DUAL_CAMERA
 #include "ExynosCameraPipeSync.h"
+#ifdef SAMSUNG_TN_FEATURE
+#include "ExynosCameraPipeFusion.h"
+#endif
 #endif
 
 #include "ExynosCameraFrameManager.h"
@@ -125,13 +128,15 @@ public:
     virtual status_t        getFrameDoneQToPipe(frame_queue_t **frameDoneQ, uint32_t pipeId);
     virtual status_t        getInputFrameQToPipe(frame_queue_t **inputFrameQ, uint32_t pipeId);
 
-    virtual status_t        pushFrameToPipe(ExynosCameraFrameSP_sptr_t newFrame, uint32_t pipeId);
+    virtual status_t        pushFrameToPipe(ExynosCameraFrameSP_dptr_t newFrame, uint32_t pipeId);
 
     virtual status_t        setParam(struct v4l2_streamparm *streamParam, uint32_t pipeId);
     virtual status_t        setControl(int cid, int value, uint32_t pipeId);
     virtual status_t        setControl(int cid, int value, uint32_t pipeId, enum NODE_TYPE nodeType);
     virtual status_t        setExtControl(struct v4l2_ext_controls *ctrl, uint32_t pipeId);
+    virtual status_t        setStreamEOS(uint32_t pipeId);
     virtual status_t        getControl(int cid, int *value, uint32_t pipeId);
+    virtual status_t        getControl(int cid, int *value, uint32_t pipeId, enum NODE_TYPE nodeType);
 
     virtual void            setRequest(int pipeId, bool enable);
     virtual bool            getRequest(int pipeId);
@@ -219,6 +224,7 @@ protected:
     bool                        m_needSensorStreamOn;
     bool                        m_supportReprocessing;
     bool                        m_flagReprocessing;
+    bool                        m_useBDSOff;
     bool                        m_supportPureBayerReprocessing;
 
     factory_handler_t           m_frameCreateHandler;

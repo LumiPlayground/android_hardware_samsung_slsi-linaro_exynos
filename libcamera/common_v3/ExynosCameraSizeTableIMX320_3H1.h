@@ -68,7 +68,7 @@ static int PREVIEW_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
     },
     /*  1:1 (Single, Dual) */
     { SIZE_RATIO_1_1,
-      2448      , 2448      ,   /* [sensor ] */
+      3264      , 2448      ,   /* [sensor ] */
       2448      , 2448      ,   /* [bns    ] */
       2448      , 2448      ,   /* [bcrop  ] */
       1632      , 1632      ,   /* [bds    ] *//* w=1080, Increased for 16 pixel align */
@@ -253,7 +253,7 @@ static int VIDEO_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
       2448      , 2448      ,   /* [sensor ] */
       2448      , 2448      ,   /* [bns    ] */
       2448      , 2448      ,   /* [bcrop  ] */
-      1632      , 1632      ,   /* [bds    ] *//* w=1080, Increased for 16 pixel align */
+      1080      , 1080      ,   /* [bds    ] *//* w=1080, Increased for 16 pixel align */
       1080      , 1080      ,   /* [target ] */
     },
     /* 3:2 (Single) */
@@ -387,7 +387,7 @@ static int YUV_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
 {
     { SIZE_RATIO_16_9,
       3264      , 2448      ,   /* [sensor ] */
-      3264      , 2448      ,   /* [bns	 ] */
+      3264      , 2448      ,   /* [bns  ] */
       3264      , 2448      ,   /* [bcrop  ] */
       3264      , 2448      ,   /* [bds    ] */
       3264      , 2448      ,   /* [target ] */
@@ -395,7 +395,7 @@ static int YUV_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
     /*  4:3 (Single, Dual) */
     { SIZE_RATIO_4_3,
       3264      , 2448      ,   /* [sensor ] */
-      3264      , 2448      ,   /* [bns	 ] */
+      3264      , 2448      ,   /* [bns  ] */
       3264      , 2448      ,   /* [bcrop  ] */
       3264      , 2448      ,   /* [bds    ] */
       3264      , 2448      ,   /* [target ] */
@@ -403,7 +403,7 @@ static int YUV_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
     /*  1:1 (Single) */
     { SIZE_RATIO_1_1,
       3264      , 2448      ,   /* [sensor ] */
-      3264      , 2448      ,   /* [bns	 ] */
+      3264      , 2448      ,   /* [bns  ] */
       3264      , 2448      ,   /* [bcrop  ] */
       3264      , 2448      ,   /* [bds    ] */
       3264      , 2448      ,   /* [target ] */
@@ -411,7 +411,7 @@ static int YUV_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
     /* 3:2 (Single, Dual) */
     { SIZE_RATIO_3_2,
       3264      , 2448      ,   /* [sensor ] */
-      3264      , 2448      ,   /* [bns	 ] */
+      3264      , 2448      ,   /* [bns  ] */
       3264      , 2448      ,   /* [bcrop  ] */
       3264      , 2448      ,   /* [bds    ] */
       3264      , 2448      ,   /* [target ] */
@@ -419,15 +419,15 @@ static int YUV_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
     /* 5:4 (Single, Dual) */
     { SIZE_RATIO_5_4,
       3264      , 2448      ,   /* [sensor ] */
-      3264      , 2448      ,   /* [bns	 ] */
+      3264      , 2448      ,   /* [bns  ] */
       3264      , 2448      ,   /* [bcrop  ] */
       3264      , 2448      ,   /* [bds    ] */
       3264      , 2448      ,   /* [target ] */
     },
     /* 5:3 (Single, Dual) */
     { SIZE_RATIO_5_3,
-      3264      , 2448      ,	/* [sensor ] */
-      3264      , 2448      ,	/* [bns    ] */
+      3264      , 2448      ,   /* [sensor ] */
+      3264      , 2448      ,   /* [bns    ] */
       3264      , 2448      ,   /* [bcrop  ] */
       3264      , 2448      ,   /* [bds    ] */
       3264      , 2448      ,   /* [target ] */
@@ -435,7 +435,7 @@ static int YUV_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
     /* 11:9 (Single, Dual) */
     { SIZE_RATIO_11_9,
       3264      , 2448      ,   /* [sensor ] */
-      3264      , 2448      ,   /* [bns	 ] */
+      3264      , 2448      ,   /* [bns  ] */
       3264      , 2448      ,   /* [bcrop  ] */
       3264      , 2448      ,   /* [bds    ] */
       3264      , 2448      ,   /* [target ] */
@@ -470,7 +470,7 @@ static int VTCALL_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
      1224      ,  1224     ,   /* [sensor ] */
      1224      ,  1224     ,   /* [bns    ] */
      1224      ,  1224     ,   /* [bcrop  ] */
-     1224      ,  1224     ,   /* [bds    ] */
+     1080      ,  1080     ,   /* [bds    ] */
      1080      ,  1080     ,   /* [target ] */
     },
     /* 11:9 (VT_Call) */
@@ -550,6 +550,9 @@ static int IMX320_3H1_HIDDEN_PREVIEW_LIST[][SIZE_OF_RESOLUTION] =
     { 1920, 1080, SIZE_RATIO_16_9},
     { 1440, 1080, SIZE_RATIO_4_3},
     { 1072, 1072, SIZE_RATIO_1_1},
+#endif
+#ifdef USE_BDS_WIDE_SELFIE
+    { 1920, 1440, SIZE_RATIO_4_3}, /* For WideSelfie Shot */
 #endif
     { 2240, 1680, SIZE_RATIO_4_3},  /* For Easy 360 */
     { 1600, 1200, SIZE_RATIO_4_3},
@@ -647,7 +650,6 @@ static int IMX320_3H1_FPS_RANGE_LIST[][2] =
     {  15000,  15000},
     {  24000,  24000},
 //    {   4000,  30000},
-    {  8000,  30000},
     {  10000,  30000},
     {  15000,  30000},
     {  30000,  30000},

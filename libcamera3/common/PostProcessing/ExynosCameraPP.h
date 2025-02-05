@@ -29,7 +29,7 @@
 #define EXYNOS_CAMERA_PP_H
 
 #include <sys/types.h>
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraConfig.h"
 #include "ExynosCameraImage.h"

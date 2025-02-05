@@ -18,10 +18,10 @@
 #define EXYNOS_CAMERA_REQUEST_MANAGER_H__
 #define CALLBACK_FPS_CHECK
 
-#include <cutils/log.h>
+#include <log/log.h>
 #include <utils/RefBase.h>
 #include <hardware/camera3.h>
-#include <camera/CameraMetadata.h>
+#include <CameraMetadata.h>
 #include <map>
 #include <list>
 #include <android/sync.h>
@@ -33,7 +33,6 @@
 #include "ExynosCameraParameters.h"
 #include "ExynosCameraSensorInfo.h"
 #include "ExynosCameraMetadataConverter.h"
-#include "ExynosCameraTimeLogger.h"
 
 namespace android {
 
@@ -376,6 +375,7 @@ public:
     int32_t                        getResultRenew(void);
     void                           incResultRenew(void);
     void                           resetResultRenew(void);
+    void                           dump(void);
 
 private:
     typedef map<uint32_t, ExynosCameraRequestSP_sprt_t>           RequestInfoMap;
@@ -395,6 +395,7 @@ private:
     status_t                       m_pop(uint32_t frameCount, ExynosCameraRequestSP_dptr_t item, RequestInfoMap *list, Mutex *lock);
     status_t                       m_get(uint32_t frameCount, ExynosCameraRequestSP_dptr_t item, RequestInfoMap *list, Mutex *lock);
 
+    void                           m_printAllServiceRequestInfo(void);
     void                           m_printAllRequestInfo(RequestInfoMap *map, Mutex *lock);
 
     status_t                       m_removeFromRunningList(uint32_t requestKey);
@@ -427,6 +428,9 @@ private:
 
     bool                           m_requestDeleteFunc(ExynosCameraRequestSP_sprt_t curRequest);
 
+    void                           m_setFlushFlag(bool falg);
+    bool                           m_getFlushFlag(void);
+
 #if 0
     /* Other helper functions */
     status_t        initShotData(void);
@@ -435,6 +439,7 @@ private:
 #endif
 private:
     bool                          m_flushFlag;
+    mutable Mutex                 m_flushLock;
 
     RequestInfoList               m_serviceRequests;
     RequestInfoMap                m_runningRequests;
@@ -471,6 +476,7 @@ private:
     ExynosCameraCallbackSequencer *m_allMetaSequencer;
 
     int32_t                       m_resultRenew;
+    int32_t                       m_lastResultKey[EXYNOS_REQUEST_RESULT::CALLBACK_MAX];
 };
 
 }; /* namespace android */

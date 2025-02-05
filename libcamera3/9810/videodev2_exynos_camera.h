@@ -1,20 +1,5 @@
 /*
- * Video for Linux Two header file for samsung
- *
- * Copyright 2017, Samsung Electronics Co. LTD
- *
- * This header file contains several v4l2 APIs to be proposed to v4l2
- * community and until bein accepted, will be used restrictly in Samsung's
- * camera interface driver FIMC.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- */
-
-/*
- * Copyright 2017, Samsung Electronics Co. LTD
+ * Copyright (C) 2020 Samsung Electronics Co. Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +8,7 @@
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed toggle an "AS IS" BASIS,
+ * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
@@ -1077,7 +1062,6 @@ enum v4l2_frame_rate {
 	FRAME_RATE_60 = 60,
 	FRAME_RATE_120 = 120,
 	FRAME_RATE_240 = 240,
-	FRAME_RATE_480 = 480,
 	FRAME_RATE_MAX
 };
 
@@ -1196,22 +1180,6 @@ enum v4l2_pix_format_mode {
 #define V4L2_CID_CAMERAPP_GDC_GRID_CROP_SIZE    (V4L2_CID_CAMERAPP_BASE+3)
 #define V4L2_CID_CAMERAPP_GDC_GRID_SENSOR_SIZE  (V4L2_CID_CAMERAPP_BASE+4)
 #define V4L2_CID_CAMERAPP_GDC_GRID_CONTROL      (V4L2_CID_CAMERAPP_BASE+5)
-/* for V4L2_CID_CAMERAPP_GDC_GRID_CONTROL */
-struct gdc_crop_param {
-    uint32_t sensor_num;
-    uint32_t sensor_width;
-    uint32_t sensor_height;
-    uint32_t crop_start_x;
-    uint32_t crop_start_y;
-    uint32_t crop_width;
-    uint32_t crop_height;
-    bool is_crop_dzoom;
-    bool is_scaled;
-    bool use_calculated_grid;
-    int calculated_grid_x[7][9];
-    int calculated_grid_y[7][9];
-    int reserved[32];
-};
 
 /*
  *  * V4L2 extention for digital camera

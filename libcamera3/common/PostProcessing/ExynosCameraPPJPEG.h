@@ -71,6 +71,9 @@ private:
 
 protected:
     ExynosJpegEncoderForCamera  m_jpegEnc;
+#ifdef SAMSUNG_JQ
+    unsigned char               m_qtable[128];
+#endif
 };
 
 #endif //EXYNOS_CAMERA_PP_JPEG_H

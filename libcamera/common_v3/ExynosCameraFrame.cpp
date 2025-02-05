@@ -708,11 +708,6 @@ uint32_t ExynosCameraFrame::getFrameCount(void)
 
 int32_t ExynosCameraFrame::getMetaFrameCount(uint32_t srcNodeIndex)
 {
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return 0;
-    }
-
     return getMetaDmRequestFrameCount(&m_metaData[srcNodeIndex]);
 }
 
@@ -1066,11 +1061,6 @@ status_t ExynosCameraFrame::initMetaData(struct camera2_shot_ext *shot, uint32_t
         memcpy(&m_metaData[srcNodeIndex], shot, sizeof(struct camera2_shot_ext));
     }
 
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     ret = m_parameters->duplicateCtrlMetadata(&m_metaData[srcNodeIndex]);
     if (ret != NO_ERROR) {
         CLOGE("duplicate Ctrl metadata fail");
@@ -1087,11 +1077,6 @@ status_t ExynosCameraFrame::getMetaData(struct camera2_shot_ext *shot, uint32_t 
         return BAD_VALUE;
     }
 
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     memcpy(shot, &m_metaData[srcNodeIndex], sizeof(struct camera2_shot_ext));
 
     return NO_ERROR;
@@ -1104,12 +1089,6 @@ status_t ExynosCameraFrame::setMetaData(struct camera2_shot_ext *shot, uint32_t 
         return BAD_VALUE;
     }
 
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
-
     memcpy(&m_metaData[srcNodeIndex], shot, sizeof(struct camera2_shot_ext));
 
     return NO_ERROR;
@@ -1119,11 +1098,6 @@ status_t ExynosCameraFrame::storeDynamicMeta(struct camera2_shot_ext *shot, uint
 {
     if (shot == NULL) {
         CLOGE(" buffer is NULL");
-        return BAD_VALUE;
-    }
-
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
         return BAD_VALUE;
     }
 
@@ -1142,11 +1116,6 @@ status_t ExynosCameraFrame::storeDynamicMeta(struct camera2_dm *dm, uint32_t src
         return BAD_VALUE;
     }
 
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     if (getMetaDmRequestFrameCount(dm) == 0)
         CLOGW(" DM Frame count is ZERO");
 
@@ -1162,11 +1131,6 @@ status_t ExynosCameraFrame::storeUserDynamicMeta(struct camera2_shot_ext *shot, 
         return BAD_VALUE;
     }
 
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     memcpy(&m_metaData[srcNodeIndex].shot.udm, &shot->shot.udm, sizeof(struct camera2_udm));
 
     return NO_ERROR;
@@ -1176,11 +1140,6 @@ status_t ExynosCameraFrame::storeUserDynamicMeta(struct camera2_udm *udm, uint32
 {
     if (udm == NULL) {
         CLOGE(" buffer is NULL");
-        return BAD_VALUE;
-    }
-
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
         return BAD_VALUE;
     }
 
@@ -1196,11 +1155,6 @@ status_t ExynosCameraFrame::getDynamicMeta(struct camera2_shot_ext *shot, uint32
         return BAD_VALUE;
     }
 
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     memcpy(&shot->shot.dm, &m_metaData[srcNodeIndex].shot.dm, sizeof(struct camera2_dm));
 
     return NO_ERROR;
@@ -1210,11 +1164,6 @@ status_t ExynosCameraFrame::getDynamicMeta(struct camera2_dm *dm, uint32_t srcNo
 {
     if (dm == NULL) {
         CLOGE(" buffer is NULL");
-        return BAD_VALUE;
-    }
-
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
         return BAD_VALUE;
     }
 
@@ -1230,11 +1179,6 @@ status_t ExynosCameraFrame::getUserDynamicMeta(struct camera2_shot_ext *shot, ui
         return BAD_VALUE;
     }
 
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     memcpy(&shot->shot.udm, &m_metaData[srcNodeIndex].shot.udm, sizeof(struct camera2_udm));
 
     return NO_ERROR;
@@ -1247,11 +1191,6 @@ status_t ExynosCameraFrame::getUserDynamicMeta(struct camera2_udm *udm, uint32_t
         return BAD_VALUE;
     }
 
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     memcpy(udm, &m_metaData[srcNodeIndex].shot.udm, sizeof(struct camera2_udm));
 
     return NO_ERROR;
@@ -1259,22 +1198,12 @@ status_t ExynosCameraFrame::getUserDynamicMeta(struct camera2_udm *udm, uint32_t
 
 status_t ExynosCameraFrame::setMetaDataEnable(bool flag, uint32_t srcNodeIndex)
 {
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     m_metaDataEnable[srcNodeIndex] = flag;
     return NO_ERROR;
 }
 
 bool ExynosCameraFrame::getMetaDataEnable(uint32_t srcNodeIndex)
 {
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return false;
-    }
-
     long count = 0;
 
     while (count < DM_WAITING_COUNT) {
@@ -1294,21 +1223,11 @@ bool ExynosCameraFrame::getMetaDataEnable(uint32_t srcNodeIndex)
 
 int ExynosCameraFrame::getZoom(uint32_t srcNodeIndex)
 {
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     return m_zoom[srcNodeIndex];
 }
 
 status_t ExynosCameraFrame::setZoom(int zoom, uint32_t srcNodeIndex)
 {
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     m_zoom[srcNodeIndex] = zoom;
 
     return NO_ERROR;
@@ -1323,11 +1242,6 @@ status_t ExynosCameraFrame::getNodeGroupInfo(struct camera2_node_group *node_gro
 
     if (index >= PERFRAME_NODE_GROUP_MAX) {
         CLOGE(" index is bigger than PERFRAME_NODE_GROUP_MAX");
-        return BAD_VALUE;
-    }
-
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
         return BAD_VALUE;
     }
 
@@ -1348,11 +1262,6 @@ status_t ExynosCameraFrame::storeNodeGroupInfo(struct camera2_node_group *node_g
         return BAD_VALUE;
     }
 
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     memcpy(&m_node_gorup[srcNodeIndex][index], node_group, sizeof(struct camera2_node_group));
 
     return NO_ERROR;
@@ -1360,11 +1269,6 @@ status_t ExynosCameraFrame::storeNodeGroupInfo(struct camera2_node_group *node_g
 
 void ExynosCameraFrame::dumpNodeGroupInfo(const char *name, uint32_t srcNodeIndex)
 {
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return;
-    }
-
     if (name != NULL)
         CLOGD("(%s)++++++++++++++++++++ frameCount(%d)", name, m_frameCount);
     else
@@ -1426,11 +1330,6 @@ status_t ExynosCameraFrame::setSyncType(sync_type_t type)
     return NO_ERROR;
 }
 
-int ExynosCameraFrame::getCameraId(void)
-{
-    return m_cameraId;
-}
-
 /* backup for reprocessing */
 void ExynosCameraFrame::setReprocessingFrameType(frame_type_t frameType)
 {
@@ -1478,33 +1377,19 @@ int ExynosCameraFrame::getJpegSize(void)
 
 int64_t ExynosCameraFrame::getTimeStamp(uint32_t srcNodeIndex)
 {
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return BAD_VALUE;
-    }
-
     return (int64_t)getMetaDmSensorTimeStamp(&m_metaData[srcNodeIndex]);
 }
 
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+int64_t ExynosCameraFrame::getTimeStampBoot(uint32_t srcNodeIndex)
+{
+    return (int64_t)getMetaUdmSensorTimeStampBoot(&m_metaData[srcNodeIndex]);
+}
+#endif
+
 void ExynosCameraFrame::getFpsRange(uint32_t *min, uint32_t *max, uint32_t srcNodeIndex)
 {
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return;
-    }
-
     getMetaCtlAeTargetFpsRange(&m_metaData[srcNodeIndex], min, max);
-}
-
-void ExynosCameraFrame::setFpsRange(uint32_t min, uint32_t max, uint32_t srcNodeIndex)
-{
-    if (srcNodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE("Invalid srcNodeIndex index, max(%d) index(%d)", SRC_BUFFER_COUNT_MAX, srcNodeIndex);
-        return;
-    }
-
-    setMetaCtlAeTargetFpsRange(&m_metaData[srcNodeIndex], min, max);
-    setMetaCtlSensorFrameDuration(&m_metaData[srcNodeIndex], (uint64_t)((1000 * 1000 * 1000) / (uint64_t)max));
 }
 
 void ExynosCameraFrame::setRequest(bool tap,
@@ -2097,11 +1982,6 @@ status_t ExynosCameraFrameEntity::getDstBuf(ExynosCameraBuffer *buf, uint32_t no
 
 status_t ExynosCameraFrameEntity::setSrcRect(ExynosRect rect, uint32_t nodeIndex)
 {
-    if (nodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE2("Invalid buffer index, index(%d)", nodeIndex);
-        return BAD_VALUE;
-    }
-
     this->m_srcRect[nodeIndex] = rect;
 
     return NO_ERROR;
@@ -2109,11 +1989,6 @@ status_t ExynosCameraFrameEntity::setSrcRect(ExynosRect rect, uint32_t nodeIndex
 
 status_t ExynosCameraFrameEntity::setDstRect(ExynosRect rect, uint32_t nodeIndex)
 {
-    if (nodeIndex >= DST_BUFFER_COUNT_MAX) {
-        CLOGE2("Invalid buffer index, index(%d)", nodeIndex);
-        return BAD_VALUE;
-    }
-
     this->m_dstRect[nodeIndex] = rect;
 
     return NO_ERROR;
@@ -2121,11 +1996,6 @@ status_t ExynosCameraFrameEntity::setDstRect(ExynosRect rect, uint32_t nodeIndex
 
 status_t ExynosCameraFrameEntity::getSrcRect(ExynosRect *rect, uint32_t nodeIndex)
 {
-    if (nodeIndex >= SRC_BUFFER_COUNT_MAX) {
-        CLOGE2("Invalid buffer index, index(%d)", nodeIndex);
-        return BAD_VALUE;
-    }
-
     *rect = this->m_srcRect[nodeIndex];
 
     return NO_ERROR;
@@ -2133,11 +2003,6 @@ status_t ExynosCameraFrameEntity::getSrcRect(ExynosRect *rect, uint32_t nodeInde
 
 status_t ExynosCameraFrameEntity::getDstRect(ExynosRect *rect, uint32_t nodeIndex)
 {
-    if (nodeIndex >= DST_BUFFER_COUNT_MAX) {
-        CLOGE2("Invalid buffer index, index(%d)", nodeIndex);
-        return BAD_VALUE;
-    }
-
     *rect = this->m_dstRect[nodeIndex];
 
     return NO_ERROR;

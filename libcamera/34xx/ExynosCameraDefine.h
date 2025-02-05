@@ -42,6 +42,15 @@
 #include "ExynosCameraScalableSensor.h"
 #include "ExynosCameraFrameSelector.h"
 
+#ifdef USE_CAMERA_PREVIEW_FRAME_SCHEDULER
+#include "SecCameraPreviewFrameSchedulerSimple.h"
+#endif
+
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraParameters.h"
+#include "SecCameraUtil.h"
+#endif
+
 namespace android {
 
 #ifdef BURST_CAPTURE
@@ -66,6 +75,15 @@ typedef ExynosCameraList<ExynosCameraFrameFactory *> framefactory_queue_t;
 typedef ExynosCameraList<jpeg_callback_buffer_t> jpeg_callback_queue_t;
 typedef ExynosCameraList<ExynosCameraBuffer> postview_callback_queue_t;
 typedef ExynosCameraList<ExynosCameraBuffer> thumbnail_callback_queue_t;
+
+#ifdef SAMSUNG_LBP
+typedef struct ExynosCameraLBPbuffer {
+    ExynosCameraBuffer buffer;
+    uint32_t frameNumber;
+} lbp_buffer_t;
+
+typedef ExynosCameraList<lbp_buffer_t> lbp_queue_t;
+#endif
 
 typedef ExynosCameraList<ExynosCameraFrame *> capture_queue_t;
 
@@ -123,8 +141,24 @@ enum EXYNOS_CAMERA_STREAM_CHARACTERISTICS_ID {
     HAL_STREAM_ID_MAX           = 7,
 };
 
+
 //typedef ExynosCameraList<ExynosCameraFrameFactory *> framefactory_queue_t;
 
+#ifdef SAMSUNG_LLV
+enum LLV_status {
+    LLV_UNINIT              = 0,
+    LLV_INIT                = 1,
+    LLV_STOPPED,
+};
+#endif
+
+#ifdef SAMSUNG_OT
+enum objet_tracking_status {
+    OBJECT_TRACKING_DEINIT              = 0,
+    OBJECT_TRACKING_INIT                = 1,
+    OBJECT_TRACKING_IDLE,
+};
+#endif
 }
 
 #endif

@@ -119,6 +119,8 @@ enum is_subscenario_id {
     ISS_SUB_SCENARIO_LIVE_OUTFOCUS_PREVIEW_WDR_ON = 48,
     ISS_SUB_SCENARIO_LIVE_OUTFOCUS_CAPTURE_WDR_AUTO = 49,
     ISS_SUB_SCENARIO_LIVE_OUTFOCUS_CAPTURE_WDR_ON = 50,
+    ISS_SUB_SCENARIO_STILL_PREVIEW_3RD_PARTY_WDR_AUTO = 51,
+    ISS_SUB_SCENARIO_VIDEO_3RD_PARTY_WDR_AUTO = 52,
 
     ISS_SUB_SCENARIO_FRONT_VT1 = 31,                    /* 31: front camera VT1 */
     ISS_SUB_SCENARIO_FRONT_VT2 = 32,                    /* 32: front camera VT2 */
@@ -1981,6 +1983,13 @@ struct hfd_meta {
     uint32_t    hw_rot_mirror[CAMERA2_MAX_FACES];
 };
 
+struct camera2_tuning_info {
+    uint32_t    tune_id;
+    uint64_t    json_addr;
+    uint32_t    json_size;
+    uint32_t    reserved[8];
+};
+
 struct camera2_stream {
     uint32_t        address;
     uint32_t        fcount;
@@ -2005,7 +2014,8 @@ struct camera2_shot_ext {
     uint32_t                  complete_cnt;
     uint32_t                  invalid;
     struct hfd_meta           hfd;
-    uint32_t                  reserved[13];
+    struct camera2_tuning_info tuning_info;
+    uint32_t                  reserved[12];
     uint32_t                  timeZone[10][2];
     struct camera2_shot       shot;
 };

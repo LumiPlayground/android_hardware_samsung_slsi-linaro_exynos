@@ -44,6 +44,7 @@ const ExynosCameraProperty::Property_t ExynosCameraProperty::kMap[MAX_NUM_PROPER
     {.key = {"sys.camera.debug.trap.words"},            ExynosCameraProperty::TYPE_STRING, false, true,  { .s = "" }},          //DEBUG_TRAP_WORDS
     {.key = {"sys.camera.debug.trap.event"},            ExynosCameraProperty::TYPE_STRING, false, false, { .s = "panic" }},     //DEBUG_TRAP_EVENT
     {.key = {"sys.camera.debug.trap.count"},            ExynosCameraProperty::TYPE_INT32,  false, false, { .i32 = 1 }},         //DEBUG_TRAP_COUNT
+    {.key = {"sys.camera.tuning.obte.enable"},          ExynosCameraProperty::TYPE_BOOL,   false, false, { .b = false }},       //TUNING_OBTE_ENABLE
 };
 
 /*

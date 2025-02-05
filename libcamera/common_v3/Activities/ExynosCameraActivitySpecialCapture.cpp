@@ -53,6 +53,18 @@ ExynosCameraActivitySpecialCapture::ExynosCameraActivitySpecialCapture(int camer
     m_backupAeLock = AA_AE_LOCK_OFF;
     memset(m_backupAeTargetFpsRange, 0x00, sizeof(m_backupAeTargetFpsRange));
     m_backupFrameDuration = 0L;
+#ifdef OIS_CAPTURE
+    m_multiCaptureMode = false;
+    m_waitSignalTime = 100000000;
+    m_waitAvailable = false;
+    m_OISCaptureFcount = 0;
+#ifdef SAMSUNG_LBP
+    m_bestMultiCaptureMode = false;
+#endif /* SAMSUNG_LBP */
+#endif /* OIS_CAPTURE */
+#ifdef RAWDUMP_CAPTURE
+    m_RawCaptureFcount = 0;
+#endif
     memset(m_hdrBuffer, 0x00, sizeof(m_hdrBuffer));
 
 }
@@ -226,6 +238,67 @@ int ExynosCameraActivitySpecialCapture::t_func3ABefore(void *args)
             m_check = false;
         }
     }
+#ifdef OIS_CAPTURE
+    else if (shot_ext != NULL && m_specialCaptureMode == SCAPTURE_MODE_OIS) {
+        switch (m_specialCaptureStep) {
+        case SCAPTURE_STEP_START:
+            if (m_multiCaptureMode == false) {
+                /* HACK: On single OIS capture mode, Capture intent is delivered by setControl at takePicture */
+                shot_ext->shot.ctl.aa.captureIntent = AA_CAPTURE_INTENT_PREVIEW;
+                m_specialCaptureStep = SCAPTURE_STEP_WAIT_CAPTURE;
+            } else {
+#ifdef SAMSUNG_LBP
+                if (m_bestMultiCaptureMode)
+                    shot_ext->shot.ctl.aa.captureIntent = AA_CAPTURE_INTENT_STILL_CAPTURE_OIS_BEST;
+                else
+#endif
+                    shot_ext->shot.ctl.aa.captureIntent = AA_CAPTURE_INTENT_STILL_CAPTURE_OIS_MULTI;
+            }
+
+            CLOGD("SCAPTURE_STEP_START m_multiCaptureMode(%d)", m_multiCaptureMode);
+            break;
+        case SCAPTURE_STEP_WAIT_CAPTURE:
+            shot_ext->shot.ctl.aa.captureIntent = AA_CAPTURE_INTENT_PREVIEW;
+            if(m_multiCaptureMode == true)
+                m_specialCaptureStep = SCAPTURE_STEP_END;
+
+            CLOGD("SCAPTURE_STEP_WAIT_CAPTURE m_multiCaptureMode(%d)", m_multiCaptureMode);
+            break;
+        case SCAPTURE_STEP_END:
+            if(m_multiCaptureMode == true) {
+                m_specialCaptureStep = SCAPTURE_STEP_OFF;
+                m_specialCaptureMode = SCAPTURE_MODE_NONE;
+                m_multiCaptureMode = false;
+            }
+
+            CLOGD("SCAPTURE_STEP_END m_multiCaptureMode(%d)", m_multiCaptureMode);
+            break;
+        default:
+            m_specialCaptureStep = SCAPTURE_STEP_OFF;
+            m_specialCaptureMode = SCAPTURE_MODE_NONE;
+            break;
+        }
+    }
+#endif
+#ifdef RAWDUMP_CAPTURE
+    else if (shot_ext != NULL && m_specialCaptureMode == SCAPTURE_MODE_RAW) {
+        switch (m_specialCaptureStep) {
+            case SCAPTURE_STEP_START:
+                shot_ext->shot.ctl.aa.captureIntent = AA_CAPTURE_INTENT_PREVIEW;
+                m_specialCaptureStep = SCAPTURE_STEP_OFF;
+                CLOGD("SCAPTURE_STEP_START");
+                break;
+            case SCAPTURE_STEP_OFF:
+                shot_ext->shot.ctl.aa.captureIntent = AA_CAPTURE_INTENT_PREVIEW;
+                CLOGD("SCAPTURE_STEP_OFF");
+                break;
+            default:
+                m_specialCaptureStep = SCAPTURE_STEP_OFF;
+                m_specialCaptureMode = SCAPTURE_MODE_NONE;
+                break;
+        }
+    }
+#endif
 
     return 1;
 }
@@ -275,6 +348,52 @@ int ExynosCameraActivitySpecialCapture::t_func3AAfter(void *args)
                 m_hdrDropFcount[2], shot_ext->shot.dm.request.frameCount);
         }
     }
+#ifdef OIS_CAPTURE
+    else if (shot_ext != NULL && m_specialCaptureMode == SCAPTURE_MODE_OIS){
+        int OISCaptureDelay = 0;
+        if (m_OISCaptureFcount == 0
+            && (shot_ext->shot.dm.flash.vendor_firingStable == CAPTURE_STATE_ZSL_LIKE
+                || shot_ext->shot.dm.flash.vendor_firingStable == CAPTURE_STATE_STREAM_ON_CAPTURE)) {
+            m_OISCaptureFcount = shot_ext->shot.dm.request.frameCount;
+            if (shot_ext->shot.dm.flash.vendor_firingStable == CAPTURE_STATE_STREAM_ON_CAPTURE) {
+                OISCaptureDelay = 1;
+            } else {
+                OISCaptureDelay = 2;
+            }
+            m_OISCaptureFcount += OISCaptureDelay;
+
+            if(m_waitAvailable) {
+                m_SignalCondition.signal();
+                CLOGD("shutter callback signal!!!");
+            }
+            if(m_multiCaptureMode == false) {
+                m_specialCaptureStep = SCAPTURE_STEP_OFF;
+                m_specialCaptureMode = SCAPTURE_MODE_NONE;
+            }
+            CLOGD("m_OISCaptureFcount (%d / %d) OISCaptureDelay(%d) firingStable(%d)",
+                m_OISCaptureFcount, shot_ext->shot.dm.request.frameCount, OISCaptureDelay,
+                shot_ext->shot.dm.flash.vendor_firingStable);
+        }
+
+        CLOGV("m_OISCaptureFcount (%d / %d) firingStable(%d)",
+                m_OISCaptureFcount, shot_ext->shot.dm.request.frameCount,
+				shot_ext->shot.dm.flash.vendor_firingStable);
+    }
+#endif
+#ifdef RAWDUMP_CAPTURE
+    else if (shot_ext != NULL && m_specialCaptureMode == SCAPTURE_MODE_RAW) {
+        if (m_RawCaptureFcount == 0 && shot_ext->shot.dm.flash.vendor_firingStable == CAPTURE_STATE_RAW_CAPTURE)
+        {
+            m_RawCaptureFcount = shot_ext->shot.dm.request.frameCount;
+            CLOGD("m_RawCaptureFcount (%d / %d)",
+                m_RawCaptureFcount, shot_ext->shot.dm.request.frameCount);
+            m_specialCaptureMode = SCAPTURE_MODE_NONE;
+        }
+        CLOGV("m_RawCaptureFcount (%d / %d) firingStable(%d)",
+                m_RawCaptureFcount,
+                shot_ext->shot.dm.request.frameCount, shot_ext->shot.dm.flash.vendor_firingStable);
+    }
+#endif
 
     return 1;
 }
@@ -444,5 +563,62 @@ ExynosCameraBuffer *ExynosCameraActivitySpecialCapture::getHdrBuffer(int index)
     return (m_hdrBuffer[index]);
 }
 
+#ifdef OIS_CAPTURE
+#ifdef SAMSUNG_LBP
+void ExynosCameraActivitySpecialCapture::setBestMultiCaptureMode(bool enable)
+{
+    CLOGD("(%d)", enable);
+    m_bestMultiCaptureMode = enable;
+}
+#endif
+
+void ExynosCameraActivitySpecialCapture::setMultiCaptureMode(bool enable)
+{
+    CLOGD("(%d)", enable);
+    m_multiCaptureMode = enable;
+}
+
+bool ExynosCameraActivitySpecialCapture::getMultiCaptureMode(void)
+{
+    return m_multiCaptureMode;
+}
+
+unsigned int ExynosCameraActivitySpecialCapture::getOISCaptureFcount(void)
+{
+    return m_OISCaptureFcount;
+}
+
+void ExynosCameraActivitySpecialCapture::resetOISCaptureFcount()
+{
+    CLOGD("reset : %d", m_OISCaptureFcount);
+
+    m_OISCaptureFcount = 0;
+}
+
+void ExynosCameraActivitySpecialCapture::waitShutterCallback()
+{
+    CLOGD("waitSignalTime : %d", m_waitSignalTime);
+
+    m_SignalMutex.lock();
+    m_waitAvailable = true;
+    m_SignalCondition.waitRelative(m_SignalMutex, m_waitSignalTime);
+    m_waitAvailable = false;
+    m_SignalMutex.unlock();
+}
+#endif
+
+#ifdef RAWDUMP_CAPTURE
+unsigned int ExynosCameraActivitySpecialCapture::getRawCaptureFcount(void)
+{
+    return m_RawCaptureFcount;
+}
+
+void ExynosCameraActivitySpecialCapture::resetRawCaptureFcount()
+{
+    CLOGD("reset : %d", m_RawCaptureFcount);
+
+    m_RawCaptureFcount = 0;
+}
+#endif
 } /* namespace android */
 

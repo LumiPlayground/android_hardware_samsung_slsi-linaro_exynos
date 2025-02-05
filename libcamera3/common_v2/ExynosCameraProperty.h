@@ -27,6 +27,8 @@
 #ifndef EXYNOS_CAMERA_PROPERTY_H
 #define EXYNOS_CAMERA_PROPERTY_H
 
+#ifdef USE_DEBUG_PROPERTY
+
 #include <regex>
 #include <string>
 #include <vector>
@@ -79,6 +81,7 @@ public:
         DEBUG_TRAP_WORDS,
         DEBUG_TRAP_EVENT,
         DEBUG_TRAP_COUNT,
+        TUNING_OBTE_ENABLE,
         MAX_NUM_PROPERTY,
     } PropMap;
 
@@ -236,4 +239,5 @@ private:
     static const Property_t kMap[MAX_NUM_PROPERTY];
 };
 
+#endif //USE_DEBUG_PROPERTY
 #endif //EXYNOS_CAMERA_PROPERTY_H

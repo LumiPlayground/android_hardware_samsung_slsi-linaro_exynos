@@ -159,7 +159,7 @@ private:
 
     status_t m_insert(int id, ExynosCameraStream *item, StreamInfoMap *list, Mutex *lock);
     status_t m_erase(int id, ExynosCameraStream **item, StreamInfoMap *list, Mutex *lock);
-    status_t m_find(int id, ExynosCameraStream *item, StreamInfoMap *list, Mutex *lock);
+    status_t m_find(int id, StreamInfoMap *list, Mutex *lock);
     status_t m_get(int id, ExynosCameraStream **item, StreamInfoMap *list, Mutex *lock);
     status_t m_delete(int id, StreamInfoMap *list, Mutex *lock);
     status_t m_delete(ExynosCameraStream *stream);

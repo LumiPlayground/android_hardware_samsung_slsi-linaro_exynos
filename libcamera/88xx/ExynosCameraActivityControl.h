@@ -28,9 +28,6 @@
 #include "ExynosCameraActivityFlash.h"
 #include "ExynosCameraActivitySpecialCapture.h"
 #include "ExynosCameraActivityUCTL.h"
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-#include "Ged/ExynosCameraActivityVendorLibrary.h"
-#endif
 #include "ExynosCameraSensorInfoBase.h"
 #include "ExynosRect.h"
 
@@ -89,6 +86,10 @@ public:
     void            cancelFlash(void);
     /* Sets HDR mode */
     void            setHdrMode(bool hdrMode);
+#ifdef OIS_CAPTURE
+    /* Sets OIS mode */
+    void            setOISCaptureMode(bool oisMode);
+#endif
     int             getHdrFcount(int index);
 
     /* Sets FPS Value */
@@ -104,10 +105,6 @@ public:
     ExynosCameraActivityAutofocus *getAutoFocusMgr(void);
     ExynosCameraActivityUCTL *getUCTLMgr(void);
 
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    ExynosCameraActivityVendorLibrary *getVendorLibraryActivityMgr(void);
-#endif
-
 public:
     bool flagAutoFocusRunning;
     bool touchAFMode;
@@ -118,9 +115,6 @@ private:
     ExynosCameraActivityFlash *m_flashMgr;
     ExynosCameraActivitySpecialCapture * m_specialCaptureMgr;
     ExynosCameraActivityUCTL * m_uctlMgr;
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    ExynosCameraActivityVendorLibrary *m_vendorLibraryActivityMgr;
-#endif
 
     unsigned int m_fpsValue;
     int m_focusMode;

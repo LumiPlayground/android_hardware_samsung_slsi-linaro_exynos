@@ -38,7 +38,11 @@
 #include "ExynosCameraSensorInfoBase.h"
 
 #define TIME_LOGGER_SIZE (1024 * 100) /* 100K * logger */
+#ifdef CAMERA_GED_FEATURE
 #define TIME_LOGGER_PATH "/data/dump/exynos_camera_time_logger_cam%d_%lld.csv"
+#else
+#define TIME_LOGGER_PATH "/data/camera/exynos_camera_time_logger_cam%d_%lld.csv"
+#endif
 
 #define TIME_LOGGER_INIT_BASE(logger, cameraId)          \
             ({ (logger)->init(cameraId); })

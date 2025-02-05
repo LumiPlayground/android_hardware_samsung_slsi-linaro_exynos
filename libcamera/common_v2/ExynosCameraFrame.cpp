@@ -935,6 +935,49 @@ void ExynosCameraFrame::printEntity(void)
     return;
 }
 
+void ExynosCameraFrame::printNotDoneEntity(void)
+{
+    List<ExynosCameraFrameEntity *>::iterator r;
+    ExynosCameraFrameEntity *curEntity = NULL;
+    int listSize = 0;
+
+    Mutex::Autolock l(m_linkageLock);
+    if (m_linkageList.empty()) {
+        ALOGE("ERR(%s):m_linkageList is empty", __FUNCTION__);
+        return;
+    }
+
+    listSize = m_linkageList.size();
+    r = m_linkageList.begin();
+
+    ALOGD("DEBUG(%s): FrameCount(%d), request(%d), complete(%d)",
+            __FUNCTION__, getFrameCount(), m_numRequestPipe, m_numCompletePipe);
+
+    for (int i = 0; i < listSize; i++) {
+        curEntity = *r;
+        if (curEntity == NULL) {
+            ALOGE("ERR(%s):curEntity is NULL, index(%d)", __FUNCTION__, i);
+            return;
+        }
+
+        if (curEntity->getEntityState() != ENTITY_STATE_COMPLETE) {
+            ALOGD("DEBUG(%s):sibling id(%d), state(%d)",
+                    __FUNCTION__, curEntity->getPipeId(), curEntity->getEntityState());
+        }
+
+        while (curEntity != NULL) {
+            if (curEntity->getEntityState() != ENTITY_STATE_COMPLETE) {
+                ALOGD("DEBUG(%s):----- Child id(%d), state(%d)",
+                        __FUNCTION__, curEntity->getPipeId(), curEntity->getEntityState());
+            }
+            curEntity = curEntity->getNextEntity();
+        }
+        r++;
+    }
+
+    return;
+}
+
 void ExynosCameraFrame::dump(void)
 {
     printEntity();
@@ -1256,6 +1299,13 @@ int64_t ExynosCameraFrame::getTimeStamp(void)
     return (int64_t)getMetaDmSensorTimeStamp(&m_metaData);
 }
 
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+int64_t ExynosCameraFrame::getTimeStampBoot(void)
+{
+    return (int64_t)getMetaUdmSensorTimeStampBoot(&m_metaData);
+}
+#endif
+
 void ExynosCameraFrame::getFpsRange(uint32_t *min, uint32_t *max)
 {
     getMetaCtlAeTargetFpsRange(&m_metaData, min, max);
@@ -1326,7 +1376,7 @@ void ExynosCameraFrame::setRequest(uint32_t pipeId, bool val)
         break;
     }
 
-    if (INDEX(pipeId) >= MAX_NUM_PIPES)
+    if ((pipeId % 100) >= MAX_NUM_PIPES)
         ALOGW("WRN(%s[%d]):Invalid pipeId(%d)", __FUNCTION__, __LINE__, pipeId);
     else
         m_request[INDEX(pipeId)] = val;
@@ -1364,7 +1414,7 @@ bool ExynosCameraFrame::getRequest(uint32_t pipeId)
         break;
     }
 
-    if (INDEX(pipeId) >= MAX_NUM_PIPES)
+    if ((pipeId % 100) >= MAX_NUM_PIPES)
         ALOGW("WRN(%s[%d]):Invalid pipeId(%d)", __FUNCTION__, __LINE__, pipeId);
     else
         request = m_request[INDEX(pipeId)];
@@ -1565,6 +1615,98 @@ status_t ExynosCameraFrame::m_deinit()
     return NO_ERROR;
 }
 
+status_t ExynosCameraFrame::setRotation(uint32_t pipeId, int rotation)
+{
+    status_t ret = NO_ERROR;
+    ExynosCameraFrameEntity *entity = searchEntityByPipeId(pipeId);
+    if (entity == NULL) {
+        ALOGE("ERR(%s[%d]):Could not find entity, pipeID(%d)", __FUNCTION__, __LINE__, pipeId);
+        return BAD_VALUE;
+    }
+
+    ret = entity->setRotation(rotation);
+    if (ret != NO_ERROR) {
+        ALOGE("ERR(%s[%d]):pipeId(%d)->setRotation(%d) fail", __FUNCTION__, __LINE__, pipeId, rotation);
+        return ret;
+    }
+
+    return ret;
+}
+
+status_t ExynosCameraFrame::getRotation(uint32_t pipeId)
+{
+    status_t ret = NO_ERROR;
+    ExynosCameraFrameEntity *entity = searchEntityByPipeId(pipeId);
+    if (entity == NULL) {
+        ALOGE("ERR(%s[%d]):Could not find entity, pipeID(%d)", __FUNCTION__, __LINE__, pipeId);
+        return BAD_VALUE;
+    }
+
+    return entity->getRotation();
+}
+
+#ifdef PERFRAME_CONTROL_FOR_FLIP
+status_t ExynosCameraFrame::setFlipHorizontal(uint32_t pipeId, int flipHorizontal)
+{
+    status_t ret = NO_ERROR;
+    ExynosCameraFrameEntity *entity = searchEntityByPipeId(pipeId);
+    if (entity == NULL) {
+        ALOGE("ERR(%s[%d]):Could not find entity, pipeID(%d)", __FUNCTION__, __LINE__, pipeId);
+        return BAD_VALUE;
+    }
+
+    ret = entity->setFlipHorizontal(flipHorizontal);
+    if (ret != NO_ERROR) {
+        ALOGE("ERR(%s[%d]):pipeId(%d)->setRotation(%d) fail", __FUNCTION__, __LINE__, pipeId, flipHorizontal);
+        return ret;
+    }
+
+    return ret;
+}
+
+status_t ExynosCameraFrame::getFlipHorizontal(uint32_t pipeId)
+{
+    status_t ret = NO_ERROR;
+    ExynosCameraFrameEntity *entity = searchEntityByPipeId(pipeId);
+    if (entity == NULL) {
+        ALOGE("ERR(%s[%d]):Could not find entity, pipeID(%d)", __FUNCTION__, __LINE__, pipeId);
+        return BAD_VALUE;
+    }
+
+    return entity->getFlipHorizontal();
+}
+
+status_t ExynosCameraFrame::setFlipVertical(uint32_t pipeId, int flipVertical)
+{
+    status_t ret = NO_ERROR;
+    ExynosCameraFrameEntity *entity = searchEntityByPipeId(pipeId);
+    if (entity == NULL) {
+        ALOGE("ERR(%s[%d]):Could not find entity, pipeID(%d)", __FUNCTION__, __LINE__, pipeId);
+        return BAD_VALUE;
+    }
+
+    ret = entity->setFlipVertical(flipVertical);
+    if (ret != NO_ERROR) {
+        ALOGE("ERR(%s[%d]):pipeId(%d)->setRotation(%d) fail", __FUNCTION__, __LINE__, pipeId, flipVertical);
+        return ret;
+    }
+
+    return ret;
+}
+
+status_t ExynosCameraFrame::getFlipVertical(uint32_t pipeId)
+{
+    status_t ret = NO_ERROR;
+    ExynosCameraFrameEntity *entity = searchEntityByPipeId(pipeId);
+    if (entity == NULL) {
+        ALOGE("ERR(%s[%d]):Could not find entity, pipeID(%d)", __FUNCTION__, __LINE__, pipeId);
+        return BAD_VALUE;
+    }
+
+    return entity->getFlipVertical();
+}
+#endif
+
 /*
  * ExynosCameraFrameEntity class
  */
@@ -1587,6 +1729,13 @@ ExynosCameraFrameEntity::ExynosCameraFrameEntity(
 
     m_flagSpecificParent = false;
     m_parentPipeId = -1;
+
+    m_rotation = 0;
+
+#ifdef PERFRAME_CONTROL_FOR_FLIP
+    m_flipHorizontal = 0;
+    m_flipVertical = 0;
+#endif
 }
 
 status_t ExynosCameraFrameEntity::m_setEntityType(entity_type_t type)
@@ -1664,9 +1813,11 @@ status_t ExynosCameraFrameEntity::setDstBuf(ExynosCameraBuffer buf, uint32_t nod
     this->m_dstBuf[nodeIndex] = buf;
     ret = setDstBufState(ENTITY_BUFFER_STATE_READY, nodeIndex);
 
+#ifndef SUPPORT_DEPTH_MAP
     /* HACK: Combine with old pipe */
     if (nodeIndex != DST_BUFFER_DEFAULT)
         this->m_dstBuf[DST_BUFFER_DEFAULT] = buf;
+#endif
 
     return ret;
 }
@@ -1750,9 +1901,11 @@ status_t ExynosCameraFrameEntity::setDstBufState(entity_buffer_state_t state, ui
 
     m_dstBufState[nodeIndex] = state;
 
+#ifndef SUPPORT_DEPTH_MAP
     /* HACK: Combine with old pipe */
     if (nodeIndex != DST_BUFFER_DEFAULT)
         m_dstBufState[DST_BUFFER_DEFAULT] = state;
+#endif
 
     return NO_ERROR;
 }
@@ -1836,5 +1989,43 @@ int ExynosCameraFrameEntity::getParentPipeId(void)
 {
     return m_parentPipeId;
 }
+
+status_t ExynosCameraFrameEntity::setRotation(int rotation)
+{
+    m_rotation = rotation;
+
+    return NO_ERROR;
+}
+
+int ExynosCameraFrameEntity::getRotation(void)
+{
+    return m_rotation;
+}
+
+#ifdef PERFRAME_CONTROL_FOR_FLIP
+status_t ExynosCameraFrameEntity::setFlipHorizontal(int flipHorizontal)
+{
+    m_flipHorizontal = flipHorizontal;
+
+    return NO_ERROR;
+}
+
+int ExynosCameraFrameEntity::getFlipHorizontal(void)
+{
+    return m_flipHorizontal;
+}
+
+status_t ExynosCameraFrameEntity::setFlipVertical(int flipVertical)
+{
+    m_flipVertical = flipVertical;
+
+    return NO_ERROR;
+}
+
+int ExynosCameraFrameEntity::getFlipVertical(void)
+{
+    return m_flipVertical;
+}
+#endif
 
 }; /* namespace android */

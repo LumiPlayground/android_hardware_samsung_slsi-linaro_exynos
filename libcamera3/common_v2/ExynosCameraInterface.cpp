@@ -22,10 +22,14 @@
 #include "ExynosCameraAutoTimer.h"
 #include "ExynosCameraTimeLogger.h"
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraVendorTags.h"
+#endif
+
 namespace android {
 
 /* Convert Id to the one for HAL. Refer to the enum CAMERA_ID in ExynosCameraSensorInfoBase.h  */
-static int HAL_getCameraId(int serviceCamId, int *mainCamId, int *subCamId, int *scenario)
+static int HAL_getCameraId(int serviceCamId, int *mainCamId, int *subCamId, int *scenario, int *camInfoIndex)
 {
     uint32_t numOfSensors = 1;
     *scenario = SCENARIO_NORMAL;
@@ -36,6 +40,7 @@ static int HAL_getCameraId(int serviceCamId, int *mainCamId, int *subCamId, int 
         case CAMERA_OPEN_ID_REAR_0:
             *mainCamId = CAMERA_ID_BACK;
             *subCamId = -1;
+            *camInfoIndex = CAMERA_INDEX_REAR_0;
             numOfSensors = 1;
             break;
 #endif
@@ -43,15 +48,24 @@ static int HAL_getCameraId(int serviceCamId, int *mainCamId, int *subCamId, int 
         case CAMERA_OPEN_ID_FRONT_1:
             *mainCamId = CAMERA_ID_FRONT;
             *subCamId = -1;
+            *camInfoIndex = CAMERA_INDEX_FRONT_1;
             numOfSensors = 1;
             break;
 #endif
-
+#ifdef CAMERA_OPEN_ID_REAR_2
+        case CAMERA_OPEN_ID_REAR_2:
+            *mainCamId = CAMERA_ID_BACK_1;
+            *subCamId = -1;
+            *camInfoIndex = CAMERA_INDEX_REAR_2;
+            numOfSensors = 1;
+        break;
+#endif
         /* in case of 1 device of dual camera */
 #ifdef USES_DUAL_REAR_ZOOM
         case CAMERA_SERVICE_ID_DUAL_REAR_ZOOM:
             *mainCamId = CAMERA_ID_BACK;
             *subCamId = CAMERA_ID_BACK_1;
+            *camInfoIndex = CAMERA_INDEX_DUAL_REAR_ZOOM;
             numOfSensors = 2;
             *scenario = SCENARIO_DUAL_REAR_ZOOM;
             break;
@@ -60,6 +74,7 @@ static int HAL_getCameraId(int serviceCamId, int *mainCamId, int *subCamId, int 
         case CAMERA_SERVICE_ID_DUAL_REAR_PORTRAIT:
             *mainCamId = CAMERA_ID_BACK_1;
             *subCamId = CAMERA_ID_BACK;
+            *camInfoIndex = CAMERA_INDEX_DUAL_REAR_PORTRAIT;
             numOfSensors = 2;
             *scenario = SCENARIO_DUAL_REAR_PORTRAIT;
             break;
@@ -68,22 +83,33 @@ static int HAL_getCameraId(int serviceCamId, int *mainCamId, int *subCamId, int 
         case CAMERA_SERVICE_ID_DUAL_FRONT_PORTRAIT:
             *mainCamId = CAMERA_ID_FRONT;
             *subCamId = CAMERA_ID_FRONT_1;
+            *camInfoIndex = CAMERA_INDEX_DUAL_FRONT_PORTRAIT;
             numOfSensors = 2;
             *scenario = SCENARIO_DUAL_FRONT_PORTRAIT;
             break;
 #endif
-
         /* in case of 2 devices of dual camera or 1 camera*/
+#ifdef USES_IRIS_SECURE
+        case CAMERA_SERVICE_ID_IRIS:
+            *mainCamId = CAMERA_ID_SECURE;
+            *subCamId = -1;
+            *camInfoIndex = CAMERA_INDEX_IRIS_SECURE;
+            numOfSensors = 1;
+            *scenario = SCENARIO_SECURE;
+            break;
+#endif
 #ifdef USE_DUAL_CAMERA
 #if defined(MAIN_1_CAMERA_SENSOR_NAME)
         case CAMERA_SERVICE_ID_REAR_2ND:
             if (MAIN_1_CAMERA_SENSOR_NAME != SENSOR_NAME_NOTHING) {
                 *mainCamId = CAMERA_ID_BACK_1;
                 *subCamId = -1;
+                *camInfoIndex = CAMERA_INDEX_HIDDEN_REAR_2;
                 numOfSensors = 1;
             } else {
                 *mainCamId = -1;
                 *subCamId = -1;
+                *camInfoIndex = -1;
                 numOfSensors = -1;
             }
             break;
@@ -93,10 +119,12 @@ static int HAL_getCameraId(int serviceCamId, int *mainCamId, int *subCamId, int 
             if (FRONT_1_CAMERA_SENSOR_NAME != SENSOR_NAME_NOTHING) {
                 *mainCamId = CAMERA_ID_FRONT_1;
                 *subCamId = -1;
+                *camInfoIndex = CAMERA_INDEX_HIDDEN_FRONT_2;
                 numOfSensors = 1;
             } else {
                 *mainCamId = -1;
                 *subCamId = -1;
+                *camInfoIndex = -1;
                 numOfSensors = -1;
             }
             break;
@@ -107,6 +135,7 @@ static int HAL_getCameraId(int serviceCamId, int *mainCamId, int *subCamId, int 
             ALOGV("ERR(%s[%d]:Invaild Camera Id(%d)", __FUNCTION__, __LINE__, serviceCamId);
             *mainCamId = -1;
             *subCamId = -1;
+            *camInfoIndex = -1;
             numOfSensors = -1;
             break;
     }
@@ -133,14 +162,15 @@ static int HAL3_camera_device_open(const struct hw_module_t* module,
     int mainCameraId = -1;
     int subCameraId = -1;
     int scenario = -1;
+    int camInfoIndex = -1;
 
-    numOfSensors = HAL_getCameraId(cameraId, &mainCameraId, &subCameraId, &scenario);
+    numOfSensors = HAL_getCameraId(cameraId, &mainCameraId, &subCameraId, &scenario, &camInfoIndex);
 
     /* Validation check */
-    ALOGI("INFO(%s[%d]):camera(%d) master(%d), slave(%d) in ======",
-        __FUNCTION__, __LINE__, cameraId, mainCameraId, subCameraId);
+    ALOGI("INFO(%s[%d]):camera(%d) master(%d), slave(%d) camInfoIndex(%d) in ======",
+        __FUNCTION__, __LINE__, cameraId, mainCameraId, subCameraId, camInfoIndex);
 
-    if (numOfSensors < 1 || mainCameraId < 0) {
+    if (numOfSensors < 1 || mainCameraId < 0 || camInfoIndex < 0) {
         ALOGE("ERR(%s[%d]):Invalid camera ID%d and numOf Sensors(%d)",
             __FUNCTION__, __LINE__, mainCameraId, numOfSensors);
         return -EINVAL;
@@ -196,7 +226,7 @@ static int HAL3_camera_device_open(const struct hw_module_t* module,
     g_cam_device3[mainCameraId]->ops            = &camera_device3_ops;
 
     ALOGV("DEBUG(%s[%d]):open camera(%d)", __FUNCTION__, __LINE__, mainCameraId);
-    g_cam_device3[mainCameraId]->priv = new ExynosCamera(mainCameraId, subCameraId, scenario, &g_cam_info[mainCameraId]);
+    g_cam_device3[mainCameraId]->priv = new ExynosCamera(mainCameraId, subCameraId, scenario, &g_cam_info[camInfoIndex]);
     *device = (hw_device_t *)g_cam_device3[mainCameraId];
 
     ALOGI("INFO(%s[%d]):camera(%d) out from new g_cam_device3[%d]->priv()",
@@ -220,8 +250,8 @@ done:
     }
 #endif
 
-    if (g_cam_info[mainCameraId]) {
-        metadata = g_cam_info[mainCameraId];
+    if (g_cam_info[camInfoIndex]) {
+        metadata = g_cam_info[camInfoIndex];
         flashAvailable = metadata.find(ANDROID_FLASH_INFO_AVAILABLE);
 
         ALOGV("INFO(%s[%d]): cameraId(%d), flashAvailable.count(%zu), flashAvailable.data.u8[0](%d)",
@@ -420,12 +450,13 @@ static int HAL3_camera_device_configure_streams(const struct camera3_device *dev
     TIME_LOGGER_UPDATE(mainCameraId, 0, 0, CUMULATIVE_CNT, CONFIGURE_STREAM_START, 0);
 
     g_cam_configLock[mainCameraId].lock();
-
     ret = obj(dev)->configureStreams(stream_list);
     if (ret) {
         ALOGE("ERR(%s[%d]):configure_streams error!!", __FUNCTION__, __LINE__);
         /* if NO_MEMORY is returned, cameraserver makes assert intentionally to recover iris buffer leak */
-        if (ret != NO_INIT) { /* NO_INIT = -ENODEV */
+        if (mainCameraId == CAMERA_ID_SECURE && ret == NO_MEMORY) {
+            ret = NO_MEMORY;
+        } else if (ret != NO_INIT) { /* NO_INIT = -ENODEV */
             ret = BAD_VALUE;
         }
     }
@@ -552,16 +583,20 @@ static int HAL_getNumberOfCameras()
     /* ExynosCameraAutoTimer autoTimer(__FUNCTION__); */
     int i = 0;
     int getNumOfCamera = 0;
-    int size = sizeof(sCameraConfigTotalInfo) / sizeof(HAL_CameraInfo_t);
     int mainCamId = -1;
     int subCamId = -1;
     int numOfSensor = -1;
     int scenario = -1;
+    int camInfoIndex = -1;
+    int size = ExynosCameraMetadataConverter::getExynosCameraDeviceInfoSize();
 
     for (i = 0; i < size; i++) {
-        int serviceCamId = sCameraConfigTotalInfo[i].camraId;
+        if (g_HAL_CameraInfo[i] == NULL)
+            g_HAL_CameraInfo[i] = ExynosCameraMetadataConverter::getExynosCameraDeviceInfoByCamIndex(i);
+
+        int serviceCamId = g_HAL_CameraInfo[i]->cameraId;
         if (serviceCamId < CAMERA_SERVICE_ID_OPEN_CAMERA_MAX) {
-            numOfSensor = HAL_getCameraId(serviceCamId, &mainCamId, &subCamId, &scenario);
+            numOfSensor = HAL_getCameraId(serviceCamId, &mainCamId, &subCamId, &scenario, &camInfoIndex);
             if (numOfSensor > 0 && mainCamId != -1) {
                 getNumOfCamera++;
             }
@@ -580,59 +615,65 @@ static int HAL_getCameraInfo(int serviceCameraId, struct camera_info *info)
     int mainCameraId = -1;
     int subCameraId = -1;
     int scenario = -1;
+    int camInfoIndex = -1;
 
-    numOfSensors = HAL_getCameraId(serviceCameraId, &mainCameraId, &subCameraId, &scenario);
+    numOfSensors = HAL_getCameraId(serviceCameraId, &mainCameraId, &subCameraId, &scenario, &camInfoIndex);
 
     ALOGI("INFO(%s[%d]):in =====", __FUNCTION__, __LINE__);
 
     /* set facing and orientation */
     /*  set service arbitration (resource_cost, conflicting_devices, conflicting_devices_length) */
-    if (numOfSensors < 1 || mainCameraId < 0) {
-            ALOGE("ERR(%s[%d]):Invalid camera ID %d/%d", __FUNCTION__, __LINE__, serviceCameraId, mainCameraId);
+    if (numOfSensors < 1 || mainCameraId < 0 || camInfoIndex < 0) {
+            ALOGE("ERR(%s[%d]):Invalid camera ID %d/%d camInfoIndex(%d)",
+                __FUNCTION__, __LINE__, serviceCameraId, mainCameraId, camInfoIndex);
             return NO_INIT; /* NO_INIT = -ENODEV */
-    } else {
-        int i = 0;
-        int size = sizeof(sCameraConfigTotalInfo) / sizeof(HAL_CameraInfo_t);
-
-        for (i = 0; i< size; i++) {
-            if (sCameraConfigTotalInfo[i].camraId == serviceCameraId) {
-                info->facing = sCameraConfigTotalInfo[i].facing_info;
-                info->orientation = sCameraConfigTotalInfo[i].orientation;
-                info->resource_cost = sCameraConfigTotalInfo[i].resource_cost;
-                info->conflicting_devices = sCameraConfigTotalInfo[i].conflicting_devices;
-                info->conflicting_devices_length = sCameraConfigTotalInfo[i].conflicting_devices_length;
-                break;
-            }
-        }
-    }
-
-    ALOGV("INFO(%s info->resource_cost = %d ", __FUNCTION__, info->resource_cost);
-
-    if (info->conflicting_devices_length) {
-        for (size_t i = 0; i < info->conflicting_devices_length; i++) {
-            ALOGV("INFO(%s info->conflicting_devices = %s ", __FUNCTION__, info->conflicting_devices[i]);
-        }
-    } else {
-        ALOGV("INFO(%s info->conflicting_devices_length is zero ", __FUNCTION__);
-    }
+    } 
 
     /* set device API version */
     info->device_version = CAMERA_DEVICE_API_VERSION_3_5;
 
     /* set camera_metadata_t if needed */
     if (info->device_version >= HARDWARE_DEVICE_API_VERSION(2, 0)) {
-        if (g_cam_info[mainCameraId] == NULL) {
+        if (g_cam_info[camInfoIndex] == NULL) {
             ALOGV("DEBUG(%s[%d]):Return static information (%d)", __FUNCTION__, __LINE__, mainCameraId);
-            ret = ExynosCameraMetadataConverter::constructStaticInfo(mainCameraId, scenario, &g_cam_info[mainCameraId]);
+            ret = ExynosCameraMetadataConverter::constructStaticInfo(serviceCameraId, mainCameraId, scenario, 
+                                                                     &g_cam_info[camInfoIndex], &g_HAL_CameraInfo[camInfoIndex]);
             if (ret != 0) {
                 ALOGE("ERR(%s[%d]): static information is NULL", __FUNCTION__, __LINE__);
                 return BAD_VALUE;
             }
-            info->static_camera_characteristics = g_cam_info[mainCameraId];
+            info->static_camera_characteristics = g_cam_info[camInfoIndex];
+            
+            if (g_HAL_CameraInfo[camInfoIndex] != NULL) {
+                info->facing = g_HAL_CameraInfo[camInfoIndex]->facing_info;
+                info->orientation = g_HAL_CameraInfo[camInfoIndex]->orientation;
+                info->resource_cost = g_HAL_CameraInfo[camInfoIndex]->resource_cost;
+                info->conflicting_devices = g_HAL_CameraInfo[camInfoIndex]->conflicting_devices;
+                info->conflicting_devices_length = g_HAL_CameraInfo[camInfoIndex]->conflicting_devices_length;
+            } else {
+                ALOGE("ERR(%s[%d]): HAL_CameraInfo[%d] is NULL!", __FUNCTION__, __LINE__, camInfoIndex);
+                return BAD_VALUE;
+            }
         } else {
-            ALOGV("DEBUG(%s[%d]):Reuse Return static information (%d)", __FUNCTION__, __LINE__, mainCameraId);
-            info->static_camera_characteristics = g_cam_info[mainCameraId];
+            ALOGV("DEBUG(%s[%d]):Reuse Return static information ( serviceCameraId (%d) mainCameraId (%d) camInfoIndex(%d) )",
+                    __FUNCTION__, __LINE__, serviceCameraId, mainCameraId, camInfoIndex);
+            info->static_camera_characteristics = g_cam_info[camInfoIndex];
+            info->facing = g_HAL_CameraInfo[camInfoIndex]->facing_info;
+            info->orientation = g_HAL_CameraInfo[camInfoIndex]->orientation;
+            info->resource_cost = g_HAL_CameraInfo[camInfoIndex]->resource_cost;
+            info->conflicting_devices = g_HAL_CameraInfo[camInfoIndex]->conflicting_devices;
+            info->conflicting_devices_length = g_HAL_CameraInfo[camInfoIndex]->conflicting_devices_length;
         }
+    }
+
+    ALOGD("DEBUG(%s info->resource_cost = %d ", __FUNCTION__, info->resource_cost);
+
+    if (info->conflicting_devices_length) {
+        for (size_t i = 0; i < info->conflicting_devices_length; i++) {
+            ALOGD("DEBUG(%s info->conflicting_devices = %s ", __FUNCTION__, info->conflicting_devices[i]);
+        }
+    } else {
+        ALOGV("DEBUG(%s info->conflicting_devices_length is zero ", __FUNCTION__);
     }
     return NO_ERROR;
 }
@@ -662,12 +703,13 @@ static int HAL_set_torch_mode(const char* serviceCameraId, bool enabled)
     int mainCameraId = -1;
     int subCameraId = -1;
     int scenario = -1;
+    int camInfoIndex = -1;
     char flashFilePath[100] = {'\0',};
 
-    numOfSensors = HAL_getCameraId(cameraId, &mainCameraId, &subCameraId, &scenario);
+    numOfSensors = HAL_getCameraId(cameraId, &mainCameraId, &subCameraId, &scenario, &camInfoIndex);
 
     ALOGI("INFO(%s[%d]):in =====", __FUNCTION__, __LINE__);
-    if (numOfSensors < 1 || mainCameraId < 0) {
+    if (numOfSensors < 1 || mainCameraId < 0 || camInfoIndex < 0) {
         ALOGE("ERR(%s[%d]):Invalid camera ID%d and numOf Sensors(%d)",
             __FUNCTION__, __LINE__, mainCameraId, numOfSensors);
         return -EINVAL;
@@ -675,7 +717,7 @@ static int HAL_set_torch_mode(const char* serviceCameraId, bool enabled)
 
     /* Check the android.flash.info.available */
     /* If this camera device does not support flash, It have to return -ENOSYS */
-    metadata = g_cam_info[mainCameraId];
+    metadata = g_cam_info[camInfoIndex];
     flashAvailable = metadata.find(ANDROID_FLASH_INFO_AVAILABLE);
 
     if (flashAvailable.count == 1 && flashAvailable.data.u8[0] == 1) {
@@ -784,7 +826,18 @@ static void HAL_get_vendor_tag_ops(__unused vendor_tag_ops_t* ops)
 {
     ALOGV("INFO(%s):", __FUNCTION__);
 
+#ifdef SAMSUNG_TN_FEATURE
+    SecCameraVendorTags::Ops = ops;
+
+    ops->get_all_tags = SecCameraVendorTags::get_ext_all_tags;
+    ops->get_tag_count = SecCameraVendorTags::get_ext_tag_count;
+    ops->get_tag_type = SecCameraVendorTags::get_ext_tag_type;
+    ops->get_tag_name = SecCameraVendorTags::get_ext_tag_name;
+    ops->get_section_name = SecCameraVendorTags::get_ext_section_name;
+    ops->reserved[0] = NULL;
+#else
     ALOGW("WARN(%s[%d]):empty operation", __FUNCTION__, __LINE__);
+#endif
 }
 
 }; /* namespace android */

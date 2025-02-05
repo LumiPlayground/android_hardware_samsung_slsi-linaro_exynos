@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraFrameManager"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraFrameManager.h"
 
@@ -203,7 +203,7 @@ Mutex* CreateWorker::getLock()
     return m_lock;
 }
 
-status_t CreateWorker::execute(ExynosCameraFrameSP_sptr_t inframe, ExynosCameraFrameSP_dptr_t outframe)
+status_t CreateWorker::execute(__unused ExynosCameraFrameSP_sptr_t inframe, ExynosCameraFrameSP_dptr_t outframe)
 {
     int32_t ret = FRAMEMGR_ERRCODE::OK;
     if (m_getEnable() == false) {
@@ -396,7 +396,7 @@ bool CreateWorker::workerMain()
 	m_createTimer.stop();
     /* check performance frame create, total generated frame count * 1ms */
     if ((count > 0) && (m_createTimer.durationMsecs() > count))
-        CLOGE("Total generated frameCount(%d) duration(%lld msec)", count, m_createTimer.durationMsecs());
+        CLOGE("Total generated frameCount(%d) duration(%llu msec)", count, (unsigned long long)m_createTimer.durationMsecs());
 #endif
 
     if ((m_getEnable() == false) && (cmd == FrameWorkerCommand::STOP)) {
@@ -478,7 +478,7 @@ Mutex* DeleteWorker::getLock()
     return m_lock;
 }
 
-status_t DeleteWorker::execute(ExynosCameraFrameSP_sptr_t inframe, ExynosCameraFrameSP_dptr_t outframe)
+status_t DeleteWorker::execute(ExynosCameraFrameSP_sptr_t inframe, __unused ExynosCameraFrameSP_dptr_t outframe)
 {
     status_t ret = FRAMEMGR_ERRCODE::OK;
     if (m_getEnable() == false) {
@@ -680,17 +680,14 @@ status_t RunWorker::m_deinit()
 
     case FRAMEMGR_OPER::SLIENT:
         m_setEnable(false);
-        m_thread->requestExit();
         if (m_framekeyQueue != NULL) {
-            m_framekeyQueue->wakeupAll();
-        }
-        m_thread->requestExitAndWait();
-        m_worklist.clear();
-        if (m_framekeyQueue != NULL) {
-            m_framekeyQueue->release();
+            stopThreadAndInputQ(m_thread, 1, m_framekeyQueue);
             delete m_framekeyQueue;
             m_framekeyQueue = NULL;
+        } else {
+            m_thread->requestExitAndWait();
         }
+        m_worklist.clear();
         break;
     case FRAMEMGR_OPER::NONE:
     default:
@@ -706,7 +703,7 @@ Mutex* RunWorker::getLock()
     return &m_lock;
 }
 
-status_t RunWorker::execute(ExynosCameraFrameSP_sptr_t inframe, ExynosCameraFrameSP_dptr_t outframe)
+status_t RunWorker::execute(ExynosCameraFrameSP_sptr_t inframe, __unused ExynosCameraFrameSP_dptr_t outframe)
 {
     status_t ret = FRAMEMGR_ERRCODE::OK;
 
@@ -1075,7 +1072,7 @@ status_t RunWorker::m_dumpFrame()
 
 #ifdef AVOID_ASSERT_FRAME
         CLOGE(" too many frames - m_runningFrameList.size(%d)",
-                 m_worklist.size());
+                 (int)m_worklist.size());
 #else
         android_printAssert(NULL, LOG_TAG, "HACK For ANR DEBUGGING");
 #endif
@@ -1133,8 +1130,6 @@ status_t ExynosCameraFrameManager::setWorker(int key, sp<FrameWorker> worker)
     pair<map<uint32_t, sp<FrameWorker> >::iterator,bool> workerRet;
     pair<map<uint32_t, Mutex*>::iterator,bool> mutexRet;
 
-    Mutex* locker = NULL;
-
     iter = m_workerList.find(key);
     if (iter != m_workerList.end()) {
         CLOGE(" already worker is EXIST(%d)", key);
@@ -1170,7 +1165,6 @@ status_t ExynosCameraFrameManager::m_setupWorkerInfo(int key, sp<FrameWorker> wo
     int ret = FRAMEMGR_ERRCODE::OK;
     pair<map<uint32_t, sp<FrameWorker> >::iterator,bool> workerRet;
     pair<map<uint32_t, Mutex*>::iterator,bool> mutexRet;
-    Mutex* locker = NULL;
 
     workerRet = m_workerList.insert( pair<uint32_t, sp<FrameWorker> >(key, worker));
     if (workerRet.second == false) {

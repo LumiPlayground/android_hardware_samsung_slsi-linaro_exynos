@@ -75,7 +75,7 @@ protected:
                                                       int hwSensorH,
                                                       uint32_t frameRate);
 
-    virtual status_t        m_fillNodeGroupInfo(ExynosCameraFrameSP_sptr_t frame, ExynosCameraFrameSP_sptr_t refFrame = NULL);
+    virtual status_t        m_fillNodeGroupInfo(ExynosCameraFrameSP_sptr_t frame);
 
 #ifdef SUPPORT_GROUP_MIGRATION
     status_t        m_initNodeInfo(void);

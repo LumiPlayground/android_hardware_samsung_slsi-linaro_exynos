@@ -47,6 +47,10 @@ public:
     virtual ~ExynosCameraFrameFactoryPreview();
 
     virtual status_t        create(bool active = true);
+#ifdef SAMSUNG_COMPANION
+    virtual status_t        precreate(void);
+    virtual status_t        postcreate(void);
+#endif
 
     virtual status_t        fastenAeStable(int32_t numFrames, ExynosCameraBuffer *buffers);
 

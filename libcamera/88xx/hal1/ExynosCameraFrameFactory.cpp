@@ -186,6 +186,11 @@ bool ExynosCameraFrameFactory::checkPipeThreadRunning(uint32_t pipeId)
     return ret;
 }
 
+void ExynosCameraFrameFactory::setThreadOneShotMode(uint32_t pipeId, bool enable)
+{
+    m_pipes[INDEX(pipeId)]->setOneShotMode(enable);
+}
+
 status_t ExynosCameraFrameFactory::setFrameManager(ExynosCameraFrameManager *manager)
 {
     m_frameMgr = manager;
@@ -196,13 +201,6 @@ status_t ExynosCameraFrameFactory::getFrameManager(ExynosCameraFrameManager **ma
 {
     *manager = m_frameMgr;
     return NO_ERROR;
-}
-
-status_t ExynosCameraFrameFactory::setFlagFlipIgnoreToPipe(uint32_t pipeId, bool ignoreFlip)
-{
-    status_t ret = NO_ERROR;
-
-    return m_pipes[INDEX(pipeId)]->setFlagFlipIgnore(ignoreFlip);
 }
 
 status_t ExynosCameraFrameFactory::setBufferManagerToPipe(ExynosCameraBufferManager **bufferManager, uint32_t pipeId)
@@ -279,11 +277,29 @@ status_t ExynosCameraFrameFactory::setControl(int cid, int value, uint32_t pipeI
     return ret;
 }
 
+status_t ExynosCameraFrameFactory::setControl(int cid, int value, uint32_t pipeId, enum NODE_TYPE nodeType)
+{
+    status_t ret = NO_ERROR;
+
+    ret = m_pipes[INDEX(pipeId)]->setControl(cid, value, nodeType);
+
+    return ret;
+}
+
 status_t ExynosCameraFrameFactory::getControl(int cid, int *value, uint32_t pipeId)
 {
     status_t ret = NO_ERROR;
 
     ret = m_pipes[INDEX(pipeId)]->getControl(cid, value);
+
+    return ret;
+}
+
+status_t ExynosCameraFrameFactory::setExtControl(struct v4l2_ext_controls *ctrl, uint32_t pipeId)
+{
+    status_t ret = NO_ERROR;
+
+    ret = m_pipes[INDEX(pipeId)]->setExtControl(ctrl);
 
     return ret;
 }
@@ -294,6 +310,15 @@ void ExynosCameraFrameFactory::setRequest(int pipeId, bool enable)
     case PIPE_FLITE:
     case PIPE_FLITE_REPROCESSING:
         m_requestFLITE = enable ? 1 : 0;
+        break;
+    case PIPE_VC1:
+        m_requestVC1 = enable ? 1 : 0;
+        break;
+    case PIPE_VC2:
+        m_requestVC2 = enable ? 1 : 0;
+        break;
+    case PIPE_VC3:
+        m_requestVC3 = enable ? 1 : 0;
         break;
     case PIPE_3AC:
     case PIPE_3AC_REPROCESSING:
@@ -620,7 +645,12 @@ ExynosCameraFrame *ExynosCameraFrameFactory::createNewFrameOnlyOnePipe(int pipeI
         frameCnt = m_frameCount;
     }
 
-    ExynosCameraFrame *frame = m_frameMgr->createFrame(m_parameters, m_frameCount, frameType);
+    ExynosCameraFrame *frame = m_frameMgr->createFrame(m_parameters, frameCnt, frameType);
+    if (frame == NULL) {
+        CLOGE("ERR(%s[%d]):[F%d]Failed to createFrame. frameType %d",
+                __FUNCTION__, __LINE__, frameCnt, frameType);
+        return NULL;
+    }
 
     /* set pipe to linkageList */
     newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
@@ -634,6 +664,11 @@ ExynosCameraFrame *ExynosCameraFrameFactory::createNewFrameVideoOnly(void)
     status_t ret = NO_ERROR;
     ExynosCameraFrameEntity *newEntity[MAX_NUM_PIPES] = {};
     ExynosCameraFrame *frame = m_frameMgr->createFrame(m_parameters, m_frameCount);
+    if (frame == NULL) {
+        CLOGE("ERR(%s[%d]):[F%d]Failed to createFrame",
+                __FUNCTION__, __LINE__, m_frameCount);
+        return NULL;
+    }
 
     /* set GSC-Video pipe to linkageList */
     newEntity[INDEX(PIPE_GSC_VIDEO)] = new ExynosCameraFrameEntity(PIPE_GSC_VIDEO, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
@@ -746,6 +781,33 @@ status_t ExynosCameraFrameFactory::m_initFlitePipe(int sensorW, int sensorH, uin
     /* Set capture node default info */
     SET_CAPTURE_DEVICE_BASIC_INFO();
 
+#ifdef SUPPORT_DEPTH_MAP
+    if (m_parameters->getUseDepthMap()) {
+        /* Depth Map Configuration */
+        int depthMapW = 0, depthMapH = 0;
+        int depthMapFormat = DEPTH_MAP_FORMAT;
+
+        ret = m_parameters->getDepthMapSize(&depthMapW, &depthMapH);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Failed to getDepthMapSize", __FUNCTION__, __LINE__);
+            return ret;
+        }
+
+        CLOGI("INFO(%s[%d]):DepthMapSize %dx%d",
+                __FUNCTION__, __LINE__, depthMapW, depthMapH);
+
+        tempRect.fullW = depthMapW;
+        tempRect.fullH = depthMapH;
+        tempRect.colorFormat = depthMapFormat;
+
+        nodeType = CAPTURE_NODE_2;
+        pipeInfo[nodeType].bytesPerPlane[0] = getBayerLineSize(tempRect.fullW, tempRect.colorFormat);
+        pipeInfo[nodeType].bufInfo.count = NUM_DEPTHMAP_BUFFERS;
+
+        SET_CAPTURE_DEVICE_BASIC_INFO();
+    }
+#endif
+
     ret = m_pipes[pipeId]->setupPipe(pipeInfo, m_sensorIds[pipeId]);
     if (ret != NO_ERROR) {
         CLOGE("ERR(%s[%d]):FLITE setupPipe fail, ret(%d)", __FUNCTION__, __LINE__, ret);
@@ -755,15 +817,16 @@ status_t ExynosCameraFrameFactory::m_initFlitePipe(int sensorW, int sensorH, uin
 
     /* set BNS ratio */
     int bnsScaleRatio = 0;
-    if (m_parameters->getUseFastenAeStable() == true
+    if ((m_parameters->getDualMode() == false && m_parameters->getUseFastenAeStable() == true)
         || m_parameters->getHighSpeedRecording() == true
 #ifdef USE_BINNING_MODE
         || m_parameters->getBinningMode() == true
 #endif
-    )
+    ) {
         bnsScaleRatio = 1000;
-    else
+    } else {
         bnsScaleRatio = m_parameters->getBnsScaleRatio();
+    }
 
     ret = m_pipes[pipeId]->setControl(V4L2_CID_IS_S_BNS, bnsScaleRatio);
     if (ret != NO_ERROR) {
@@ -820,6 +883,7 @@ status_t ExynosCameraFrameFactory::m_initFrameMetadata(ExynosCameraFrame *frame)
         m_bypassDIS = 1; /* m_parameters->getDisEnable(); */
         m_bypassFD = 1; /* m_parameters->getFdEnable(); */
     } else {
+        frame->setRequest(PIPE_VC1, m_requestVC1);
         frame->setRequest(PIPE_3AC, m_request3AC);
         frame->setRequest(PIPE_3AP, m_request3AP);
         frame->setRequest(PIPE_ISPC, m_requestISPC);
@@ -971,6 +1035,15 @@ int ExynosCameraFrameFactory::m_getFliteNodenum(void)
 {
     int fliteNodeNum = FIMC_IS_VIDEO_SS0_NUM;
 
+#ifdef SAMSUNG_COMPANION
+    if(m_parameters->getUseCompanion() == true) {
+        fliteNodeNum = FIMC_IS_VIDEO_SS0_NUM;
+#ifdef SAMSUNG_QUICK_SWITCH
+    } else if (m_parameters->getQuickSwitchFlag()) {
+        fliteNodeNum = (m_cameraId == CAMERA_ID_BACK) ? FIMC_IS_VIDEO_SS4_NUM : FIMC_IS_VIDEO_SS5_NUM;
+#endif
+    } else
+#endif
     {
         switch (m_cameraId) {
         case CAMERA_ID_BACK:
@@ -998,6 +1071,28 @@ int ExynosCameraFrameFactory::m_getFliteNodenum(void)
 
     return fliteNodeNum;
 }
+
+#ifdef SUPPORT_DEPTH_MAP
+int ExynosCameraFrameFactory::m_getDepthVcNodeNum(void)
+{
+    int depthVcNodeNum = FIMC_IS_VIDEO_SS0VC1_NUM;
+
+#ifdef SAMSUNG_COMPANION
+    if (m_parameters->getUseCompanion() == true) {
+        depthVcNodeNum = FIMC_IS_VIDEO_SS0VC1_NUM;
+    } else
+#endif
+    {
+#ifdef SAMSUNG_QUICK_SWITCH
+        depthVcNodeNum = (m_cameraId == CAMERA_ID_BACK) ? FIMC_IS_VIDEO_SS4VC1_NUM : FRONT_CAMERA_DEPTH_VC_NUM;
+#else
+        depthVcNodeNum = (m_cameraId == CAMERA_ID_BACK) ? MAIN_CAMERA_DEPTH_VC_NUM : FRONT_CAMERA_DEPTH_VC_NUM;
+#endif
+    }
+
+    return depthVcNodeNum;
+}
+#endif
 
 void ExynosCameraFrameFactory::m_initDeviceInfo(int pipeId)
 {
@@ -1032,6 +1127,9 @@ void ExynosCameraFrameFactory::m_init(void)
 
     /* setting about request */
     m_requestFLITE = false;
+    m_requestVC1 = false;
+    m_requestVC2 = false;
+    m_requestVC3 = false;
 
     m_request3AC = false;
     m_request3AP = false;

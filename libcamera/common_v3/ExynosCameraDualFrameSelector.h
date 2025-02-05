@@ -36,7 +36,6 @@
 
 #include "ExynosCameraPipe.h"
 #include "ExynosCameraFrame.h"
-#include "ExynosCameraFrameSelector.h"
 
 #define MESSAGE_MAX 32
 
@@ -64,14 +63,6 @@ protected:
             SELECT_STATE_WILL_BE_SELECTED,
             SELECT_STATE_MAX,
         } select_state_t;
-
-        /* syncObj's type */
-        typedef enum TYPE {
-            TYPE_BASE,
-            TYPE_NORMAL,
-            TYPE_DUMMY,
-            TYPE_MAX,
-        } type_t;
 
         SyncObj();
         ~SyncObj();
@@ -161,14 +152,9 @@ protected:
 
         /* get syncId for syncObj */
         int getSyncId(void);
-
         /* set syncId for syncObj */
         void setSyncId(int syncId);
 
-        /* make dummy SyncObj */
-        void makeDummy(int cameraId, int timeStamp);
-
-        type_t getType(void);
     public:
         SyncObj& operator =(const SyncObj &other) {
             m_cameraId   = other.m_cameraId;
@@ -179,7 +165,6 @@ protected:
             m_nodeIndex  = other.m_nodeIndex;
             m_timeStamp  = other.m_timeStamp;
             m_selectState = other.m_selectState;
-            m_type       = other.m_type;
 
             return *this;
         }
@@ -194,8 +179,7 @@ protected:
                 m_isSrc      != other.m_isSrc    ||
                 m_nodeIndex  != other.m_nodeIndex ||
                 m_timeStamp  != other.m_timeStamp ||
-                m_selectState   != other.m_selectState ||
-                m_type       != other.m_type) {
+                m_selectState   != other.m_selectState) {
                 ret = false;
             }
 
@@ -217,7 +201,6 @@ protected:
         int m_nodeIndex;
         int m_timeStamp;
         select_state_t m_selectState;
-        type_t m_type;
         char m_name[EXYNOS_CAMERA_NAME_STR_SIZE];
     }; /* class SyncObj */
 
@@ -273,8 +256,7 @@ public:
      */
     status_t setInfo(int cameraId,
                      ExynosCameraParameters *param,
-                     ExynosCameraBufferManager *bufMgr,
-                     ExynosCameraFrameSelector *selector = NULL);
+                     ExynosCameraBufferManager *bufMgr);
 
     /*
      *  It always trigger sync logic with a frame.
@@ -382,11 +364,7 @@ public:
     */
     void dump(int cameraId);
 
-    /* register camera ids to use */
-    void setFlagValidCameraId(int cameraId, int otherCameraId);
-
 protected:
-    SyncObj     m_selectSingleSyncObj(int cameraId);
     int         m_findOppositeCameraId(int cameraId);
     status_t    m_destroySyncObj(SyncObj *syncObj, bool flagReleaseBuffer, bool notifyRemove);
     status_t    m_pushList(int cameraId, List<ExynosCameraDualFrameSelector::SyncObj> *list, SyncObj *syncObj);
@@ -406,7 +384,6 @@ protected:
     int             m_holdCount;
     int             m_prepareHoldCount;
     bool            m_flagValidCameraId[CAMERA_ID_MAX];
-    bool            m_flagSetInfo[CAMERA_ID_MAX];
     int             m_validCameraCnt;
 
     /*
@@ -434,8 +411,6 @@ protected:
     ExynosCameraParameters      *m_param[CAMERA_ID_MAX];
     ExynosCameraList<Message>   m_notifyQ[CAMERA_ID_MAX];
     bool                        m_flagNotifyRegister[CAMERA_ID_MAX];
-    sync_type_t                 m_lastSyncType;
-    int                         m_lastTimeStamp;
 
     ExynosCameraList<ExynosCameraFrameSP_sptr_t>   m_removeFrameQ[CAMERA_ID_MAX];
     bool                        m_flagRemoveFrameRegister[CAMERA_ID_MAX];
@@ -444,9 +419,6 @@ protected:
     int                         m_msgIndex;
 
     char                        m_name[EXYNOS_CAMERA_NAME_STR_SIZE];
-
-    /* only used in bayer dual selector */
-    ExynosCameraFrameSelector   *m_selector[CAMERA_ID_MAX];
 };
 
 /* for Preview Singleton in Sync Pipe */

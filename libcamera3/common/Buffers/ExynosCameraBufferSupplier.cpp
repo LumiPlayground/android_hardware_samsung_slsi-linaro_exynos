@@ -56,30 +56,11 @@ void ExynosCameraBufferSupplier::deinit(const buffer_manager_tag_t tag)
     return bufferMgr->deinit();
 }
 
-void ExynosCameraBufferSupplier::deinit(buffer_manager_tag_list_t *tagList)
-{
-    ExynosCameraBufferManager *bufferMgr = NULL;
-    status_t ret = NO_ERROR;
-    buffer_manager_tag_t tag;
-
-    for (buffer_manager_tag_list_iter_t iter = tagList->begin(); iter != tagList->end(); iter++) {
-        tag = *iter;
-        bufferMgr = m_eraseBufferList(tag);
-        if (bufferMgr == NULL) {
-            CLOGE("[P%d T%d]Failed to getBufferManager",
-                    tag.pipeId[0], tag.managerType);
-            continue;
-        }
-        bufferMgr->deinit();
-        delete bufferMgr;
-        bufferMgr = NULL;
-    }
-}
-
 status_t ExynosCameraBufferSupplier::createBufferManager(const char *name,
                                                          void *allocator,
                                                          const buffer_manager_tag_t tag,
-                                                         void *stream)
+                                                         void *stream,
+                                                         int actualFormat)
 {
     status_t ret = NO_ERROR;
     ExynosCameraBufferManager *newBufferMgr = NULL;
@@ -90,7 +71,7 @@ status_t ExynosCameraBufferSupplier::createBufferManager(const char *name,
         newBufferMgr = (ExynosCameraBufferManager *)new InternalExynosCameraBufferManager();
         break;
     case BUFFER_MANAGER_SERVICE_GRALLOC_TYPE:
-        newBufferMgr = (ExynosCameraBufferManager *)new ServiceExynosCameraBufferManager();
+        newBufferMgr = (ExynosCameraBufferManager *)new ServiceExynosCameraBufferManager(actualFormat);
         break;
     case BUFFER_MANAGER_INVALID_TYPE:
     default:
@@ -156,15 +137,6 @@ status_t ExynosCameraBufferSupplier::resetBuffers(void)
     }
 
     return funcRet;
-}
-
-status_t ExynosCameraBufferSupplier::getBufferTags(const buffer_manager_type_t type, buffer_manager_tag_list_t *tagList)
-{
-    status_t ret = NO_ERROR;
-
-    ret = m_getBufferTags(type, tagList);
-
-    return ret;
 }
 
 status_t ExynosCameraBufferSupplier::resetBuffers(const buffer_manager_tag_t tag)
@@ -313,40 +285,5 @@ ExynosCameraBufferManager* ExynosCameraBufferSupplier::m_getBufferManager(const 
             tag.pipeId[0], tag.managerType);
 
     return NULL;
-}
-
-ExynosCameraBufferManager* ExynosCameraBufferSupplier::m_eraseBufferList(const buffer_manager_tag_t tag)
-{
-    ExynosCameraBufferManager *bufferMgr = NULL;
-
-    for (buffer_manager_map_iter_t iter = m_bufferMgrMap.begin(); iter != m_bufferMgrMap.end(); iter++) {
-        if (tag == iter->first) {
-            bufferMgr = iter->second;
-            iter = m_bufferMgrMap.erase(iter);
-            break;
-        }
-    }
-
-    if (bufferMgr == NULL) {
-        CLOGE("[P%d T%d]Failed to find bufferManager",
-                tag.pipeId[0], tag.managerType);
-    }
-
-    return bufferMgr;
-}
-
-status_t ExynosCameraBufferSupplier::m_getBufferTags(const buffer_manager_type_t tag, buffer_manager_tag_list_t *tagList)
-{
-    status_t ret = NO_ERROR;
-
-    tagList->clear();
-
-    for (buffer_manager_map_iter_t iter = m_bufferMgrMap.begin(); iter != m_bufferMgrMap.end(); iter++) {
-        if (tag == iter->first.managerType) {
-            tagList->push_back(iter->first);
-        }
-    }
-
-    return ret;
 }
 } // namespace android

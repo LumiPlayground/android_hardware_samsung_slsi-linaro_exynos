@@ -220,11 +220,11 @@ status_t ExynosCameraPipeFlite::m_getBuffer(void)
 
     m_activityControl->activityAfterExecFunc(getPipeId(), (void *)&curBuffer);
 
-    ret = m_updateMetadataToFrame(curBuffer.addr[curBuffer.getMetaPlaneIndex()], curBuffer.index);
+    ret = m_updateMetadataToFrame(curBuffer.addr[1], curBuffer.index);
     if (ret < 0)
         CLOGE(" updateMetadataToFrame fail, ret(%d)", ret);
 
-    shot_ext = (struct camera2_shot_ext *)curBuffer.addr[curBuffer.getMetaPlaneIndex()];
+    shot_ext = (struct camera2_shot_ext *)curBuffer.addr[1];
 
 //#ifdef SHOT_RECOVERY
     if (shot_ext != NULL) {

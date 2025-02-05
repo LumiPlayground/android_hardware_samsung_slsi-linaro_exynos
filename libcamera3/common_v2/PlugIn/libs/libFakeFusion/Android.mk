@@ -7,10 +7,7 @@ ifeq ($(TARGET_2ND_ARCH),)
 include $(CLEAR_VARS)
 
 LOCAL_MODULE_TAGS := optional
-
 LOCAL_PRELINK_MODULE := true
-LOCAL_PROPRIETARY_MODULE := true
-
 LOCAL_PREBUILT_LIBS := lib32/libexynoscamera_fakefusion.so
 
 include $(BUILD_MULTI_PREBUILT)
@@ -23,9 +20,6 @@ LOCAL_MODULE_SUFFIX := .so
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE_TAGS := optional
 
-LOCAL_PRELINK_MODULE := false
-LOCAL_PROPRIETARY_MODULE := true
-
 LOCAL_SRC_FILES_$(TARGET_ARCH) := lib64/$(LOCAL_MODULE)$(LOCAL_MODULE_SUFFIX)
 LOCAL_SRC_FILES_$(TARGET_2ND_ARCH) := lib32/$(LOCAL_MODULE)$(LOCAL_MODULE_SUFFIX)
 LOCAL_MULTILIB := both
@@ -35,9 +29,6 @@ endif
 
 # fakefusion plugin
 include $(CLEAR_VARS)
-
-LOCAL_PRELINK_MODULE := false
-LOCAL_PROPRIETARY_MODULE := true
 
 LOCAL_SRC_FILES := ExynosCameraPlugInFakeFusion.cpp
 LOCAL_SHARED_LIBRARIES := libutils libcutils liblog libexynoscamera_plugin libexynosutils libexynoscamera_fakefusion

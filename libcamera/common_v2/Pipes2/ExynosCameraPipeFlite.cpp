@@ -27,6 +27,11 @@ namespace android {
 Mutex             ExynosCameraPipeFlite::g_nodeInstanceMutex;
 ExynosCameraNode *ExynosCameraPipeFlite::g_node[FLITE_CNTS] = {0};
 int               ExynosCameraPipeFlite::g_nodeRefCount[FLITE_CNTS] = {0};
+#ifdef SUPPORT_DEPTH_MAP
+Mutex             ExynosCameraPipeFlite::g_vcNodeInstanceMutex;
+ExynosCameraNode *ExynosCameraPipeFlite::g_vcNode[VC_CNTS] = {0};
+int               ExynosCameraPipeFlite::g_vcNodeRefCount[VC_CNTS] = {0};
+#endif
 
 ExynosCameraPipeFlite::~ExynosCameraPipeFlite()
 {
@@ -67,6 +72,11 @@ status_t ExynosCameraPipeFlite::create(int32_t *sensorIds)
     CLOGD("DEBUG(%s):Node(%d) opened", __FUNCTION__, m_nodeNum[CAPTURE_NODE]);
     */
     m_node[CAPTURE_NODE] = m_createNode(m_cameraId, m_nodeNum[CAPTURE_NODE]);
+#ifdef SUPPORT_DEPTH_MAP
+    if (m_parameters->getUseDepthMap()) {
+        m_node[CAPTURE_NODE_2] = m_createVcNode(m_cameraId, m_nodeNum[CAPTURE_NODE_2]);
+    }
+#endif
 
     /* mainNode is CAPTURE_NODE */
     m_mainNodeNum = CAPTURE_NODE;
@@ -107,6 +117,16 @@ status_t ExynosCameraPipeFlite::destroy(void)
             __FUNCTION__, m_nodeNum[CAPTURE_NODE], m_sensorIds[CAPTURE_NODE]);
     }
 
+#ifdef SUPPORT_DEPTH_MAP
+    if (m_node[CAPTURE_NODE_2] != NULL) {
+        m_destroyVcNode(m_cameraId, m_node[CAPTURE_NODE_2]);
+
+        m_node[CAPTURE_NODE_2] = NULL;
+        CLOGD("DEBUG(%s):Node(CAPTURE_NODE_2, m_nodeNum : %d, m_sensorIds : %d) closed",
+                __FUNCTION__, m_nodeNum[CAPTURE_NODE_2], m_sensorIds[CAPTURE_NODE_2]);
+    }
+#endif
+
     m_mainNode = NULL;
     m_mainNodeNum = -1;
 
@@ -121,6 +141,54 @@ status_t ExynosCameraPipeFlite::destroy(void)
     return NO_ERROR;
 }
 
+#ifdef SUPPORT_DEPTH_MAP
+status_t ExynosCameraPipeFlite::start(void)
+{
+    status_t ret = 0;
+
+    ret = ExynosCameraPipe::start();
+
+    if (m_parameters->getUseDepthMap()) {
+        ret = m_node[CAPTURE_NODE_2]->start();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Failed to start VCI node", __FUNCTION__, __LINE__);
+            return INVALID_OPERATION;
+        }
+    }
+
+    return NO_ERROR;
+}
+
+status_t ExynosCameraPipeFlite::stop(void)
+{
+    status_t ret = 0;
+
+    ret = ExynosCameraPipe::stop();
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):Failed to stopPipe", __FUNCTION__, __LINE__);
+        return ret;
+    }
+
+    if (m_parameters->getUseDepthMap()) {
+        ret = m_node[CAPTURE_NODE_2]->stop();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Failed to stop VCI node", __FUNCTION__, __LINE__);
+            return INVALID_OPERATION;
+        }
+
+        ret = m_node[CAPTURE_NODE_2]->clrBuffers();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Failed to clrBuffers VCI node", __FUNCTION__, __LINE__);
+            return INVALID_OPERATION;
+        }
+
+        m_node[CAPTURE_NODE_2]->removeItemBufferQ();
+    }
+
+    return NO_ERROR;
+}
+#endif
+
 status_t ExynosCameraPipeFlite::m_getBuffer(void)
 {
     ExynosCameraFrame *curFrame = NULL;
@@ -133,7 +201,8 @@ status_t ExynosCameraPipeFlite::m_getBuffer(void)
 #if defined(USE_CAMERA2_API_SUPPORT)
         if (m_timeLogCount > 0)
 #endif
-            CLOGD("DEBUG(%s[%d]): skip getBuffer, flagStartPipe(%d), numOfRunningFrame = %d", __FUNCTION__, __LINE__, m_flagStartPipe, m_numOfRunningFrame);
+            CLOGD("DEBUG(%s[%d]): skip getBuffer, flagStartPipe(%d), numOfRunningFrame = %d",
+                __FUNCTION__, __LINE__, m_flagStartPipe, m_numOfRunningFrame);
         return NO_ERROR;
     }
 
@@ -171,6 +240,45 @@ status_t ExynosCameraPipeFlite::m_getBuffer(void)
     }
 //#endif
 
+#ifdef SUPPORT_DEPTH_MAP
+    curFrame = m_runningFrameList[curBuffer.index];
+
+    if (curFrame->getRequest(PIPE_VC1) == true) {
+        ExynosCameraBuffer depthMapBuffer;
+
+        ret = m_node[CAPTURE_NODE_2]->getBuffer(&depthMapBuffer, &index);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Failed to get DepthMap buffer", __FUNCTION__, __LINE__);
+            return ret;
+        }
+
+        if (index < 0) {
+            CLOGE("ERR(%s[%d]):Invalid index %d", __FUNCTION__, __LINE__, index);
+            return INVALID_OPERATION;
+        }
+
+        ret = curFrame->setDstBufferState(getPipeId(), ENTITY_BUFFER_STATE_REQUESTED, CAPTURE_NODE_2);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Failed to setDstBufferState into REQUESTED. pipeId %d frameCount %d ret %d",
+                    __FUNCTION__, __LINE__, getPipeId(), curFrame->getFrameCount(), ret);
+        }
+
+        ret = curFrame->setDstBuffer(getPipeId(), depthMapBuffer, CAPTURE_NODE_2, INDEX(getPipeId()));
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Failed to set DepthMapBuffer to frame. bufferIndex %d frameCount %d",
+                    __FUNCTION__, __LINE__, index, curFrame->getFrameCount());
+            return ret;
+        }
+
+        ret = curFrame->setDstBufferState(getPipeId(), ENTITY_BUFFER_STATE_COMPLETE, CAPTURE_NODE_2);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Failed to setDstBufferState with COMPLETE",
+                    __FUNCTION__, __LINE__);
+            return ret;
+        }
+    }
+#endif
+
     /* complete frame */
     ret = m_completeFrame(&curFrame, curBuffer);
     if (ret < 0) {
@@ -207,6 +315,21 @@ status_t ExynosCameraPipeFlite::m_setPipeInfo(camera_pipe_info_t *pipeInfos)
             __FUNCTION__, __LINE__, pipeInfos[0].rectInfo.fullW, pipeInfos[0].rectInfo.fullH, pipeInfos[0].bufInfo.count);
         return INVALID_OPERATION;
     }
+
+#ifdef SUPPORT_DEPTH_MAP
+    if (m_parameters->getUseDepthMap()) {
+        ret = m_setNodeInfo(m_node[CAPTURE_NODE_2], &pipeInfos[CAPTURE_NODE_2],
+                2, YUV_FULL_RANGE,
+                true);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):m_setNodeInfo(%d, %d, %d) fail",
+                    __FUNCTION__, __LINE__,
+                    pipeInfos[CAPTURE_NODE_2].rectInfo.fullW, pipeInfos[CAPTURE_NODE_2].rectInfo.fullH,
+                    pipeInfos[CAPTURE_NODE_2].bufInfo.count);
+            return INVALID_OPERATION;
+        }
+    }
+#endif
 
     m_numBuffers = pipeInfos[0].bufInfo.count;
 

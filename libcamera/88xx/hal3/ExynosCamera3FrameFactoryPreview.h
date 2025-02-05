@@ -42,7 +42,7 @@ public:
 public:
     virtual ~ExynosCamera3FrameFactoryPreview();
 
-    virtual status_t        create(bool active = true);
+    virtual status_t        create(void);
     virtual status_t        precreate(void);
     virtual status_t        postcreate(void);
 

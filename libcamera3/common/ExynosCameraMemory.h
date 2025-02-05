@@ -34,8 +34,7 @@
 #include <hardware/camera3.h>
 #include <videodev2.h>
 #include <videodev2_exynos_camera.h>
-#include <ion/ion.h>
-#include <exynos_ion.h>
+#include <hardware/exynos/ion.h>
 #include <ui/GraphicBuffer.h>
 #include <GrallocWrapper.h>
 
@@ -99,12 +98,11 @@ private:
     unsigned int    m_ionFlags;
 
     sp<GraphicBuffer>                m_graphicBuffer[VIDEO_MAX_FRAME];
-    bool                             m_flagGraphicBufferAlloc[VIDEO_MAX_FRAME];
 };
 
 class ExynosCameraStreamAllocator {
 public:
-    ExynosCameraStreamAllocator();
+    ExynosCameraStreamAllocator(int actualFormat);
     virtual ~ExynosCameraStreamAllocator();
 
     status_t init(camera3_stream_t *allocator);
@@ -120,6 +118,7 @@ public:
 private:
     camera3_stream_t                *m_allocator;
     GrallocWrapper::Mapper          *m_grallocMapper;
+    int                             m_actualFormat;
 };
 }
 #endif

@@ -266,6 +266,11 @@ static int PICTURE_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
 
 static int VIDEO_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
 {
+    /* Binning   = OFF
+       BNS ratio = 1.0
+       BDS       = 1080p */
+
+    /* 16:9 (Single, Dual) */
     { SIZE_RATIO_16_9,
       3264      , 1836      ,   /* [sensor ] */
       3264      , 1836      ,   /* [bns    ] */
@@ -278,7 +283,7 @@ static int VIDEO_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
       3264      , 2448      ,   /* [sensor ] */
       3264      , 2448      ,   /* [bns    ] */
       3264      , 2448      ,   /* [bcrop  ] */
-      1440      , 1080      ,   /* [bds    ] */
+      2176      , 1632      ,   /* [bds    ] */
       1440      , 1080      ,   /* [target ] */
     },
     /*  1:1 (Single, Dual) */
@@ -320,6 +325,14 @@ static int VIDEO_SIZE_LUT_IMX320_3H1[][SIZE_OF_LUT] =
       2992      , 2448      ,   /* [bcrop  ] */
       2112      , 1728      ,   /* [bds    ] */
       1312      , 1080      ,   /* [target ] *//* w=1320, Reduced for 16 pixel align */
+    },
+    /*  9:16 (for COLOR_IRIS) */
+    { SIZE_RATIO_9_16,
+       816      , 1456      ,   /* [sensor ] */
+       816      , 1456      ,   /* [bns    ] */
+       816      , 1456      ,   /* [bcrop  ] */
+       816      , 1456      ,   /* [bds    ] *//* w=752, Increased for 16 pixel align */
+       816      , 1456      ,   /* [target ] */
     },
     /*	18.5:9 (Single) */
     { SIZE_RATIO_18P5_9,
@@ -570,6 +583,7 @@ static int IMX320_3H1_YUV_LIST[][SIZE_OF_RESOLUTION] =
     { 2592, 1944, 33331760, SIZE_RATIO_4_3},
     { 2592, 1458, 33331760, SIZE_RATIO_16_9},
     { 2560, 1440, 33331760, SIZE_RATIO_16_9},
+    { 2448, 2448, 33331760, SIZE_RATIO_1_1},
     { 2048, 1536, 33331760, SIZE_RATIO_4_3},
     { 1936, 1936, 33331760, SIZE_RATIO_1_1},
     { 1920, 1440, 33331760, SIZE_RATIO_4_3},
@@ -673,13 +687,6 @@ static int IMX320_3H1_HIGH_SPEED_VIDEO_FPS_RANGE_LIST[][2] =
     {  30000, 120000},
     {  60000, 120000},
     { 120000, 120000},
-};
-
-/* effect fps range */
-static int IMX320_3H1_EFFECT_FPS_RANGE_LIST[][2] =
-{
-    {  10000,  24000},
-    {  24000,  24000},
 };
 
 #endif

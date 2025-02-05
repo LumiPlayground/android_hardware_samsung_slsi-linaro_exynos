@@ -108,15 +108,11 @@ status_t VDIS::execute(Map_t *map)
 
     Data_pointer_rect_t       mapBcropRect		= (Data_pointer_rect_t)(*map)[PLUGIN_BCROP_RECT];
     Data_int32_t      zoomLevel = (Data_int32_t)(*map)[PLUGIN_ZOOM_LEVEL];
-    //Pointer_float_t   zoomRatio = (Pointer_float_t)(*map)[PLUGIN_ZOOM_RATIO];
-    //VDIS_LOGD("bcrop (%d %d %d %d) zoom(%d, %f)", mapBcropRect->x, mapBcropRect->y, mapBcropRect->w, mapBcropRect->h, zoomLevel, zoomRatio[0]);
-    VDIS_LOGD("bcrop (%d %d %d %d) zoom(%d)", mapBcropRect->x, mapBcropRect->y, mapBcropRect->w, mapBcropRect->h, zoomLevel);
+    Pointer_float_t   zoomRatio = (Pointer_float_t)(*map)[PLUGIN_ZOOM_RATIO];
+    VDIS_LOGD("bcrop (%d %d %d %d) zoom(%d, %f)", mapBcropRect->x, mapBcropRect->y, mapBcropRect->w, mapBcropRect->h, zoomLevel, zoomRatio[0]);
 
     (*map)[PLUGIN_SRC_BUF_USED] = (Map_data_t)mapSrcBufIndex[0];
-    (*map)[PLUGIN_DST_BUF_VALID] = (Data_uint32_t)1;//Set always dummy valid data
 
-
-#if 0
     Data_int32_t      mapGyroDataSize = (Data_int32_t)(*map)[PLUGIN_GYRO_DATA_SIZE];
     Array_pointer_gyro_data_t mapGyroData_p = (Array_pointer_gyro_data_t)(*map)[PLUGIN_GYRO_DATA];
     for (int i = 0; i < mapGyroDataSize; i++) {
@@ -126,7 +122,6 @@ status_t VDIS::execute(Map_t *map)
                 mapGyroData_p[i].z,
                 mapGyroData_p[i].timestamp);
     }
-#endif
 
 #if 0
     VDIS_LOGD("timeStame(%lu), timeStampBoot(%lu), exposureTime(%lu), frameDuration(%d), RollingShutterSkew(%d), OpticalStabilizationModeCtrl(%d), OpticalStabilizationModeDm(%d)",
@@ -196,7 +191,7 @@ status_t VDIS::execute(Map_t *map)
     memcpy(mapDstBufAddr[0], mapSrcBufAddr[0][0], mapDstBufSize[0][0]);//y plane
     memcpy(mapDstBufAddr[1], mapSrcBufAddr[0][1], mapDstBufSize[0][1]);//cbcr plane
     memcpy(mapDstBufAddr[2], mapSrcBufAddr[0][2], mapDstBufSize[0][2]);//metaplane
-    memset(mapDstBufAddr[0], 0xff, mapDstBufSize[0][0]/2);
+    //memset(mapDstBufAddr[0], 0xff, mapDstBufSize[0][0]/2);
 
     return ret;
 }
@@ -213,7 +208,7 @@ status_t VDIS::setup(Map_t *map)
     int width =    (Data_int32_t     )(*map)[PLUGIN_ARRAY_RECT_W];
     int height =   (Data_int32_t     )(*map)[PLUGIN_ARRAY_RECT_H];
 
-    VDIS_LOGD("%s(%d) : input size(%d x %d), target size(%d x %d)", __FUNCTION__, __LINE__, hwWidth, hwHeight, width, height);
+    VDIS_LOGD("%s(%d) : input size(%d x %d), target size(%d x %d)", hwWidth, hwHeight, width, height);
 
     return NO_ERROR;
 }

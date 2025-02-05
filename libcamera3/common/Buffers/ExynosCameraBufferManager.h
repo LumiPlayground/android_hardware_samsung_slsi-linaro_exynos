@@ -35,7 +35,7 @@
 #include <ui/Fence.h>
 #include <videodev2.h>
 #include <videodev2_exynos_camera.h>
-#include <ion/ion.h>
+#include <hardware/exynos/ion.h>
 
 #include "gralloc1_priv.h"
 
@@ -63,7 +63,6 @@ namespace android {
 #endif
 
 #define ACQUIRE_FD_THRESHOLD                700
-#define SWBUFFER_MAX_COUNT                  80
 
 typedef enum buffer_manager_type {
     BUFFER_MANAGER_ION_TYPE                 = 0,
@@ -301,7 +300,7 @@ private:
 
 class ServiceExynosCameraBufferManager : public ExynosCameraBufferManager {
 public:
-    ServiceExynosCameraBufferManager();
+    ServiceExynosCameraBufferManager(int actualFormat);
     virtual ~ServiceExynosCameraBufferManager();
 
     status_t putBuffer(int bufIndex,

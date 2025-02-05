@@ -23,6 +23,42 @@
 
 namespace android {
 
+/*
+   Check whether the current minimum YUV size is smaller than 1/16th
+   of srcRect(MCSC input). Due to the M2MScaler limitation, 1/16 is
+   the maximum downscaling with color conversion.
+   In this case(If this function returns true), 1/2 downscaling
+   will be happend in MCSC output
+*/
+static bool checkNeed16Downscaling(const ExynosRect* srcRect, const ExynosCamera3Parameters *params) {
+    int minYuvW, minYuvH;
+
+    if(srcRect == NULL || params == NULL) {
+        return false;
+    }
+
+    if(params->getMinYuvSize(&minYuvW, &minYuvH) != NO_ERROR) {
+        return false;
+    }
+
+    if( (srcRect->w > minYuvW * M2M_SCALER_MAX_DOWNSCALE_RATIO)
+        || (srcRect->h > minYuvH * M2M_SCALER_MAX_DOWNSCALE_RATIO) ) {
+        ALOGI("INFO(%s[%d]):Minimum output YUV size is too small (Src:[%dx%d] Out:[%dx%d])."
+            , __FUNCTION__, __LINE__, srcRect->w, srcRect->h, minYuvW, minYuvH);
+
+        if( (srcRect->w > minYuvW * M2M_SCALER_MAX_DOWNSCALE_RATIO * MCSC_DOWN_RATIO_SMALL_YUV)
+            || (srcRect->h > minYuvH * M2M_SCALER_MAX_DOWNSCALE_RATIO * MCSC_DOWN_RATIO_SMALL_YUV) ) {
+            /* Print warning if MCSC downscaling still not able to meet the requirements */
+            ALOGW("WARN(%s[%d]):Minimum output YUV size is still too small (Src:[%dx%d] Out:[%dx%d])."
+                  "1/2 MSCS Downscaling will not solve the problem"
+                , __FUNCTION__, __LINE__, srcRect->w, srcRect->h, minYuvW, minYuvH);
+        }
+        return true;
+    } else {
+        return false;
+    }
+}
+
 void updateNodeGroupInfo(
         int pipeId,
         ExynosCamera3Parameters *params,
@@ -77,10 +113,26 @@ void updateNodeGroupInfo(
             mcscInputSize = ispSize;
 
         if (params->isSingleChain() == true) {
-            //                      Single      Dual
-            // mcscSize[0] -> MCSC    P0         P3
-            // mcscSize[1] -> MCSC    P1         P4
-            // mcscSize[2] -> MCSC    P2
+            /*
+                                  Single      Dual
+             mcscSize[0] -> MCSC    P0         P3
+             mcscSize[1] -> MCSC    P1         P4
+             mcscSize[2] -> MCSC    P2
+            */
+
+            /* HACK: For YUV output stream of reprocessing(For private reprocessing),
+                     Downscale 1/2 on MCSC if One of more YUV output requires
+                     More than 1/16 downscaling(which can not be supported
+                     by M2M Scaler)
+            */
+            if(checkNeed16Downscaling(&mcscInputSize, params) == true) {
+                mcscSize[0].w = ALIGN_DOWN(mcscInputSize.w / MCSC_DOWN_RATIO_SMALL_YUV, CAMERA_MCSC_ALIGN);
+                mcscSize[0].h = ALIGN_DOWN(mcscInputSize.h / MCSC_DOWN_RATIO_SMALL_YUV, CAMERA_MCSC_ALIGN);
+                ALOGI("INFO(%s[%d]): 1/2 Downscaling will be done at REPROCESSING_MCSC2" , __FUNCTION__, __LINE__);
+            } else {
+                mcscSize[0] = mcscInputSize;
+            }
+
             params->getPictureSize(&mcscSize[1].w, &mcscSize[1].h);
             params->getThumbnailSize(&mcscSize[2].w, &mcscSize[2].h);
         } else {

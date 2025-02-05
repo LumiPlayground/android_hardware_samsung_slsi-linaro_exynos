@@ -79,6 +79,9 @@ public:
                             ExynosCameraParameters *param,
                             ExynosCameraBufferSupplier *bufferSupplier,
                             ExynosCameraFrameManager *manager = NULL
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+                            , ExynosCameraBufferManager *DNGbufMgr = NULL
+#endif
                             );
     virtual ~ExynosCameraFrameSelector();
     virtual status_t release(void);
@@ -93,6 +96,9 @@ public:
     status_t cancelPicture(bool flagCancel);
     status_t wakeupQ(void);
     void setWaitTime(uint64_t waitTime);
+#ifdef OIS_CAPTURE
+    void setWaitTimeOISCapture(uint64_t waitTime);
+#endif
 
     void setId(SELECTOR_ID_t selectorId);
     SELECTOR_ID_t getId(void);
@@ -100,6 +106,10 @@ public:
 protected:
     status_t m_manageNormalFrameHoldListHAL3(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
     status_t m_manageHdrFrameHoldList(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+#ifdef RAWDUMP_CAPTURE
+    status_t m_manageRawFrameHoldList(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+    ExynosCameraFrameSP_sptr_t m_selectRawNormalFrame(int tryCount);
+#endif
 
     status_t m_list_release(frame_queue_t *list);
     int removeFlags;
@@ -108,6 +118,20 @@ protected:
     ExynosCameraFrameSP_sptr_t m_selectFlashFrameV2(int tryCount);
     ExynosCameraFrameSP_sptr_t m_selectCaptureFrame(uint32_t frameCount, int tryCount);
     ExynosCameraFrameSP_sptr_t m_selectHdrFrame(int tryCount);
+
+#ifdef OIS_CAPTURE
+    status_t m_manageOISFrameHoldList(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+    status_t m_manageOISFrameHoldListHAL3(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+    ExynosCameraFrameSP_sptr_t m_selectOISNormalFrameHAL3(int tryCount);
+    status_t m_manageLongExposureFrameHoldList(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+#endif
+#ifdef SAMSUNG_LLS_DEBLUR
+    status_t m_manageLDFrameHoldList(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+#endif
+#ifdef SAMSUNG_TN_FEATURE
+    status_t m_manageDynamicPickFrameHoldListHAL3(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, int32_t dstPos);
+    ExynosCameraFrameSP_sptr_t m_selectDynamicPickFrameHAL3(int tryCount);
+#endif
 
     status_t m_getBufferFromFrame(ExynosCameraFrameSP_sptr_t frame, int pipeID, bool isSrc, ExynosCameraBuffer *outBuffer, int32_t dstPos);
     status_t m_pushQ(frame_queue_t *list, ExynosCameraFrameSP_sptr_t inframe, bool lockflag);
@@ -125,11 +149,23 @@ protected:
     frame_queue_t m_frameHoldList;
     frame_queue_t m_hdrFrameHoldList;
     frame_queue_t m_OISFrameHoldList;
+#ifdef RAWDUMP_CAPTURE
+    frame_queue_t m_RawFrameHoldList;
+#endif
     ExynosCameraFrameManager *m_frameMgr;
     ExynosCameraConfigurations *m_configurations;
     ExynosCameraParameters *m_parameters;
     ExynosCameraBufferSupplier *m_bufferSupplier;
     ExynosCameraActivityControl *m_activityControl;
+
+#ifdef SAMSUNG_DNG
+    unsigned int m_DNGFrameCount;
+    unsigned int m_preDNGFrameCount;
+    ExynosCameraFrameSP_sptr_t m_preDNGFrame;
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    ExynosCameraBufferManager *m_DNGbufMgr;
+#endif
+#endif
 
     int m_reprocessingCount;
 

@@ -250,6 +250,9 @@ ExynosCameraFrame * ExynosCameraFrameReprocessingFactory::createNewFrame(void)
         new ExynosCameraFrameEntity(PIPE_GSC_REPROCESSING2, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
     frame->addSiblingEntity(NULL, newEntity[INDEX(PIPE_GSC_REPROCESSING2)]);
     if (m_parameters->getIsThumbnailCallbackOn()
+#ifdef SAMSUNG_MAGICSHOT
+        || curShotMode == SHOT_MODE_MAGIC
+#endif
         ) {
         requestEntityCount++;
     }
@@ -356,6 +359,12 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
     ExynosRect bayerCropSizePicture;
     ExynosRect bayerCropSizePreview;
     ExynosRect bdsSize;
+
+#ifdef SR_CAPTURE
+    if(m_parameters->getSROn()) {
+        zoom = ZOOM_LEVEL_0;
+    }
+#endif
 
     m_parameters->getPictureSize(&pictureW, &pictureH);
     m_parameters->getPictureBayerCropSize(&bnsSize, &bayerCropSizePicture);

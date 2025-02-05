@@ -27,7 +27,12 @@ namespace android {
 #ifdef USE_FRAMEMANAGER
 ExynosCameraFrameSelector::ExynosCameraFrameSelector(ExynosCameraParameters *param,
                                                      ExynosCameraBufferManager *bufMgr,
-                                                     ExynosCameraFrameManager *manager)
+                                                     ExynosCameraFrameManager *manager
+#ifdef SUPPORT_DEPTH_MAP
+                                                    , depth_callback_queue_t *depthCallbackQ
+                                                    , ExynosCameraBufferManager *depthMapbufMgr
+#endif
+                                                     )
 #else
     ExynosCameraFrameSelector::ExynosCameraFrameSelector(ExynosCameraParameters *param,
                                                          ExynosCameraBufferManager *bufMgr)
@@ -41,11 +46,41 @@ ExynosCameraFrameSelector::ExynosCameraFrameSelector(ExynosCameraParameters *par
     m_activityControl = m_parameters->getActivityControl();
 
     m_frameHoldList.setWaitTime(2000000000);
+#ifdef OIS_CAPTURE
+    m_OISFrameHoldList.setWaitTime(130000000);
+#endif
+#ifdef RAWDUMP_CAPTURE
+    m_RawFrameHoldList.setWaitTime(2000000000);
+#endif
 
     m_reprocessingCount = 0;
     m_frameHoldCount = 1;
     m_isFirstFrame = true;
     isCanceled = false;
+
+#ifdef OIS_CAPTURE
+    removeFlags = false;
+#endif
+#ifdef LLS_REPROCESSING
+    LLSCaptureFrame = NULL;
+    m_isLastFrame = true;
+    m_isConvertingMeta = true;
+    m_LLSCaptureCount = 0;
+#endif
+#ifdef SAMSUNG_LBP
+    m_lbpFrameCounter = 0;
+    m_LBPFrameNum = 0;
+#endif
+#ifdef SAMSUNG_DNG
+    m_DNGFrameCount = 0;
+    m_preDNGFrameCount = 0;
+    m_preDNGFrame = NULL;
+#endif
+    m_CaptureCount = 0;
+#ifdef SUPPORT_DEPTH_MAP
+    m_depthCallbackQ = depthCallbackQ;
+    m_depthMapbufMgr = depthMapbufMgr;
+#endif
 }
 
 ExynosCameraFrameSelector::~ExynosCameraFrameSelector()
@@ -93,31 +128,12 @@ status_t ExynosCameraFrameSelector::m_manageHdrFrameHoldList(ExynosCameraFrame *
                                                                 int32_t dstPos)
 {
     int ret = 0;
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    sp<ExynosCameraSFLMgr> sflMgr = NULL;
-    uint32_t curSelectCount = 0;
-    uint32_t maxSelectCount = 0;
-    struct CommandInfo cmdinfo;
-    sp<ExynosCameraSFLInterface> library = NULL;
-#endif
     ExynosCameraBuffer buffer;
     ExynosCameraFrame *newFrame  = NULL;
     ExynosCameraActivitySpecialCapture *m_sCaptureMgr = NULL;
     unsigned int hdrFcount = 0;
     unsigned int fliteFcount = 0;
     newFrame = frame;
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    sflMgr = m_parameters->getLibraryManager();
-    library = sflMgr->getLibrary(SFLIBRARY_MGR::HDR);
-
-    memset(&cmdinfo, 0x00, sizeof(cmdinfo));
-    makeSFLCommand(&cmdinfo, SFL::GET_CURSELECTCNT, SFL::TYPE_CAPTURE, SFL::POS_SRC);
-    library->processCommand(&cmdinfo, (void*)&curSelectCount);
-
-    makeSFLCommand(&cmdinfo, SFL::GET_MAXSELECTCNT, SFL::TYPE_CAPTURE, SFL::POS_SRC);
-    library->processCommand(&cmdinfo, (void*)&maxSelectCount);
-#endif
 
     m_sCaptureMgr = m_activityControl->getSpecialCaptureMgr();
     hdrFcount = m_sCaptureMgr->getHdrDropFcount();
@@ -128,6 +144,7 @@ status_t ExynosCameraFrameSelector::m_manageHdrFrameHoldList(ExynosCameraFrame *
         ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s)",
                 __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst");
     }
+
     if (m_parameters->getUsePureBayerReprocessing() == true) {
         camera2_shot_ext *shot_ext = NULL;
         shot_ext = (camera2_shot_ext *)(buffer.addr[1]);
@@ -144,42 +161,12 @@ status_t ExynosCameraFrameSelector::m_manageHdrFrameHoldList(ExynosCameraFrame *
             ALOGE("ERR(%s[%d]):fliteReprocessingBuffer is null", __FUNCTION__, __LINE__);
     }
 
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    if (maxSelectCount > curSelectCount) {
-        if (curSelectCount == 0) {
-            ALOGD("DEBUG(%s[%d]): clear previous m_frameHoldList pipeID(%d)", __FUNCTION__, __LINE__, pipeID);
-            ret = m_clearList(&m_hdrFrameHoldList, pipeID, isSrc, dstPos);
-            if(ret < 0) {
-                ALOGE("DEBUG(%s[%d]):m_frameHoldList clear failed, pipeID(%d)", __FUNCTION__, __LINE__, pipeID);
-            }
-        }
-    }
-#endif
-
     if (hdrFcount + 1 == fliteFcount || hdrFcount + 2 == fliteFcount || hdrFcount + 3 == fliteFcount) {
         ALOGI("INFO(%s[%d]):hdrFcount %d, fliteFcount %d", __FUNCTION__, __LINE__, hdrFcount, fliteFcount);
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-        curSelectCount++;
-        makeSFLCommand(&cmdinfo, SFL::SET_CURSELECTCNT, SFL::TYPE_CAPTURE, SFL::POS_SRC);
-        library->processCommand(&cmdinfo, (void*)&curSelectCount);
-#endif
-
         m_pushQ(&m_hdrFrameHoldList, newFrame, true);
     } else {
-        if (m_bufMgr == NULL) {
-            ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
-            return INVALID_OPERATION;
-        } else {
-            ret = m_bufMgr->putBuffer(buffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
-            if (ret < 0) {
-                ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, buffer.index);
-                m_bufMgr->printBufferState();
-                m_bufMgr->printBufferQState();
-            }
-
-            m_frameComplete(newFrame, false);
-            newFrame = NULL;
-        }
+        m_frameComplete(newFrame, false, pipeID, isSrc, dstPos, true);
+        newFrame = NULL;
     }
 
     return ret;
@@ -209,7 +196,7 @@ ExynosCameraFrame* ExynosCameraFrameSelector::selectCaptureFrames(int count,
     m_flashMgr = m_activityControl->getFlashMgr();
 
     if (m_flashMgr->getNeedCaptureFlash() == true) {
-        selectedFrame = m_selectFlashFrame(pipeID, isSrc, tryCount, dstPos);
+        selectedFrame = m_selectFlashFrameV2(pipeID, isSrc, tryCount, dstPos);
         if (selectedFrame == NULL) {
             ALOGE("ERR(%s[%d]):Failed to selectFlashFrame", __FUNCTION__, __LINE__);
             selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
@@ -229,7 +216,6 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectFocusedFrame(int pipeID, b
 {
     int ret = 0;
     ExynosCameraFrame* selectedFrame = NULL;
-    ExynosCameraBuffer selectedBuffer;
     struct camera2_shot_ext shot_ext;
     memset(&shot_ext, 0x00, sizeof(struct camera2_shot_ext));
 
@@ -249,24 +235,11 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectFocusedFrame(int pipeID, b
         if (m_activityControl->flagFocusing(&shot_ext, m_parameters->getFocusMode()) == true) {
             ALOGD("DEBUG(%s[%d]):skip focusing frame(count %d)",
                     __FUNCTION__, __LINE__, selectedFrame->getFrameCount());
-
-            ret = m_getBufferFromFrame(selectedFrame, pipeID, isSrc, &selectedBuffer, dstPos);
-            if( ret != NO_ERROR ) {
-                ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s)",
-                      __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst");
-            }
-
             if (m_bufMgr == NULL) {
                 ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
                 return NULL;
             } else {
-                ret = m_bufMgr->putBuffer(selectedBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
-                if (ret < 0) {
-                    ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, selectedBuffer.index);
-                    m_bufMgr->printBufferState();
-                    m_bufMgr->printBufferQState();
-                }
-                m_frameComplete(selectedFrame, false);
+                m_frameComplete(selectedFrame, false, pipeID, isSrc, dstPos, true);
                 selectedFrame = NULL;
             }
         } else {
@@ -293,30 +266,24 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectFlashFrame(int pipeID, boo
     /* Choose bayerBuffer to process reprocessing */
     while (totalWaitingCount <= (FLASH_MAIN_TIMEOUT_COUNT + m_parameters->getReprocessingBayerHoldCount())) {
         /* Start main flash & Get best frame count for flash */
-        if (m_parameters->getHalVersion() == IS_HAL_VER_1_0
-                && waitFcount == 0) {
+        if (waitFcount == 0) {
             waitFcount = m_activityControl->startMainFlash() + 1;
             ALOGD("DEBUG(%s):best frame count for flash capture : %d", __FUNCTION__, waitFcount);
         }
 
         ret = m_waitAndpopQ(&m_frameHoldList, &selectedFrame, false, tryCount);
-        if( ret < 0 ||  selectedFrame == NULL ) {
+        if (ret < 0 ||  selectedFrame == NULL) {
             ALOGD("DEBUG(%s[%d]):getFrame Fail ret(%d)", __FUNCTION__, __LINE__, ret);
             return NULL;
         } else if (isCanceled == true) {
             ALOGD("DEBUG(%s[%d]):isCanceled", __FUNCTION__, __LINE__);
+            if (selectedFrame != NULL) {
+                m_LockedFrameComplete(selectedFrame, pipeID, isSrc, dstPos);
+            }
             return NULL;
         }
 
         ALOGD("DEBUG(%s[%d]):Frame Count(%d)", __FUNCTION__, __LINE__, selectedFrame->getFrameCount());
-
-        if (m_parameters->getHalVersion() == IS_HAL_VER_3_2
-                && waitFcount == 0) {
-            ExynosCameraActivityFlash *flashMgr = NULL;
-            flashMgr = m_activityControl->getFlashMgr();
-            waitFcount = flashMgr->getShotFcount() + 1;
-            ALOGD("DEBUG(%s):best frame count for flash capture : %d", __FUNCTION__, waitFcount);
-        }
 
         /* Handling exception cases : like preflash is not processed */
         if (waitFcount < 0) {
@@ -332,9 +299,9 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectFlashFrame(int pipeID, boo
         }
 
         ret = m_getBufferFromFrame(selectedFrame, pipeID, isSrc, &selectedBuffer, dstPos);
-        if( ret != NO_ERROR ) {
-            ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s)",
-                    __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst");
+        if (ret != NO_ERROR) {
+            ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s) bufferPtr(%p)",
+                    __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst", selectedBuffer);
         }
 
         if (m_isFrameMetaTypeShotExt() == true) {
@@ -359,24 +326,12 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectFlashFrame(int pipeID, boo
                 ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
                 return NULL;
             } else {
-                ret = m_bufMgr->putBuffer(selectedBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
-                if (ret < 0) {
-                    ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, selectedBuffer.index);
-                        m_bufMgr->printBufferState();
-                        m_bufMgr->printBufferQState();
-                }
-                m_frameComplete(selectedFrame, false);
+                m_frameComplete(selectedFrame, false, pipeID, isSrc, dstPos, true);
                 selectedFrame = NULL;
             }
         }
 
-        if (m_parameters->getHalVersion() == IS_HAL_VER_3_2) {
-            /* On HAL3, frame selector must wait the waitFcount to be updated by Flash Manager */
-            if (waitFcount > 1 && waitFcount <= bufferFcount)
-                break;
-            else
-                waitFcount = 0;
-        } else if (waitFcount <= bufferFcount) {
+        if (waitFcount <= bufferFcount) {
             break;
         }
 
@@ -393,8 +348,7 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectFlashFrame(int pipeID, boo
             __FUNCTION__, __LINE__, waitFcount, bufferFcount);
 
     /* Stop main flash */
-    if (m_parameters->getHalVersion() == IS_HAL_VER_1_0)
-        m_activityControl->stopMainFlash();
+    m_activityControl->stopMainFlash();
 
     return selectedFrame;
 
@@ -419,7 +373,6 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectBurstFrame(int pipeID, boo
 {
     int ret = 0;
     ExynosCameraFrame* selectedFrame = NULL;
-    ExynosCameraBuffer selectedBuffer;
 
     ExynosCameraActivityFlash *m_flashMgr = m_activityControl->getFlashMgr();
 
@@ -440,23 +393,11 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectBurstFrame(int pipeID, boo
                 ALOGD("DEBUG(%s[%d]):skip flash frame(count %d)",
                         __FUNCTION__, __LINE__, selectedFrame->getFrameCount());
 
-                ret = m_getBufferFromFrame(selectedFrame, pipeID, isSrc, &selectedBuffer, dstPos);
-                if( ret != NO_ERROR ) {
-                    ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s)",
-                            __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst");
-                }
-
                 if (m_bufMgr == NULL) {
                     ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
                     return NULL;
                 } else {
-                    ret = m_bufMgr->putBuffer(selectedBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
-                    if (ret < 0) {
-                        ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, selectedBuffer.index);
-                        m_bufMgr->printBufferState();
-                        m_bufMgr->printBufferQState();
-                    }
-                    m_frameComplete(selectedFrame);
+                    m_frameComplete(selectedFrame, false, pipeID, isSrc, dstPos, true);
                     selectedFrame = NULL;
                 }
             } else {
@@ -478,7 +419,6 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectCaptureFrame(uint32_t fram
 {
     int ret = 0;
     ExynosCameraFrame *selectedFrame = NULL;
-    ExynosCameraBuffer selectedBuffer;
 
     for (int i = 0; i < CAPTURE_WAITING_COUNT; i++) {
         selectedFrame = m_selectNormalFrame(pipeID, isSrc, tryCount, dstPos);
@@ -491,23 +431,11 @@ ExynosCameraFrame* ExynosCameraFrameSelector::m_selectCaptureFrame(uint32_t fram
             ALOGD("DEBUG(%s[%d]):skip capture frame(count %d), waiting frame(count %d)",
                     __FUNCTION__, __LINE__, selectedFrame->getFrameCount(), frameCount);
 
-            ret = m_getBufferFromFrame(selectedFrame, pipeID, isSrc, &selectedBuffer, dstPos);
-            if( ret != NO_ERROR ) {
-                ALOGE("ERR(%s[%d]):m_getBufferFromFrame fail pipeID(%d) BufferType(%s)",
-                        __FUNCTION__, __LINE__, pipeID, (isSrc)?"Src":"Dst");
-            }
-
             if (m_bufMgr == NULL) {
                 ALOGE("ERR(%s[%d]):m_bufMgr is NULL", __FUNCTION__, __LINE__);
                 return NULL;
             } else {
-                ret = m_bufMgr->putBuffer(selectedBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
-                if (ret < 0) {
-                    ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, selectedBuffer.index);
-                    m_bufMgr->printBufferState();
-                    m_bufMgr->printBufferQState();
-                }
-                m_frameComplete(selectedFrame, false);
+                m_frameComplete(selectedFrame, false, pipeID, isSrc, dstPos, true);
                 selectedFrame = NULL;
             }
         } else {
@@ -608,9 +536,15 @@ status_t ExynosCameraFrameSelector::m_popQ(ExynosCameraList<ExynosCameraFrame *>
 }
 
 #ifdef USE_FRAMEMANAGER
-status_t ExynosCameraFrameSelector::m_frameComplete(ExynosCameraFrame *frame, bool isForcelyDelete)
+status_t ExynosCameraFrameSelector::m_frameComplete(ExynosCameraFrame *frame, bool isForcelyDelete,
+                                                        int pipeID, bool isSrc, int32_t dstPos, bool flagReleaseBuf)
 {
     int ret = OK;
+
+    if(flagReleaseBuf) {
+        m_releaseBuffer(frame, pipeID, isSrc, dstPos);
+    }
+
     if (isForcelyDelete == true) {
         ALOGD("DEBUG(%s[%d]):frame deleted forcely : isComplete(%d) count(%d) LockState(%d)",
             __FUNCTION__, __LINE__,
@@ -683,9 +617,15 @@ status_t ExynosCameraFrameSelector::m_frameComplete(ExynosCameraFrame *frame, bo
     return ret;
 }
 #else /* USE_FRAMEMANAGER */
-status_t ExynosCameraFrameSelector::m_frameComplete(ExynosCameraFrame *frame, bool isForcelyDelete)
+status_t ExynosCameraFrameSelector::m_frameComplete(ExynosCameraFrame *frame, bool isForcelyDelete,                                                  int pipeID,
+                                                        int pipeID, bool isSrc, int32_t dstPos, bool flagReleaseBuf)
 {
     int ret = OK;
+
+    if(flagReleaseBuf) {
+        m_releaseBuffer(frame, pipeID, isSrc, dstPos);
+    }
+
     if (isForcelyDelete == true) {
         ALOGD("DEBUG(%s[%d]):frame deleted forcely : isComplete(%d) count(%d) LockState(%d)",
             __FUNCTION__, __LINE__,
@@ -728,9 +668,13 @@ status_t ExynosCameraFrameSelector::m_frameComplete(ExynosCameraFrame *frame, bo
  * This function is required to remove a frame from frameHoldingList.
  */
 #ifdef USE_FRAMEMANAGER
-status_t ExynosCameraFrameSelector::m_LockedFrameComplete(ExynosCameraFrame *frame)
+status_t ExynosCameraFrameSelector::m_LockedFrameComplete(ExynosCameraFrame *frame, int pipeID,
+                                                                bool isSrc, int32_t dstPos)
 {
     int ret = OK;
+
+    m_releaseBuffer(frame, pipeID, isSrc, dstPos);
+
 #ifndef USE_FRAME_REFERENCE_COUNT
     if (frame->isComplete() == true) {
         if (frame->getFrameLockState() == true)
@@ -761,9 +705,13 @@ status_t ExynosCameraFrameSelector::m_LockedFrameComplete(ExynosCameraFrame *fra
     return ret;
 }
 #else
-status_t ExynosCameraFrameSelector::m_LockedFrameComplete(ExynosCameraFrame *frame)
+status_t ExynosCameraFrameSelector::m_LockedFrameComplete(ExynosCameraFrame *frame, int pipeID,
+                                                                bool isSrc, int32_t dstPos)
 {
     int ret = OK;
+
+    m_releaseBuffer(frame, pipeID, isSrc, dstPos);
+
     if (frame->isComplete() == true) {
         if (frame->getFrameLockState() == true)
         {
@@ -789,9 +737,9 @@ status_t ExynosCameraFrameSelector::wakeupQ(void)
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameSelector::cancelPicture(void)
+status_t ExynosCameraFrameSelector::cancelPicture(bool flagCancel)
 {
-    isCanceled = true;
+    isCanceled = flagCancel;
 
     return NO_ERROR;
 }
@@ -819,7 +767,7 @@ status_t ExynosCameraFrameSelector::m_clearList(ExynosCameraList<ExynosCameraFra
                 return INVALID_OPERATION;
             } else {
                 if (buffer.index >= 0)
-                    ret = m_bufMgr->putBuffer(buffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+                    ret = m_bufMgr->putBuffer(buffer.index, EXYNOS_CAMERA_BUFFER_POSITION_NONE);
                 if (ret < 0) {
                     ALOGE("ERR(%s[%d]):putIndex is %d", __FUNCTION__, __LINE__, buffer.index);
                     m_bufMgr->printBufferState();
@@ -838,7 +786,35 @@ status_t ExynosCameraFrameSelector::m_clearList(ExynosCameraList<ExynosCameraFra
                  * 2. If the frame is not complete, unlock it. mainThread will delete this frame.
                  */
 
-                m_frameComplete(frame, true);
+                //m_LockedFrameComplete(frame);
+
+#ifdef USE_FRAMEMANAGER
+#ifndef USE_FRAME_REFERENCE_COUNT
+                if (frame->isComplete() == true) {
+                    if (frame->getFrameLockState() == true)
+                        ALOGV("DEBUG(%s[%d]):Deallocating locked frame, count(%d)",
+                                __FUNCTION__, __LINE__, frame->getFrameCount());
+#else
+                {
+#endif
+                    if (m_frameMgr != NULL) {
+#ifdef USE_FRAME_REFERENCE_COUNT
+                        frame->decRef();
+#endif
+                        m_frameMgr->deleteFrame(frame);
+                    } else {
+                        ALOGE("ERR(%s[%d]):m_frameMgr is NULL (%d)", __FUNCTION__, __LINE__, frame->getFrameCount());
+                    }
+                }
+#else
+                if (frame->isComplete() == true) {
+                    delete frame;
+                    frame = NULL;
+                } else {
+                    if (frame->getFrameLockState() == true)
+                        frame->frameUnlock();
+                }
+#endif
             }
         }
     }

@@ -29,14 +29,20 @@ ExynosCamera1Parameters::ExynosCamera1Parameters(int cameraId, __unused bool fla
     m_halVersion = halVersion;
     m_flagDummy = flagDummy;
 
+    if (m_cameraId == CAMERA_ID_SECURE) {
+        m_cameraHiddenId = m_cameraId;
+        m_cameraId = CAMERA_ID_FRONT;
+    } else {
+        m_cameraHiddenId = -1;
+    }
+
     const char *myName = NULL;
     if (m_cameraId == CAMERA_ID_BACK) {
         if (m_flagDummy == true)
             myName = "ParametersBackDummy";
         else
             myName = "ParametersBack";
-    } else if (m_cameraId == CAMERA_ID_FRONT ||
-               m_cameraId == CAMERA_ID_BACK_1) {
+    } else if (m_cameraId == CAMERA_ID_FRONT || m_cameraId == CAMERA_ID_BACK_1) {
         if (m_flagDummy == true)
             myName = "ParametersFrontDummy";
         else
@@ -46,11 +52,7 @@ ExynosCamera1Parameters::ExynosCamera1Parameters(int cameraId, __unused bool fla
 
     m_staticInfo = createExynosCamera1SensorInfo(cameraId);
     m_useSizeTable = (m_staticInfo->sizeTableSupport) ? USE_CAMERA_SIZE_TABLE : false;
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    m_useAdaptiveCSCRecording = (cameraId == CAMERA_ID_BACK) ? USE_ADAPTIVE_CSC_RECORDING : USE_ADAPTIVE_CSC_RECORDING;
-#else
-    m_useAdaptiveCSCRecording = (cameraId == CAMERA_ID_BACK) ? USE_ADAPTIVE_CSC_RECORDING : false;
-#endif
+    m_useAdaptiveCSCRecording = (cameraId == CAMERA_ID_BACK) ? USE_ADAPTIVE_CSC_RECORDING : USE_ADAPTIVE_CSC_RECORDING_FRONT;
 
     m_dummyParameters = NULL;
     if (m_flagDummy == false)
@@ -67,20 +69,11 @@ ExynosCamera1Parameters::ExynosCamera1Parameters(int cameraId, __unused bool fla
     m_setExifFixedAttribute();
 
     m_exynosconfig = new ExynosConfigInfo();
-
-    mDebugInfo.num_of_appmarker = 1; /* Default : APP4 */
-    mDebugInfo.idx[0][0] = APP_MARKER_4; /* matching the app marker 4 */
-
-    mDebugInfo.debugSize[APP_MARKER_4] = sizeof(struct camera2_udm);
-
-    mDebugInfo.debugData[APP_MARKER_4] = new char[mDebugInfo.debugSize[APP_MARKER_4]];
-    memset((void *)mDebugInfo.debugData[APP_MARKER_4], 0, mDebugInfo.debugSize[APP_MARKER_4]);
     memset((void *)m_exynosconfig, 0x00, sizeof(struct ExynosConfigInfo));
 
-    // CAUTION!! : Initial values must be prior to setDefaultParameter() function.
+    // CAUTION!! : Initial values must be prior to setDefaultParameter() function
     // Initial Values : START
     m_use_companion = false;
-
     m_IsThumbnailCallbackOn = false;
     m_fastFpsMode = 0;
     m_previewRunning = false;
@@ -100,52 +93,31 @@ ExynosCamera1Parameters::ExynosCamera1Parameters(int cameraId, __unused bool fla
     m_flagVideoStabilization = false;
     m_flag3dnrMode = false;
     m_reprocessingBayerMode = REPROCESSING_BAYER_MODE_NONE;
-#ifdef GED_DNG
-    m_flagDNGCaptureOn = false;
-#endif
-
     m_flagCheckRecordingHint = false;
     m_zoomWithScaler = false;
-    m_currentZoomRatio = 0.0f;
-
     m_useDynamicBayer = (cameraId == CAMERA_ID_BACK) ? USE_DYNAMIC_BAYER : USE_DYNAMIC_BAYER_FRONT;
     m_useDynamicBayerVideoSnapShot =
         (cameraId == CAMERA_ID_BACK) ? USE_DYNAMIC_BAYER_VIDEO_SNAP_SHOT : USE_DYNAMIC_BAYER_VIDEO_SNAP_SHOT_FRONT;
     m_useDynamicScc = (cameraId == CAMERA_ID_BACK) ? USE_DYNAMIC_SCC_REAR : USE_DYNAMIC_SCC_FRONT;
-
     m_useFastenAeStable = false;
-
-    /* we cannot know now, whether recording mode or not */
-    /*
-    if (getRecordingHint() == true || getDualRecordingHint() == true)
-        m_usePureBayerReprocessing = (cameraId == CAMERA_ID_BACK) ? USE_PURE_BAYER_REPROCESSING_ON_RECORDING : USE_PURE_BAYER_REPROCESSING_FRONT_ON_RECORDING;
-    else
-    */
-     m_usePureBayerReprocessing = (cameraId == CAMERA_ID_BACK) ? USE_PURE_BAYER_REPROCESSING : USE_PURE_BAYER_REPROCESSING_FRONT;
-
+    m_fastenAeStableOn = false;
+    m_usePureBayerReprocessing =
+        (cameraId == CAMERA_ID_BACK) ? USE_PURE_BAYER_REPROCESSING : USE_PURE_BAYER_REPROCESSING_FRONT;
     m_enabledMsgType = 0;
-
     m_previewBufferCount = NUM_PREVIEW_BUFFERS;
-
     m_dvfsLock = false;
-
-#ifdef USE_BINNING_MODE
-    m_binningProperty = checkProperty(false);
-#endif
     m_zoom_activated = false;
-#ifdef FORCE_CAL_RELOAD
-    m_calValid = true;
-#endif
     m_flagOutPutFormatNV21Enable = false;
-
     m_exposureTimeCapture = 0;
+    m_flagHWFCEnable = isUseHWFC();
 
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    m_libraryMgr = NULL;
-#endif
+    vendorSpecificConstructor(cameraId, flagCompanion);
     // Initial Values : END
+
     setDefaultCameraInfo();
-    setDefaultParameter();
+
+    if (m_flagDummy == false)
+        setDefaultParameter();
 }
 
 ExynosCamera1Parameters::~ExynosCamera1Parameters()
@@ -162,7 +134,7 @@ ExynosCamera1Parameters::~ExynosCamera1Parameters()
 
     for(int i = 0; i < mDebugInfo.num_of_appmarker; i++) {
         if(mDebugInfo.debugData[mDebugInfo.idx[i][0]])
-                delete mDebugInfo.debugData[mDebugInfo.idx[i][0]];
+                delete[] mDebugInfo.debugData[mDebugInfo.idx[i][0]];
         mDebugInfo.debugData[mDebugInfo.idx[i][0]] = NULL;
         mDebugInfo.debugSize[mDebugInfo.idx[i][0]] = 0;
     }
@@ -182,6 +154,12 @@ ExynosCamera1Parameters::~ExynosCamera1Parameters()
         delete m_exifInfo.user_comment;
         m_exifInfo.user_comment = NULL;
     }
+#ifdef SAMSUNG_OT
+    if (m_objectTrackingArea != NULL)
+        delete[] m_objectTrackingArea;
+    if (m_objectTrackingWeight != NULL)
+        delete[] m_objectTrackingWeight;
+#endif
 
     if (m_flagDummy == false && m_dummyParameters != NULL) {
         delete m_dummyParameters;
@@ -219,12 +197,9 @@ void ExynosCamera1Parameters::setDefaultCameraInfo(void)
 bool ExynosCamera1Parameters::checkRestartPreview(const CameraParameters& params)
 {
     bool restartFlag = false;
-    CameraParameters dummyParam;
-
-    dummyParam.unflatten(params.flatten());
 
     *m_dummyParameters = *this;
-    m_dummyParameters->setRestartParameters(dummyParam);
+    m_dummyParameters->setRestartParameters(params);
     restartFlag = m_dummyParameters->getRestartPreview();
     return restartFlag;
 }
@@ -256,12 +231,23 @@ status_t ExynosCamera1Parameters::checkRecordingHint(const CameraParameters& par
 
 void ExynosCamera1Parameters::m_setRecordingHint(bool hint)
 {
+    ExynosCameraActivityAutofocus *autoFocusMgr = m_activityControl->getAutoFocusMgr();
+    ExynosCameraActivityFlash *flashMgr = m_activityControl->getFlashMgr();
+
     m_cameraInfo.recordingHint = hint;
 
     if (hint) {
         setMetaVideoMode(&m_metadata, AA_VIDEOMODE_ON);
     } else if (!hint && !getDualRecordingHint() && !getEffectRecordingHint()) {
         setMetaVideoMode(&m_metadata, AA_VIDEOMODE_OFF);
+    }
+
+    if (m_flagDummy == false) {
+        autoFocusMgr->setRecordingHint(hint);
+        /* recordinghint flag use to control m_isNeedCaptureFlash in ExynosCameraActivityFlash
+        So, flag only set for recording running
+        */
+        //flashMgr->setRecordingHint(hint);
     }
 
     /* RecordingHint is confirmed */
@@ -278,24 +264,6 @@ bool ExynosCamera1Parameters::getRecordingHint(void)
         android_printAssert(NULL, LOG_TAG, "Cannot call getRecordingHint befor setRecordingHint, assert!!!!");
 
     return m_cameraInfo.recordingHint;
-}
-
-
-status_t ExynosCamera1Parameters::checkDualMode(const CameraParameters& params)
-{
-    /* dual_mode */
-    bool flagDualMode = false;
-    int newDualMode = params.getInt("dual_mode");
-
-    if (newDualMode == 1) {
-        CLOGD("DEBUG(%s):newDualMode : %d", "setParameters", newDualMode);
-        flagDualMode = true;
-    }
-
-    setDualMode(flagDualMode);
-    m_params.set("dual_mode", newDualMode);
-
-    return NO_ERROR;
 }
 
 void ExynosCamera1Parameters::setDualMode(bool dual)
@@ -415,9 +383,11 @@ void ExynosCamera1Parameters::m_setEffectRecordingHint(bool hint)
     } else if (!hint && !getRecordingHint() && !getDualRecordingHint()) {
         setMetaVideoMode(&m_metadata, AA_VIDEOMODE_OFF);
     }
-    autoFocusMgr->setRecordingHint(hint);
-    flashMgr->setRecordingHint(hint);
 
+    if (m_flagDummy == false) {
+        autoFocusMgr->setRecordingHint(hint);
+        flashMgr->setRecordingHint(hint);
+    }
 }
 
 bool ExynosCamera1Parameters::getEffectRecordingHint(void)
@@ -444,6 +414,8 @@ status_t ExynosCamera1Parameters::checkPreviewFpsRange(const CameraParameters& p
 {
     int newMinFps = 0;
     int newMaxFps = 0;
+    int newHwMinFps = 0;
+    int newHwMaxFps = 0;
     int newFrameRate = params.getPreviewFrameRate();
     uint32_t curMinFps = 0;
     uint32_t curMaxFps = 0;
@@ -456,37 +428,47 @@ status_t ExynosCamera1Parameters::checkPreviewFpsRange(const CameraParameters& p
 
     CLOGI("INFO(%s):Original FpsRange[Min=%d, Max=%d]", __FUNCTION__, newMinFps, newMaxFps);
 
-    if (m_adjustPreviewFpsRange(newMinFps, newMaxFps) != NO_ERROR) {
+    newHwMinFps = newMinFps;
+    newHwMaxFps = newMaxFps;
+
+    if (m_adjustPreviewFpsRange(newHwMinFps, newHwMaxFps) != NO_ERROR) {
         CLOGE("Fail to adjust preview fps range");
         return INVALID_OPERATION;
     }
 
     newMinFps = newMinFps / 1000;
     newMaxFps = newMaxFps / 1000;
-    if (FRAME_RATE_MAX < newMaxFps || newMaxFps < newMinFps) {
+    newHwMinFps = newHwMinFps / 1000;
+    newHwMaxFps = newHwMaxFps / 1000;
+    if (FRAME_RATE_MAX < newHwMaxFps || newHwMaxFps < newHwMinFps) {
         CLOGE("PreviewFpsRange is out of bound");
         return INVALID_OPERATION;
     }
 
     getPreviewFpsRange(&curMinFps, &curMaxFps);
-    CLOGI("INFO(%s):curFpsRange[Min=%d, Max=%d], newFpsRange[Min=%d, Max=%d], [curFrameRate=%d]",
-        "checkPreviewFpsRange", curMinFps, curMaxFps, newMinFps, newMaxFps, m_params.getPreviewFrameRate());
+    CLOGI("INFO(%s):curFpsRange[Min=%d, Max=%d], newHWFpsRange[Min=%d, Max=%d], newFpsRange[Min=%d, Max=%d], [curFrameRate=%d]",
+        "checkPreviewFpsRange", curMinFps, curMaxFps, newHwMinFps, newHwMaxFps,
+        newMinFps, newMaxFps, m_params.getPreviewFrameRate());
 
-    if (curMinFps != (uint32_t)newMinFps || curMaxFps != (uint32_t)newMaxFps) {
-        m_setPreviewFpsRange((uint32_t)newMinFps, (uint32_t)newMaxFps);
+    if (curMinFps != (uint32_t)newMinFps || curMaxFps != (uint32_t)newMaxFps
+        || curMinFps != (uint32_t)newHwMinFps || curMaxFps != (uint32_t)newHwMaxFps) {
+        m_setPreviewFpsRange((uint32_t)newHwMinFps, (uint32_t)newHwMaxFps);
 
         char newFpsRange[256];
         memset (newFpsRange, 0, 256);
         snprintf(newFpsRange, 256, "%d,%d", newMinFps * 1000, newMaxFps * 1000);
 
         CLOGI("DEBUG(%s):set PreviewFpsRange(%s)", __FUNCTION__, newFpsRange);
-        CLOGI("DEBUG(%s):set PreviewFrameRate(curFps=%d->newFps=%d)", __FUNCTION__, m_params.getPreviewFrameRate(), newMaxFps);
+        CLOGI("DEBUG(%s):set PreviewFrameRate(curFps=%d->newFps=%d)", __FUNCTION__, m_params.getPreviewFrameRate(), newHwMaxFps);
         m_params.set(CameraParameters::KEY_PREVIEW_FPS_RANGE, newFpsRange);
         m_params.setPreviewFrameRate(newMaxFps);
     }
 
     getPreviewFpsRange(&curMinFps, &curMaxFps);
-    m_activityControl->setFpsValue(curMinFps);
+
+    if (m_flagDummy == false) {
+        m_activityControl->setFpsValue(curMinFps);
+    }
 
     /* For backword competivity */
     m_params.setPreviewFrameRate(newFrameRate);
@@ -539,13 +521,49 @@ status_t ExynosCamera1Parameters::m_adjustPreviewFpsRange(int &newMinFps, int &n
 
     if (getRecordingHint() == true) {
         flagSpecialMode = true;
-#if 0   /* Don't use to set fixed fps in the hal side. */
-        {
-            /* set fixed fps. */
-            newMinFps = newMaxFps;
-        }
-        CLOGD("DEBUG(%s[%d]):RecordingHint(true), newMaxFps=%d", __FUNCTION__, __LINE__, newMaxFps);
+
+#ifdef USE_LIMITATION_FOR_THIRD_PARTY
+        curSceneMode = getSceneMode();
+
+        switch(curSceneMode) {
+        case THIRD_PARTY_BLACKBOX_MODE:
+            CLOGI("INFO(%s): limit the maximum 30 fps range in THIRD_PARTY_BLACKBOX_MODE(%d,%d)",
+                            __FUNCTION__, newMinFps, newMaxFps);
+
+            if (newMinFps > 30000) {
+                newMinFps = 30000;
+            }
+            if (newMaxFps > 30000) {
+                newMaxFps = 30000;
+            }
+            break;
+
+        case THIRD_PARTY_VTCALL_MODE:
+            CLOGI("INFO(%s): limit the maximum 15 fps range in THIRD_PARTY_VTCALL_MODE(%d,%d)",
+                             __FUNCTION__, newMinFps, newMaxFps);
+
+            if (newMinFps > 15000) {
+                newMinFps = 15000;
+            }
+            if (newMaxFps > 15000) {
+                newMaxFps = 15000;
+            }
+            break;
+
+        case THIRD_PARTY_HANGOUT_MODE:
+            CLOGI("INFO(%s): change fps range %d,%d in THIRD_PARTY_HANGOUT_MODE",
+                             __FUNCTION__, newMinFps, newMaxFps);
+
+            newMinFps = 15000;
+            newMaxFps = 15000;
+            break;
+
+        default:
+            /* Don't use to set fixed fps in the hal side. */
+            break;
+         }
 #endif
+
         CLOGD("DEBUG(%s[%d]):RecordingHint(true),newMinFps=%d,newMaxFps=%d", __FUNCTION__, __LINE__, newMinFps, newMaxFps);
     }
 
@@ -619,6 +637,31 @@ status_t ExynosCamera1Parameters::m_adjustPreviewFpsRange(int &newMinFps, int &n
         newMinFps = 15000;
         newMaxFps = 15000;
         break;
+#ifdef USE_LIMITATION_FOR_THIRD_PARTY
+    case THIRD_PARTY_BLACKBOX_MODE:
+        CLOGI("INFO(%s): limit the maximum 30 fps range in THIRD_PARTY_BLACKBOX_MODE(%d,%d)", __FUNCTION__, newMinFps, newMaxFps);
+        if (newMinFps > 30000) {
+            newMinFps = 30000;
+        }
+        if (newMaxFps > 30000) {
+            newMaxFps = 30000;
+        }
+        break;
+    case THIRD_PARTY_VTCALL_MODE:
+        CLOGI("INFO(%s): limit the maximum 15 fps range in THIRD_PARTY_VTCALL_MODE(%d,%d)", __FUNCTION__, newMinFps, newMaxFps);
+        if (newMinFps > 15000) {
+            newMinFps = 15000;
+        }
+        if (newMaxFps > 15000) {
+            newMaxFps = 15000;
+        }
+        break;
+    case THIRD_PARTY_HANGOUT_MODE:
+        CLOGI("INFO(%s): change fps range 15000,15000 in THIRD_PARTY_HANGOUT_MODE", __FUNCTION__);
+        newMinFps = 15000;
+        newMaxFps = 15000;
+        break;
+#endif
     default:
         break;
     }
@@ -883,21 +926,22 @@ bool ExynosCamera1Parameters::m_isUHDRecordingMode(void)
 {
     bool isUHDRecording = false;
     int videoW = 0, videoH = 0;
-    ExynosRect bdsSize;
     getVideoSize(&videoW, &videoH);
-    getPreviewBdsSize(&bdsSize);
 
-    if (getRecordingHint() == true) {
-        if (videoW == 2560 && videoH == 1440 && (bdsSize.w < 2560 || bdsSize.h < 1440))
-            isUHDRecording = true;
-
-        if (videoW == 3840 && videoH == 2160)
-            isUHDRecording = true;
+    if (((videoW == 3840 && videoH == 2160) || (videoW == 2560 && videoH == 1440))
+        && getRecordingHint() == true) {
+        isUHDRecording = true;
     }
 #if 0
     /* we need to make WQHD SCP(LCD size), when FHD recording for clear rendering */
     int hwPreviewW = 0, hwPreviewH = 0;
     getHwPreviewSize(&hwPreviewW, &hwPreviewH);
+
+#ifdef SUPPORT_SW_VDIS
+    if(m_swVDIS_Mode) {
+        m_swVDIS_AdjustPreviewSize(&hwPreviewW, &hwPreviewH);
+    }
+#endif /*SUPPORT_SW_VDIS*/
 
     /* regard align margin(ex:1920x1088), check size more than 1920x1088 */
     /* if (1920 < hwPreviewW && 1080 < hwPreviewH) */
@@ -920,30 +964,6 @@ void ExynosCamera1Parameters::m_setHwVideoSize(int w, int h)
 bool ExynosCamera1Parameters::getUHDRecordingMode(void)
 {
     return m_isUHDRecordingMode();
-}
-
-bool ExynosCamera1Parameters::getFaceDetectionMode(bool flagCheckingRecording)
-{
-    bool ret = true;
-
-    /* turn off when dual mode */
-    if (getDualMode() == true)
-        ret = false;
-
-    /* turn off when vt mode */
-    if (getVtMode() != 0)
-        ret = false;
-
-    /* when stopRecording, ignore recording hint */
-    if (flagCheckingRecording == true) {
-        /* when recording mode, turn off back camera */
-        if (getRecordingHint() == true) {
-            if (getCameraId() == CAMERA_ID_BACK)
-                ret = false;
-        }
-    }
-
-    return ret;
 }
 
 void ExynosCamera1Parameters::getHwVideoSize(int *w, int *h)
@@ -989,7 +1009,7 @@ int ExynosCamera1Parameters::getVideoFormat(void)
 #else
     colorFormat = V4L2_PIX_FMT_NV21M;
     m_params.set(CameraParameters::KEY_VIDEO_FRAME_FORMAT, CameraParameters::PIXEL_FORMAT_YUV420SP_NV21);
-    CLOGI("INFO(%s[%d]):video_frame colorFormat == YUV420SP_NV21", __FUNCTION__, __LINE__);
+    CLOGV("INFO(%s[%d]):video_frame colorFormat == YUV420SP_NV21", __FUNCTION__, __LINE__);
 #endif
 
     CLOGV("DEBUG(%s)colorFormat(0x%x):", "setParameters", colorFormat);
@@ -1087,13 +1107,10 @@ status_t ExynosCamera1Parameters::checkFastFpsMode(const CameraParameters& param
                 setConfigMode(CONFIG_MODE::HIGHSPEED_240);
                 break;
         }
-        if( fastFpsMode != prevFpsMode ) {
-            setFastFpsMode(fastFpsMode);
-            m_params.set("fast-fps-mode", fastFpsMode);
-        } else {
-            CLOGI("INFO(%s):mode is not changed fastFpsMode(%d) prevFpsMode(%d)", "checkFastFpsMode", fastFpsMode, prevFpsMode);
-            return NO_ERROR;
-        }
+
+        setFastFpsMode(fastFpsMode);
+        m_params.set("fast-fps-mode", fastFpsMode);
+
         CLOGI("INFO(%s):fastFpsMode(%d) prevFpsMode(%d)", "checkFastFpsMode", fastFpsMode, prevFpsMode);
         setReallocBuffer(true);
         m_setRestartPreviewChecked(true);
@@ -1233,6 +1250,35 @@ int *ExynosCamera1Parameters::getHighSpeedSizeTable(int fpsMode) {
 
 int *ExynosCamera1Parameters::getDualModeSizeTable(void) {
     int *sizeList = NULL;
+#ifdef USE_LIVE_BROADCAST_DUAL
+    bool plb_mode = getPLBMode();
+
+    CLOGV("(%s[%d]): plb_mode(%d), BinningMode(%d)",
+            __FUNCTION__, __LINE__, plb_mode, getBinningMode());
+
+    if (plb_mode == true && getBinningMode()) {
+        int index = 0;
+
+        if (m_staticInfo->liveBroadcastSizeLut == NULL
+                || m_staticInfo->liveBroadcastSizeLutMax == 0) {
+            ALOGE("ERR(%s[%d]):liveBroadcastSizeLut is NULL", __FUNCTION__, __LINE__);
+            return sizeList;
+        }
+
+        for (index = 0; index < m_staticInfo->liveBroadcastSizeLutMax; index++) {
+            if (m_staticInfo->liveBroadcastSizeLut[index][0] == m_cameraInfo.previewSizeRatioId)
+                break;
+        }
+
+        if (m_staticInfo->liveBroadcastSizeLutMax <= index) {
+            ALOGE("ERR(%s[%d]):unsupported video ratioId(%d)",
+                    __FUNCTION__, __LINE__, m_cameraInfo.previewSizeRatioId);
+            sizeList = NULL;
+        } else {
+            sizeList = m_staticInfo->liveBroadcastSizeLut[index];
+        }
+    } else
+#endif
     {
         if (getDualRecordingHint() == true
                 && m_staticInfo->dualVideoSizeLut != NULL
@@ -1261,6 +1307,35 @@ int *ExynosCamera1Parameters::getDualModeSizeTable(void) {
 
 int *ExynosCamera1Parameters::getBnsRecordingSizeTable(void) {
     int *sizeList = NULL;
+#ifdef USE_LIVE_BROADCAST
+    bool plb_mode = getPLBMode();
+
+    CLOGV("(%s[%d]): plb_mode(%d), BinningMode(%d)",
+            __FUNCTION__, __LINE__, plb_mode, getBinningMode());
+
+    if (plb_mode == true && getBinningMode()) {
+        int index = 0;
+
+        if (m_staticInfo->liveBroadcastSizeLut == NULL
+                || m_staticInfo->liveBroadcastSizeLutMax == 0) {
+            ALOGE("ERR(%s[%d]):liveBroadcastSizeLut is NULL", __FUNCTION__, __LINE__);
+            return sizeList;
+        }
+
+        for (index = 0; index < m_staticInfo->liveBroadcastSizeLutMax; index++) {
+            if (m_staticInfo->liveBroadcastSizeLut[index][0] == m_cameraInfo.previewSizeRatioId)
+                break;
+        }
+
+        if (m_staticInfo->liveBroadcastSizeLutMax <= index) {
+            ALOGE("ERR(%s[%d]):unsupported video ratioId(%d)",
+                    __FUNCTION__, __LINE__, m_cameraInfo.previewSizeRatioId);
+            sizeList = NULL;
+        } else {
+            sizeList = m_staticInfo->liveBroadcastSizeLut[index];
+        }
+    } else
+#endif
     {
         if (m_staticInfo->videoSizeLutMax <= m_cameraInfo.previewSizeRatioId) {
             ALOGE("ERR(%s[%d]):unsupported video ratioId(%d)",
@@ -1276,6 +1351,35 @@ int *ExynosCamera1Parameters::getBnsRecordingSizeTable(void) {
 
 int *ExynosCamera1Parameters::getNormalRecordingSizeTable(void) {
     int *sizeList = NULL;
+#ifdef USE_LIVE_BROADCAST
+    bool plb_mode = getPLBMode();
+
+    CLOGV("(%s[%d]): plb_mode(%d), BinningMode(%d)",
+            __FUNCTION__, __LINE__, plb_mode, getBinningMode());
+
+    if (plb_mode == true && getBinningMode()) {
+        int index = 0;
+
+        if (m_staticInfo->liveBroadcastSizeLut == NULL
+                || m_staticInfo->liveBroadcastSizeLutMax == 0) {
+            ALOGE("ERR(%s[%d]):liveBroadcastSizeLut is NULL", __FUNCTION__, __LINE__);
+            return sizeList;
+        }
+
+        for (index = 0; index < m_staticInfo->liveBroadcastSizeLutMax; index++) {
+            if (m_staticInfo->liveBroadcastSizeLut[index][0] == m_cameraInfo.previewSizeRatioId)
+                break;
+        }
+
+        if (m_staticInfo->liveBroadcastSizeLutMax <= index) {
+            ALOGE("ERR(%s[%d]):unsupported video ratioId(%d)",
+                    __FUNCTION__, __LINE__, m_cameraInfo.previewSizeRatioId);
+            sizeList = NULL;
+        } else {
+            sizeList = m_staticInfo->liveBroadcastSizeLut[index];
+        }
+    } else
+#endif
     {
         if (m_staticInfo->videoSizeLut == NULL) {
             ALOGE("ERR(%s[%d]):videoSizeLut is NULL", __FUNCTION__, __LINE__);
@@ -1294,6 +1398,35 @@ int *ExynosCamera1Parameters::getNormalRecordingSizeTable(void) {
 
 int *ExynosCamera1Parameters::getBinningSizeTable(void) {
     int *sizeList = NULL;
+#ifdef USE_LIVE_BROADCAST
+    bool plb_mode = getPLBMode();
+
+    CLOGV("(%s[%d]): plb_mode(%d), BinningMode(%d)",
+            __FUNCTION__, __LINE__, plb_mode, getBinningMode());
+
+    if (plb_mode == true) {
+        int index = 0;
+
+        if (m_staticInfo->liveBroadcastSizeLut == NULL
+                || m_staticInfo->liveBroadcastSizeLutMax == 0) {
+            ALOGE("ERR(%s[%d]):liveBroadcastSizeLut is NULL", __FUNCTION__, __LINE__);
+            return sizeList;
+        }
+
+        for (index = 0; index < m_staticInfo->liveBroadcastSizeLutMax; index++) {
+            if (m_staticInfo->liveBroadcastSizeLut[index][0] == m_cameraInfo.previewSizeRatioId)
+                break;
+        }
+
+        if (m_staticInfo->liveBroadcastSizeLutMax <= index) {
+            ALOGE("ERR(%s[%d]):unsupported binningSize ratioId(%d)",
+                    __FUNCTION__, __LINE__, m_cameraInfo.previewSizeRatioId);
+            sizeList = NULL;
+        } else {
+            sizeList = m_staticInfo->liveBroadcastSizeLut[index];
+        }
+    } else
+#endif
     {
         /*
              VT mode
@@ -1519,7 +1652,7 @@ status_t ExynosCamera1Parameters::checkPreviewSize(const CameraParameters& param
 
     newPreviewW = previewW;
     newPreviewH = previewH;
-    if (m_adjustPreviewSize(previewW, previewH, &newPreviewW, &newPreviewH, &newCalHwPreviewW, &newCalHwPreviewH) != OK) {
+    if (m_adjustPreviewSize(params, previewW, previewH, &newPreviewW, &newPreviewH, &newCalHwPreviewW, &newCalHwPreviewH) != OK) {
         CLOGE("ERR(%s): adjustPreviewSize fail, newPreviewSize(%dx%d)", "Parameters", newPreviewW, newPreviewH);
         return BAD_VALUE;
     }
@@ -1535,20 +1668,11 @@ status_t ExynosCamera1Parameters::checkPreviewSize(const CameraParameters& param
     CLOGI("INFO(%s):Adjust Preview size(%dx%d), ratioId(%d)", "setParameters", newPreviewW, newPreviewH, m_cameraInfo.previewSizeRatioId);
     CLOGI("INFO(%s):Calibrated HwPreview size(%dx%d)", "setParameters", newCalHwPreviewW, newCalHwPreviewH);
 
-    if (getRecordingHint() == true
-        && ((videoW == 2560 && videoH == 1440) || (videoW == 3840 && videoH == 2160))
-        && (newPreviewW == videoW && newPreviewH == videoH)) {
-        /*
-          HACK: App is set the preview size same with recording size.
-                But, JF is not need that. So, preview size is not changed.
-         */
-        CLOGI("INFO(%s[%d]):Preview size is not changed, because large size recording", __FUNCTION__, __LINE__);
-        m_previewSizeChanged = false;
-    } else if (curPreviewW != newPreviewW
-               || curPreviewH != newPreviewH
-               || curHwPreviewW != newCalHwPreviewW
-               || curHwPreviewH != newCalHwPreviewH
-               || getHighResolutionCallbackMode() == true) {
+    if (curPreviewW != newPreviewW
+       || curPreviewH != newPreviewH
+       || curHwPreviewW != newCalHwPreviewW
+       || curHwPreviewH != newCalHwPreviewH
+       || getHighResolutionCallbackMode() == true) {
         m_setPreviewSize(newPreviewW, newPreviewH);
         m_setHwPreviewSize(newCalHwPreviewW, newCalHwPreviewH);
 
@@ -1580,10 +1704,16 @@ bool ExynosCamera1Parameters::m_isSupportedPreviewSize(const int width,
     int maxWidth, maxHeight = 0;
     int (*sizeList)[SIZE_OF_RESOLUTION];
 
-    if (getHighResolutionCallbackMode() == true) {
-        CLOGD("DEBUG(%s): Burst panorama mode start", __FUNCTION__);
-        m_cameraInfo.previewSizeRatioId = SIZE_RATIO_16_9;
-        return true;
+     if (getHighResolutionCallbackMode() == true) {
+        CLOGD("Check preview size in burst panorama");
+        sizeList = m_staticInfo->rearPictureList;
+        for (int i = 0; i < m_staticInfo->rearPictureListMax; i++) {
+            if (sizeList[i][0] == width && sizeList[i][1] == height) {
+                m_cameraInfo.previewSizeRatioId = sizeList[i][2];
+                return true;
+            }
+        }
+        return false;
     }
 
     getMaxPreviewSize(&maxWidth, &maxHeight);
@@ -1638,8 +1768,6 @@ bool ExynosCamera1Parameters::m_isSupportedPreviewSize(const int width,
         }
     }
 
-    CLOGE("ERR(%s):Invalid preview size(%dx%d)", __FUNCTION__, width, height);
-
     return false;
 }
 
@@ -1650,53 +1778,54 @@ status_t ExynosCamera1Parameters::m_getPreviewSizeList(int *sizeList)
     if (getDualMode() == true) {
         tempSizeList = getDualModeSizeTable();
     } else { /* getDualMode() == false */
-        if (getRecordingHint() == true) {
-            int videoW = 0, videoH = 0;
-            getVideoSize(&videoW, &videoH);
-            if (getHighSpeedRecording() == true) {
-                int fpsmode = 0;
-                fpsmode = getConfigMode();
-                tempSizeList = getHighSpeedSizeTable(fpsmode);
-
-                if (tempSizeList == NULL) {
-                    fpsmode = getFastFpsMode();
-
-                    if (fpsmode <= 0) {
-                        CLOGE("ERR(%s[%d]):getFastFpsMode fpsmode(%d) fail", __FUNCTION__, __LINE__, fpsmode);
-                        return BAD_VALUE;
-                    } else if (m_staticInfo->videoSizeLutHighSpeed == NULL) {
-                        CLOGE("ERR(%s[%d]):videoSizeLutHighSpeed is NULL", __FUNCTION__, __LINE__);
-                        return INVALID_OPERATION;
-                    }
-
-                    fpsmode--;
-                    tempSizeList = m_staticInfo->videoSizeLutHighSpeed[fpsmode];
-                }
-            }
-#ifdef USE_BNS_RECORDING
-            else if (m_staticInfo->videoSizeBnsLut != NULL
-                     && videoW == 1920 && videoH == 1080) /* Use BNS Recording only for FHD(16:9) */
-                tempSizeList = getBnsRecordingSizeTable();
-#endif
-            else /* Normal Recording Mode */
-                tempSizeList = getNormalRecordingSizeTable();
-        }
 #ifdef USE_BINNING_MODE
-        else if (getBinningMode() == true) {
+        if (getBinningMode() == true) {
             tempSizeList = getBinningSizeTable();
-        }
+        } else
 #endif
-        else { /* Use Preview LUT */
-            if (m_staticInfo->previewSizeLut == NULL) {
-                CLOGE("ERR(%s[%d]):previewSizeLut is NULL", __FUNCTION__, __LINE__);
-                return INVALID_OPERATION;
-            } else if (m_staticInfo->previewSizeLutMax <= m_cameraInfo.previewSizeRatioId) {
-                CLOGE("ERR(%s[%d]):unsupported preview ratioId(%d)",
-                        __FUNCTION__, __LINE__, m_cameraInfo.previewSizeRatioId);
-                return BAD_VALUE;
-            }
+        {
+            if (getRecordingHint() == true) {
+                int videoW = 0, videoH = 0;
+                getVideoSize(&videoW, &videoH);
+                if (getHighSpeedRecording() == true) {
+                    int fpsmode = 0;
+                    fpsmode = getConfigMode();
+                    tempSizeList = getHighSpeedSizeTable(fpsmode);
 
-            tempSizeList = m_staticInfo->previewSizeLut[m_cameraInfo.previewSizeRatioId];
+                    if (tempSizeList == NULL) {
+                        fpsmode = getFastFpsMode();
+
+                        if (fpsmode <= 0) {
+                            CLOGE("ERR(%s[%d]):getFastFpsMode fpsmode(%d) fail", __FUNCTION__, __LINE__, fpsmode);
+                            return BAD_VALUE;
+                        } else if (m_staticInfo->videoSizeLutHighSpeed == NULL) {
+                            CLOGE("ERR(%s[%d]):videoSizeLutHighSpeed is NULL", __FUNCTION__, __LINE__);
+                            return INVALID_OPERATION;
+                        }
+
+                        fpsmode--;
+                        tempSizeList = m_staticInfo->videoSizeLutHighSpeed[fpsmode];
+                    }
+                }
+#ifdef USE_BNS_RECORDING
+                else if (m_staticInfo->videoSizeBnsLut != NULL
+                         && videoW == 1920 && videoH == 1080) /* Use BNS Recording only for FHD(16:9) */
+                    tempSizeList = getBnsRecordingSizeTable();
+#endif
+                else /* Normal Recording Mode */
+                    tempSizeList = getNormalRecordingSizeTable();
+            } else { /* Use Preview LUT */
+                if (m_staticInfo->previewSizeLut == NULL) {
+                    CLOGE("ERR(%s[%d]):previewSizeLut is NULL", __FUNCTION__, __LINE__);
+                    return INVALID_OPERATION;
+                } else if (m_staticInfo->previewSizeLutMax <= m_cameraInfo.previewSizeRatioId) {
+                    CLOGE("ERR(%s[%d]):unsupported preview ratioId(%d)",
+                            __FUNCTION__, __LINE__, m_cameraInfo.previewSizeRatioId);
+                    return BAD_VALUE;
+                }
+
+                tempSizeList = m_staticInfo->previewSizeLut[m_cameraInfo.previewSizeRatioId];
+            }
         }
     }
 
@@ -1799,6 +1928,7 @@ status_t ExynosCamera1Parameters::checkPreviewFormat(const CameraParameters& par
     const char *strNewPreviewFormat = params.getPreviewFormat();
     const char *strCurPreviewFormat = m_params.getPreviewFormat();
     int curHwPreviewFormat = getHwPreviewFormat();
+    int curPreviewFormat = getPreviewFormat();
     int newPreviewFormat = 0;
     int hwPreviewFormat = 0;
 
@@ -1827,9 +1957,23 @@ status_t ExynosCamera1Parameters::checkPreviewFormat(const CameraParameters& par
 
     m_setPreviewFormat(newPreviewFormat);
     m_params.setPreviewFormat(strNewPreviewFormat);
+
+#ifdef USE_MCSC1_FOR_PREVIEWCALLBACK
+    if (curPreviewFormat != newPreviewFormat) {
+        CLOGI("INFO(%s[%d]): preview format changed cur(%s) -> new(%s)", "Parameters",
+            __LINE__, strCurPreviewFormat, strNewPreviewFormat);
+
+        if (getPreviewRunning() == true) {
+            CLOGD("DEBUG(%s[%d]):setRestartPreviewChecked true", __FUNCTION__, __LINE__);
+            m_setRestartPreviewChecked(true);
+        }
+    }
+#endif
+
     if (curHwPreviewFormat != hwPreviewFormat) {
         m_setHwPreviewFormat(hwPreviewFormat);
-        CLOGI("INFO(%s[%d]): preview format changed cur(%s) -> new(%s)", "Parameters", __LINE__, strCurPreviewFormat, strNewPreviewFormat);
+        CLOGI("INFO(%s[%d]): preview format changed cur(%s) -> new(%s)", "Parameters",
+            __LINE__, strCurPreviewFormat, strNewPreviewFormat);
 
         if (getPreviewRunning() == true) {
             CLOGD("DEBUG(%s[%d]):setRestartPreviewChecked true", __FUNCTION__, __LINE__);
@@ -1928,7 +2072,7 @@ void ExynosCamera1Parameters::getHwPreviewSize(int *w, int *h)
         *w = m_cameraInfo.hwPreviewW;
         *h = m_cameraInfo.hwPreviewH;
     } else {
-        int newSensorW  = 0;
+        int newSensorW = 0;
         int newSensorH = 0;
         m_getScalableSensorSize(&newSensorW, &newSensorH);
 
@@ -2049,7 +2193,11 @@ void ExynosCamera1Parameters::updateBnsScaleRatio(void)
         return;
 
     getPreviewSize(&curPreviewW, &curPreviewH);
-    if (getDualMode() == true) {
+    if (getDualMode() == true
+#ifdef USE_LIVE_BROADCAST_DUAL
+        && !getPLBMode()
+#endif
+       ) {
 #if defined(USE_BNS_DUAL_PREVIEW) || defined(USE_BNS_DUAL_RECORDING)
 #ifdef DUAL_BNS_RATIO
         bnsRatio = DUAL_BNS_RATIO;
@@ -2342,15 +2490,6 @@ status_t ExynosCamera1Parameters::checkPictureSize(const CameraParameters& param
 #endif
     }
 
-#ifdef GED_DNG
-    /* SensorSize Size */
-    int maxSensorW = 0, maxSensorH = 0;
-    getMaxSensorSize(&maxSensorW, &maxSensorH);
-
-    m_params.set("sensor-size-width", maxSensorW);
-    m_params.set("sensor-size-height", maxSensorH);
-#endif
-
     return NO_ERROR;
 }
 
@@ -2395,6 +2534,20 @@ status_t ExynosCamera1Parameters::m_adjustPictureSize(int *newPictureW, int *new
         }
         *newHwPictureW = newW;
         *newHwPictureH = newH;
+
+#ifdef FIXED_SENSOR_SIZE
+        /*
+         * sensor crop size:
+         * sensor crop is only used at 16:9 aspect ratio in picture size.
+         */
+        if (getSamsungCamera() == true) {
+            if (((float)*newPictureW / (float)*newPictureH) == ((float)16 / (float)9)) {
+                CLOGD("(%s): Use sensor crop (ratio: %f)",
+                        __FUNCTION__, ((float)*newPictureW / (float)*newPictureH));
+                m_setHwSensorSize(newW, newH);
+            }
+        }
+#endif
     }
 
     return NO_ERROR;
@@ -2530,15 +2683,7 @@ void ExynosCamera1Parameters::m_setHwPictureFormat(int fmt)
 
 int ExynosCamera1Parameters::getHwPictureFormat(void)
 {
-    int format = m_cameraInfo.hwPictureFormat;
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    if (getOutPutFormatNV21Enable() == true) {
-        format = V4L2_PIX_FMT_NV21;
-    }
-#endif
-
-    return format;
+    return m_cameraInfo.hwPictureFormat;
 }
 
 status_t ExynosCamera1Parameters::checkJpegQuality(const CameraParameters& params)
@@ -2812,11 +2957,6 @@ status_t ExynosCamera1Parameters::checkZoomLevel(const CameraParameters& params)
     int curZoom = 0;
 
     CLOGD("DEBUG(%s):newZoom %d", "setParameters", newZoom);
-
-    if (getHighResolutionCallbackMode()) {
-        CLOGD("DEBUG(%s):zoom doesn't supported in the highResolution", __FUNCTION__);
-        return NO_ERROR;
-    }
 
     /* cannot support DZoom -> set Zoom Level 0 */
     if (getZoomSupported() == false) {
@@ -3191,6 +3331,10 @@ status_t ExynosCamera1Parameters::checkMeteringAreas(const CameraParameters& par
         }
     }
 
+    if(getSamsungCamera()) {
+        maxNumMeteringAreas = 1;
+    }
+
     if (maxNumMeteringAreas <= 0) {
         CLOGD("DEBUG(%s): meterin area is not supported", "Parameters");
         return NO_ERROR;
@@ -3345,8 +3489,12 @@ status_t ExynosCamera1Parameters::checkAntibanding(const CameraParameters& param
     int curAntibanding = -1;
 
     const char *strKeyAntibanding = params.get(CameraParameters::KEY_ANTIBANDING);
+#ifdef USE_CSC_FEATURE
+    CLOGD("DEBUG(%s):m_antiBanding %s", "setParameters", m_antiBanding);
+    const char *strNewAntibanding = m_adjustAntibanding(m_antiBanding);
+#else
     const char *strNewAntibanding = m_adjustAntibanding(strKeyAntibanding);
-
+#endif
 
     if (strNewAntibanding == NULL) {
         return NO_ERROR;
@@ -3372,7 +3520,7 @@ status_t ExynosCamera1Parameters::checkAntibanding(const CameraParameters& param
         m_setAntibanding(newAntibanding);
 
     if (strKeyAntibanding != NULL)
-        m_params.set(CameraParameters::KEY_ANTIBANDING, strKeyAntibanding);
+        m_params.set(CameraParameters::KEY_ANTIBANDING, strKeyAntibanding); // HAL test (Ext_SecCameraParametersTest_testSetAntibanding_P01)
 
     return NO_ERROR;
 }
@@ -3408,6 +3556,77 @@ int ExynosCamera1Parameters::getSupportedAntibanding(void)
 {
     return m_staticInfo->antiBandingList;
 }
+
+#ifdef USE_CSC_FEATURE
+void ExynosCamera1Parameters::m_getAntiBandingFromLatinMCC(char *temp_str)
+{
+    char value[PROPERTY_VALUE_MAX];
+    char country_value[10];
+
+    memset(value, 0x00, sizeof(value));
+    memset(country_value, 0x00, sizeof(country_value));
+    if (!property_get("gsm.operator.numeric", value,"")) {
+        strcpy(temp_str, CameraParameters::ANTIBANDING_60HZ);
+        return ;
+    }
+    memcpy(country_value, value, 3);
+
+    /** MCC Info. Jamaica : 338 / Argentina : 722 / Chile : 730 / Paraguay : 744 / Uruguay : 748  **/
+    if (strstr(country_value,"338") || strstr(country_value,"722") || strstr(country_value,"730") || strstr(country_value,"744") || strstr(country_value,"748"))
+        strcpy(temp_str, CameraParameters::ANTIBANDING_50HZ);
+    else
+        strcpy(temp_str, CameraParameters::ANTIBANDING_60HZ);
+}
+
+int ExynosCamera1Parameters::m_IsLatinOpenCSC()
+{
+    char sales_code[PROPERTY_VALUE_MAX] = {0};
+    property_get("ro.csc.sales_code", sales_code, "");
+    if (strstr(sales_code,"TFG") || strstr(sales_code,"TPA") || strstr(sales_code,"TTT") || strstr(sales_code,"JDI") || strstr(sales_code,"PCI") )
+        return 1;
+    else
+        return 0;
+}
+
+void ExynosCamera1Parameters::m_chooseAntiBandingFrequency()
+{
+    status_t ret = NO_ERROR;
+    int LatinOpenCSClength = 5;
+    char *LatinOpenCSCstr = NULL;
+    char *CSCstr = NULL;
+    const char *defaultStr = "50hz";
+
+    if (m_IsLatinOpenCSC()) {
+        LatinOpenCSCstr = (char *)malloc(LatinOpenCSClength);
+        if (LatinOpenCSCstr == NULL) {
+            CLOGE("LatinOpenCSCstr is NULL");
+            CSCstr = (char *)defaultStr;
+            memset(m_antiBanding, 0, sizeof(m_antiBanding));
+            strcpy(m_antiBanding, CSCstr);
+            return;
+        }
+        memset(LatinOpenCSCstr, 0, LatinOpenCSClength);
+
+        m_getAntiBandingFromLatinMCC(LatinOpenCSCstr);
+        CSCstr = LatinOpenCSCstr;
+    } else {
+        CSCstr = (char *)SecNativeFeature::getInstance()->getString("CscFeature_Camera_CameraFlicker");
+    }
+
+    if (CSCstr == NULL || strlen(CSCstr) == 0) {
+        CSCstr = (char *)defaultStr;
+    }
+
+    memset(m_antiBanding, 0, sizeof(m_antiBanding));
+    strcpy(m_antiBanding, CSCstr);
+    CLOGD("m_antiBanding = %s",m_antiBanding);
+
+    if (LatinOpenCSCstr != NULL) {
+        free(LatinOpenCSCstr);
+        LatinOpenCSCstr = NULL;
+    }
+}
+#endif
 
 int ExynosCamera1Parameters::getSceneMode(void)
 {
@@ -3451,53 +3670,6 @@ int ExynosCamera1Parameters::getSupportedFocusModes(void)
     return m_staticInfo->focusModeList;
 }
 
-status_t ExynosCamera1Parameters::checkFlashMode(const CameraParameters& params)
-{
-    int  newFlashMode = -1;
-    int  curFlashMode = -1;
-    const char *strFlashMode = params.get(CameraParameters::KEY_FLASH_MODE);
-    const char *strNewFlashMode = m_adjustFlashMode(strFlashMode);
-
-    if (strNewFlashMode == NULL) {
-        return NO_ERROR;
-    }
-
-    CLOGD("DEBUG(%s):strNewFlashMode %s", "setParameters", strNewFlashMode);
-
-    if (!strcmp(strNewFlashMode, CameraParameters::FLASH_MODE_OFF))
-        newFlashMode = FLASH_MODE_OFF;
-    else if (!strcmp(strNewFlashMode, CameraParameters::FLASH_MODE_AUTO))
-        newFlashMode = FLASH_MODE_AUTO;
-    else if (!strcmp(strNewFlashMode, CameraParameters::FLASH_MODE_ON))
-        newFlashMode = FLASH_MODE_ON;
-    else if (!strcmp(strNewFlashMode, CameraParameters::FLASH_MODE_RED_EYE))
-        newFlashMode = FLASH_MODE_RED_EYE;
-    else if (!strcmp(strNewFlashMode, CameraParameters::FLASH_MODE_TORCH))
-        newFlashMode = FLASH_MODE_TORCH;
-    else {
-        CLOGE("ERR(%s):unmatched flash_mode(%s), turn off flash", __FUNCTION__, strNewFlashMode);
-        newFlashMode = FLASH_MODE_OFF;
-        strNewFlashMode = CameraParameters::FLASH_MODE_OFF;
-        return BAD_VALUE;
-    }
-
-#ifndef UNSUPPORT_FLASH
-    if (!(newFlashMode & getSupportedFlashModes())) {
-        CLOGE("ERR(%s[%d]): Flash mode(%s) is not supported!", __FUNCTION__, __LINE__, strNewFlashMode);
-        return BAD_VALUE;
-    }
-#endif
-
-    curFlashMode = getFlashMode();
-
-    if (curFlashMode != newFlashMode) {
-        m_setFlashMode(newFlashMode);
-        m_params.set(CameraParameters::KEY_FLASH_MODE, strNewFlashMode);
-    }
-
-    return NO_ERROR;
-}
-
 const char *ExynosCamera1Parameters::m_adjustFlashMode(const char *flashMode)
 {
     int sceneMode = getSceneMode();
@@ -3508,14 +3680,6 @@ const char *ExynosCamera1Parameters::m_adjustFlashMode(const char *flashMode)
     newFlashMode = flashMode;
 
     return newFlashMode;
-}
-
-void ExynosCamera1Parameters::m_setFlashMode(int flashMode)
-{
-    m_cameraInfo.flashMode = flashMode;
-
-    /* TODO: Notity flash activity */
-    m_activityControl->setFlashMode(flashMode);
 }
 
 int ExynosCamera1Parameters::getFlashMode(void)
@@ -3589,6 +3753,8 @@ const char *ExynosCamera1Parameters::m_adjustWhiteBalanceMode(const char *whiteB
     const char *newWhiteBalance = NULL;
 
     /* TODO: vendor specific adjust */
+
+    /* TN' feautre can change whiteBalance even if Non SCENE_MODE_AUTO */
 
     newWhiteBalance = whiteBalance;
 
@@ -3730,6 +3896,52 @@ bool ExynosCamera1Parameters::getAutoWhiteBalanceLock(void)
     return m_cameraInfo.autoWhiteBalanceLock;
 }
 
+#ifdef SAMSUNG_FOOD_MODE
+status_t ExynosCamera1Parameters::checkWbLevel(const CameraParameters& params)
+{
+    int32_t newWbLevel = params.getInt("wb-level");
+    int32_t curWbLevel = getWbLevel();
+    const char *strNewSceneMode = params.get(CameraParameters::KEY_SCENE_MODE);
+    int minWbLevel = -4, maxWbLevel = 4;
+
+    if (strNewSceneMode == NULL) {
+        CLOGE("ERR(%s):strNewSceneMode is NULL.", __FUNCTION__);
+        return NO_ERROR;
+    }
+
+    if (!strcmp(strNewSceneMode, "food")) {
+        if ((newWbLevel < minWbLevel) || (newWbLevel > maxWbLevel)) {
+            ALOGE("ERR(%s): Invalid WbLevel (Min: %d, Max: %d, Value: %d)", __FUNCTION__,
+                    minWbLevel, maxWbLevel, newWbLevel);
+            return BAD_VALUE;
+        }
+
+        ALOGD("DEBUG(%s):newWbLevel %d", "setParameters", newWbLevel);
+
+        if (curWbLevel != newWbLevel) {
+            m_setWbLevel(newWbLevel);
+            m_params.set("wb-level", newWbLevel);
+        }
+    }
+
+    return NO_ERROR;
+}
+
+void ExynosCamera1Parameters::m_setWbLevel(int32_t value)
+{
+    setMetaCtlWbLevel(&m_metadata, value + IS_WBLEVEL_DEFAULT + FW_CUSTOM_OFFSET);
+}
+
+int32_t ExynosCamera1Parameters::getWbLevel(void)
+{
+    int32_t wbLevel;
+
+    getMetaCtlWbLevel(&m_metadata, &wbLevel);
+
+    return wbLevel - IS_WBLEVEL_DEFAULT - FW_CUSTOM_OFFSET;
+}
+#endif
+
 status_t ExynosCamera1Parameters::checkWbKelvin(const CameraParameters& params)
 {
     int32_t newWbKelvin = params.getInt("wb-k");
@@ -3800,8 +4012,8 @@ void ExynosCamera1Parameters::getFocusAreas(int *validFocusArea, ExynosRect2 *re
 
 status_t ExynosCamera1Parameters::checkColorEffectMode(const CameraParameters& params)
 {
-    aa_effect_mode_t newEffectMode = AA_EFFECT_OFF;
-    aa_effect_mode_t curEffectMode = AA_EFFECT_OFF;
+    int newEffectMode = EFFECT_NONE;
+    int curEffectMode = EFFECT_NONE;
     const char *strNewEffectMode = params.get(CameraParameters::KEY_EFFECT);
 
     if (strNewEffectMode == NULL) {
@@ -3811,31 +4023,31 @@ status_t ExynosCamera1Parameters::checkColorEffectMode(const CameraParameters& p
     CLOGD("DEBUG(%s):strNewEffectMode %s", "setParameters", strNewEffectMode);
 
     if (!strcmp(strNewEffectMode, CameraParameters::EFFECT_NONE)) {
-        newEffectMode = AA_EFFECT_OFF;
+        newEffectMode = EFFECT_NONE;
     } else if (!strcmp(strNewEffectMode, CameraParameters::EFFECT_MONO)) {
-        newEffectMode = AA_EFFECT_MONO;
+        newEffectMode = EFFECT_MONO;
     } else if (!strcmp(strNewEffectMode, CameraParameters::EFFECT_NEGATIVE)) {
-        newEffectMode = AA_EFFECT_NEGATIVE;
+        newEffectMode = EFFECT_NEGATIVE;
     } else if (!strcmp(strNewEffectMode, CameraParameters::EFFECT_SOLARIZE)) {
-        newEffectMode = AA_EFFECT_SOLARIZE;
+        newEffectMode = EFFECT_SOLARIZE;
     } else if (!strcmp(strNewEffectMode, CameraParameters::EFFECT_SEPIA)) {
-        newEffectMode = AA_EFFECT_SEPIA;
+        newEffectMode = EFFECT_SEPIA;
     } else if (!strcmp(strNewEffectMode, CameraParameters::EFFECT_POSTERIZE)) {
-        newEffectMode = AA_EFFECT_POSTERIZE;
+        newEffectMode = EFFECT_POSTERIZE;
     } else if (!strcmp(strNewEffectMode, CameraParameters::EFFECT_WHITEBOARD)) {
-        newEffectMode = AA_EFFECT_WHITEBOARD;
+        newEffectMode = EFFECT_WHITEBOARD;
     } else if (!strcmp(strNewEffectMode, CameraParameters::EFFECT_BLACKBOARD)) {
-        newEffectMode = AA_EFFECT_BLACKBOARD;
+        newEffectMode = EFFECT_BLACKBOARD;
     } else if (!strcmp(strNewEffectMode, CameraParameters::EFFECT_AQUA)) {
-        newEffectMode = AA_EFFECT_AQUA;
+        newEffectMode = EFFECT_AQUA;
     } else if (!strcmp(strNewEffectMode, CameraParameters::EFFECT_POINT_BLUE)) {
-        newEffectMode = AA_EFFECT_BLUE_POINT;
+        newEffectMode = EFFECT_BLUE;
     } else if (!strcmp(strNewEffectMode, "point-red-yellow")) {
-        newEffectMode = AA_EFFECT_RED_YELLOW_POINT;
+        newEffectMode = EFFECT_RED_YELLOW;
     } else if (!strcmp(strNewEffectMode, "vintage-cold")) {
-        newEffectMode = AA_EFFECT_COLD_VINTAGE;
+        newEffectMode = EFFECT_COLD_VINTAGE;
     } else if (!strcmp(strNewEffectMode, "beauty" )) {
-        newEffectMode = AA_EFFECT_BEAUTY_FACE;
+        newEffectMode = EFFECT_BEAUTY_FACE;
     } else {
         CLOGE("ERR(%s):Invalid effect(%s)", __FUNCTION__, strNewEffectMode);
         return BAD_VALUE;
@@ -3857,16 +4069,117 @@ status_t ExynosCamera1Parameters::checkColorEffectMode(const CameraParameters& p
     return NO_ERROR;
 }
 
-void ExynosCamera1Parameters::m_setColorEffectMode(aa_effect_mode_t effect)
+void ExynosCamera1Parameters::m_setColorEffectMode(int effect)
 {
-    setMetaCtlAaEffect(&m_metadata, effect);
+    aa_effect_mode_t newEffect;
+
+    switch(effect) {
+    case EFFECT_NONE:
+        newEffect = AA_EFFECT_OFF;
+        break;
+    case EFFECT_MONO:
+        newEffect = AA_EFFECT_MONO;
+        break;
+    case EFFECT_NEGATIVE:
+        newEffect = AA_EFFECT_NEGATIVE;
+        break;
+    case EFFECT_SOLARIZE:
+        newEffect = AA_EFFECT_SOLARIZE;
+        break;
+    case EFFECT_SEPIA:
+        newEffect = AA_EFFECT_SEPIA;
+        break;
+    case EFFECT_POSTERIZE:
+        newEffect = AA_EFFECT_POSTERIZE;
+        break;
+    case EFFECT_WHITEBOARD:
+        newEffect = AA_EFFECT_WHITEBOARD;
+        break;
+    case EFFECT_BLACKBOARD:
+        newEffect = AA_EFFECT_BLACKBOARD;
+        break;
+    case EFFECT_AQUA:
+        newEffect = AA_EFFECT_AQUA;
+        break;
+    case EFFECT_RED_YELLOW:
+        newEffect = AA_EFFECT_RED_YELLOW_POINT;
+        break;
+    case EFFECT_BLUE:
+        newEffect = AA_EFFECT_BLUE_POINT;
+        break;
+    case EFFECT_WARM_VINTAGE:
+        newEffect = AA_EFFECT_WARM_VINTAGE;
+        break;
+    case EFFECT_COLD_VINTAGE:
+        newEffect = AA_EFFECT_COLD_VINTAGE;
+        break;
+    case EFFECT_BEAUTY_FACE:
+        newEffect = AA_EFFECT_BEAUTY_FACE;
+        break;
+    default:
+        newEffect = AA_EFFECT_OFF;
+        CLOGE("ERR(%s[%d]):Color Effect mode(%d) is not supported", __FUNCTION__, __LINE__, effect);
+        break;
+    }
+    setMetaCtlAaEffect(&m_metadata, newEffect);
 }
 
-aa_effect_mode_t ExynosCamera1Parameters::getColorEffectMode(void)
+int ExynosCamera1Parameters::getColorEffectMode(void)
 {
-    aa_effect_mode_t effect;
+    aa_effect_mode_t curEffect;
+    int effect;
 
-    getMetaCtlAaEffect(&m_metadata, &effect);
+    getMetaCtlAaEffect(&m_metadata, &curEffect);
+
+    switch(curEffect) {
+    case AA_EFFECT_OFF:
+        effect = EFFECT_NONE;
+        break;
+    case AA_EFFECT_MONO:
+        effect = EFFECT_MONO;
+        break;
+    case AA_EFFECT_NEGATIVE:
+        effect = EFFECT_NEGATIVE;
+        break;
+    case AA_EFFECT_SOLARIZE:
+        effect = EFFECT_SOLARIZE;
+        break;
+    case AA_EFFECT_SEPIA:
+        effect = EFFECT_SEPIA;
+        break;
+    case AA_EFFECT_POSTERIZE:
+        effect = EFFECT_POSTERIZE;
+        break;
+    case AA_EFFECT_WHITEBOARD:
+        effect = EFFECT_WHITEBOARD;
+        break;
+    case AA_EFFECT_BLACKBOARD:
+        effect = EFFECT_BLACKBOARD;
+        break;
+    case AA_EFFECT_AQUA:
+        effect = EFFECT_AQUA;
+        break;
+    case AA_EFFECT_RED_YELLOW_POINT:
+        effect = EFFECT_RED_YELLOW;
+        break;
+    case AA_EFFECT_BLUE_POINT:
+        effect = EFFECT_BLUE;
+        break;
+    case AA_EFFECT_WARM_VINTAGE:
+        effect = EFFECT_WARM_VINTAGE;
+        break;
+    case AA_EFFECT_COLD_VINTAGE:
+        effect = EFFECT_COLD_VINTAGE;
+        break;
+    case AA_EFFECT_BEAUTY_FACE:
+        effect = EFFECT_BEAUTY_FACE;
+        break;
+    default:
+        effect = 0;
+        CLOGE("ERR(%s[%d]):Color Effect mode(%d) is invalid value", __FUNCTION__, __LINE__, curEffect);
+        break;
+    }
+
     return effect;
 }
 
@@ -3875,15 +4188,15 @@ int ExynosCamera1Parameters::getSupportedColorEffects(void)
     return m_staticInfo->effectList;
 }
 
-bool ExynosCamera1Parameters::isSupportedColorEffects(aa_effect_mode_t effectMode)
+bool ExynosCamera1Parameters::isSupportedColorEffects(int effectMode)
 {
     int ret = false;
 
-    if (EFFECTMODE_META_2_HAL(effectMode) & getSupportedColorEffects()) {
+    if (effectMode & getSupportedColorEffects()) {
         return true;
     }
 
-    if (EFFECTMODE_META_2_HAL(effectMode) & m_staticInfo->hiddenEffectList) {
+    if (effectMode & m_staticInfo->hiddenEffectList) {
         return true;
     }
 
@@ -4198,7 +4511,7 @@ status_t ExynosCamera1Parameters::checkBrightness(const CameraParameters& params
     int minBrightness = params.getInt("brightness-min");
     int newBrightness = params.getInt("brightness");
     int curBrightness = -1;
-    int curEffectMode = AA_EFFECT_OFF;//EFFECT_NONE;
+    int curEffectMode = EFFECT_NONE;
 
     CLOGD("DEBUG(%s):newBrightness %d", "setParameters", newBrightness);
 
@@ -4288,7 +4601,12 @@ status_t ExynosCamera1Parameters::checkSharpness(const CameraParameters& params)
     }
 
     curEffectMode = getColorEffectMode();
-    if(curEffectMode == EFFECT_BEAUTY_FACE) {
+    if(curEffectMode == EFFECT_BEAUTY_FACE
+#if 0
+//#ifdef SAMSUNG_FOOD_MODE
+        || (getSceneMode() == SCENE_MODE_FOOD)
+#endif
+        ) {
         return NO_ERROR;
     }
 
@@ -4451,9 +4769,6 @@ status_t ExynosCamera1Parameters::checkIso(const CameraParameters& params)
     }
 
     curISO = getIso();
-#ifdef GED_DNG
-    m_params.set("integer-iso", curISO);
-#endif
 
     if (curISO != newISO) {
         m_setIso(newISO);
@@ -4561,10 +4876,12 @@ void ExynosCamera1Parameters::m_setHdrMode(bool hdr)
 {
     m_cameraInfo.hdrMode = hdr;
 
+#ifdef CAMERA_GED_FEATURE
     if (hdr == true)
         m_setShotMode(SHOT_MODE_RICH_TONE);
     else
         m_setShotMode(SHOT_MODE_NORMAL);
+#endif
 
     m_activityControl->setHdrMode(hdr);
 }
@@ -4716,7 +5033,11 @@ bool ExynosCamera1Parameters::m_adjustScalableSensorMode(const int scaleMode)
         adjustedScaleMode = true;
 
 
-    if (getDualMode() == true) {
+    if (getDualMode() == true
+#ifdef USE_LIVE_BROADCAST_DUAL
+        && (plb_mode != true || (plb_mode == true && camera_id == CAMERA_ID_FRONT))
+#endif
+       ) {
         adjustedScaleMode = true;
     }
 
@@ -4913,9 +5234,13 @@ uint32_t ExynosCamera1Parameters::getMaxNumMeteringAreas(void)
 int ExynosCamera1Parameters::getMaxZoomLevel(void)
 {
     int zoomLevel = 0;
+    int samsungCamera = getSamsungCamera();
 
-    zoomLevel = m_staticInfo->maxBasicZoomLevel;
-
+    if (samsungCamera || m_cameraId == CAMERA_ID_FRONT) {
+        zoomLevel = m_staticInfo->maxZoomLevel;
+    } else {
+        zoomLevel = m_staticInfo->maxBasicZoomLevel;
+    }
     return zoomLevel;
 }
 
@@ -5135,37 +5460,6 @@ int ExynosCamera1Parameters::getFlipVertical(void)
     return m_cameraInfo.flipVertical;
 }
 
-bool ExynosCamera1Parameters::getCallbackNeedCSC(void)
-{
-    bool ret = true;
-
-    int previewW = 0, previewH = 0;
-    int hwPreviewW = 0, hwPreviewH = 0;
-    int previewFormat = getPreviewFormat();
-
-    getPreviewSize(&previewW, &previewH);
-    getHwPreviewSize(&hwPreviewW, &hwPreviewH);
-    if ((previewW == hwPreviewW)&&
-        (previewH == hwPreviewH)&&
-        (previewFormat == V4L2_PIX_FMT_NV21)) {
-        ret = false;
-    }
-    return ret;
-}
-
-bool ExynosCamera1Parameters::getCallbackNeedCopy2Rendering(void)
-{
-    bool ret = false;
-
-    int previewW = 0, previewH = 0;
-
-    getPreviewSize(&previewW, &previewH);
-    if (previewW * previewH <= 1920*1080)
-        ret = true;
-
-    return ret;
-}
-
 bool ExynosCamera1Parameters::setDeviceOrientation(int orientation)
 {
     if (orientation < 0 || orientation % 90 != 0) {
@@ -5208,7 +5502,11 @@ void ExynosCamera1Parameters::getSetfileYuvRange(bool flagReprocessing, int *set
         *setfile = m_setfileReprocessing;
         *yuvRange = m_yuvRangeReprocessing;
     } else {
-        *setfile = m_setfile;
+        if (getFastenAeStableOn()) {
+            *setfile = ISS_SUB_SCENARIO_STILL_PREVIEW;
+        } else {
+            *setfile = m_setfile;
+        }
         *yuvRange = m_yuvRange;
     }
 }
@@ -5290,6 +5588,18 @@ void ExynosCamera1Parameters::setUseFastenAeStable(bool enable)
 bool ExynosCamera1Parameters::getUseFastenAeStable(void)
 {
     return m_useFastenAeStable;
+}
+
+void ExynosCamera1Parameters::setFastenAeStableOn(bool enable)
+{
+    m_fastenAeStableOn = enable;
+    CLOGD("DEBUG(%s[%d]):m_cameraId(%d) : m_fastenAeStableOn(%d)",
+        __FUNCTION__, __LINE__, m_cameraId, m_fastenAeStableOn);
+}
+
+bool ExynosCamera1Parameters::getFastenAeStableOn(void)
+{
+    return m_fastenAeStableOn;
 }
 
 status_t ExynosCamera1Parameters::calcHighResolutionPreviewGSCRect(ExynosRect *srcRect, ExynosRect *dstRect)
@@ -5480,8 +5790,9 @@ status_t ExynosCamera1Parameters::getPreviewBayerCropSize(ExynosRect *srcRect, E
     if (m_useSizeTable == false
         || m_staticInfo->previewSizeLut == NULL
         || m_staticInfo->previewSizeLutMax <= m_cameraInfo.previewSizeRatioId
-        || m_getPreviewSizeList(sizeList) != NO_ERROR)
+        || m_getPreviewSizeList(sizeList) != NO_ERROR) {
         return calcPreviewBayerCropSize(srcRect, dstRect);
+    }
 
     /* use LUT */
     hwBnsW = sizeList[BNS_W];
@@ -5498,9 +5809,10 @@ status_t ExynosCamera1Parameters::getPreviewBayerCropSize(ExynosRect *srcRect, E
 
     int curBnsW = 0, curBnsH = 0;
     getBnsSize(&curBnsW, &curBnsH);
-    if (SIZE_RATIO(curBnsW, curBnsH) != SIZE_RATIO(hwBnsW, hwBnsH))
+    if (SIZE_RATIO(curBnsW, curBnsH) != SIZE_RATIO(hwBnsW, hwBnsH)) {
         CLOGW("ERROR(%s[%d]): current BNS size(%dx%d) is NOT same with Hw BNS size(%dx%d)",
                 __FUNCTION__, __LINE__, curBnsW, curBnsH, hwBnsW, hwBnsH);
+    }
 
     if (applyZoom == true && isUse3aaInputCrop() == true) {
         zoomLevel = getZoomLevel();
@@ -5568,7 +5880,8 @@ status_t ExynosCamera1Parameters::getPreviewBayerCropSize(ExynosRect *srcRect, E
         pictureCropH = hwBcropH - (pictureCropY * 2);
 
         if (pictureCropW < pictureW / maxZoomRatio || pictureCropH < pictureH / maxZoomRatio) {
-            CLOGW("WRN(%s[%d]): zoom ratio is upto x%d, crop(%dx%d), picture(%dx%d)", __FUNCTION__, __LINE__, maxZoomRatio, hwBcropW, hwBcropH, pictureW, pictureH);
+            CLOGW("WRN(%s[%d]): zoom ratio is upto x%d, crop(%dx%d), picture(%dx%d)",
+                    __FUNCTION__, __LINE__, maxZoomRatio, hwBcropW, hwBcropH, pictureW, pictureH);
             float src_ratio = 1.0f;
             float dst_ratio = 1.0f;
             /* ex : 1024 / 768 */
@@ -5728,52 +6041,6 @@ status_t ExynosCamera1Parameters::getPreviewBdsSize(ExynosRect *dstRect, bool ap
 #endif
 
     return ret;
-}
-
-status_t ExynosCamera1Parameters::getPictureBdsSize(ExynosRect *dstRect)
-{
-    status_t ret = NO_ERROR;
-    ExynosRect bnsSize;
-    ExynosRect bayerCropSize;
-    int hwBdsW = 0;
-    int hwBdsH = 0;
-
-    /* matched ratio LUT is not existed, use equation */
-    if (m_useSizeTable == false
-        || m_staticInfo->pictureSizeLut == NULL
-        || m_staticInfo->pictureSizeLutMax <= m_cameraInfo.pictureSizeRatioId) {
-        ExynosRect rect;
-        return calcPictureBDSSize(&rect, dstRect);
-    }
-
-    /* use LUT */
-    hwBdsW = m_staticInfo->pictureSizeLut[m_cameraInfo.pictureSizeRatioId][BDS_W];
-    hwBdsH = m_staticInfo->pictureSizeLut[m_cameraInfo.pictureSizeRatioId][BDS_H];
-
-    /* Check the invalid BDS size compared to Bcrop size */
-    ret = getPictureBayerCropSize(&bnsSize, &bayerCropSize);
-    if (ret != NO_ERROR)
-        CLOGE("ERR(%s[%d]):getPictureBayerCropSize() failed", __FUNCTION__, __LINE__);
-
-    if (bayerCropSize.w < hwBdsW || bayerCropSize.h < hwBdsH) {
-        CLOGD("DEBUG(%s[%d]):bayerCropSize %dx%d is smaller than BDSSize %dx%d. Force bayerCropSize",
-                __FUNCTION__, __LINE__,
-                bayerCropSize.w, bayerCropSize.h, hwBdsW, hwBdsH);
-
-        hwBdsW = bayerCropSize.w;
-        hwBdsH = bayerCropSize.h;
-    }
-
-    dstRect->x = 0;
-    dstRect->y = 0;
-    dstRect->w = hwBdsW;
-    dstRect->h = hwBdsH;
-
-#ifdef DEBUG_PERFRAME
-    CLOGD("DEBUG(%s[%d]):hwBdsSize %dx%d", __FUNCTION__, __LINE__, dstRect->w, dstRect->h);
-#endif
-
-    return NO_ERROR;
 }
 
 status_t ExynosCamera1Parameters::getPreviewYuvCropSize(ExynosRect *yuvCropSize)
@@ -5959,27 +6226,69 @@ status_t ExynosCamera1Parameters::getPictureYuvCropSize(ExynosRect *yuvCropSize)
 
 status_t ExynosCamera1Parameters::getFastenAeStableSensorSize(int *hwSensorW, int *hwSensorH)
 {
-    *hwSensorW = m_staticInfo->videoSizeLutHighSpeed120[0][SENSOR_W];
-    *hwSensorH = m_staticInfo->videoSizeLutHighSpeed120[0][SENSOR_H];
+    *hwSensorW = m_staticInfo->fastAeStableLut[0][SENSOR_W];
+    *hwSensorH = m_staticInfo->fastAeStableLut[0][SENSOR_H];
 
     return NO_ERROR;
 }
 
 status_t ExynosCamera1Parameters::getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH)
 {
-    *hwBcropW = m_staticInfo->videoSizeLutHighSpeed120[0][BCROP_W];
-    *hwBcropH = m_staticInfo->videoSizeLutHighSpeed120[0][BCROP_H];
+    *hwBcropW = m_staticInfo->fastAeStableLut[0][BCROP_W];
+    *hwBcropH = m_staticInfo->fastAeStableLut[0][BCROP_H];
 
     return NO_ERROR;
 }
 
 status_t ExynosCamera1Parameters::getFastenAeStableBdsSize(int *hwBdsW, int *hwBdsH)
 {
-    *hwBdsW = m_staticInfo->videoSizeLutHighSpeed120[0][BDS_W];
-    *hwBdsH = m_staticInfo->videoSizeLutHighSpeed120[0][BDS_H];
+    *hwBdsW = m_staticInfo->fastAeStableLut[0][BDS_W];
+    *hwBdsH = m_staticInfo->fastAeStableLut[0][BDS_H];
 
     return NO_ERROR;
 }
+
+status_t ExynosCamera1Parameters::getDepthMapSize(int *depthMapW, int *depthMapH)
+{
+    if (m_staticInfo->depthMapSizeLut!= NULL) {
+        *depthMapW = m_staticInfo->depthMapSizeLut[m_cameraInfo.previewSizeRatioId][SENSOR_W];
+        *depthMapH = m_staticInfo->depthMapSizeLut[m_cameraInfo.previewSizeRatioId][SENSOR_H];
+    } else {
+        *depthMapW = 0;
+        *depthMapH = 0;
+    }
+
+    return NO_ERROR;
+}
+
+#ifdef SUPPORT_DEPTH_MAP
+bool ExynosCamera1Parameters::getUseDepthMap(void)
+{
+    return m_flaguseDepthMap;
+}
+
+void ExynosCamera1Parameters::m_setUseDepthMap(bool useDepthMap)
+{
+    m_flaguseDepthMap = useDepthMap;
+}
+
+status_t ExynosCamera1Parameters::checkUseDepthMap(void)
+{
+    int depthMapW = 0, depthMapH = 0;
+    getDepthMapSize(&depthMapW, &depthMapH);
+
+    if (depthMapW != 0 && depthMapH != 0) {
+        m_setUseDepthMap(true);
+    } else {
+        m_setUseDepthMap(false);
+    }
+
+    CLOGD("DEBUG(%s[%d]): depthMapW(%d), depthMapH (%d) getUseDepthMap(%d)",
+            __FUNCTION__, __LINE__, depthMapW, depthMapH, getUseDepthMap());
+
+    return NO_ERROR;
+}
+#endif
 
 status_t ExynosCamera1Parameters::calcNormalToTpuSize(int srcW, int srcH, int *dstW, int *dstH)
 {
@@ -6233,6 +6542,18 @@ status_t ExynosCamera1Parameters::setMarkingOfExifFlash(int flag)
 
     return NO_ERROR;
 }
+
+#ifdef USE_LIVE_BROADCAST
+void ExynosCamera1Parameters::setPLBMode(bool plbMode)
+{
+    m_cameraInfo.plbMode = plbMode;
+}
+
+bool ExynosCamera1Parameters::getPLBMode(void)
+{
+    return m_cameraInfo.plbMode;
+}
+#endif
 
 int ExynosCamera1Parameters::getMarkingOfExifFlash(void)
 {
@@ -6758,7 +7079,7 @@ bool ExynosCamera1Parameters::isUseEarlyFrameReturn(void)
 #endif
 }
 
-bool ExynosCamera1Parameters::isHWFCEnabled(void)
+bool ExynosCamera1Parameters::isUseHWFC(void)
 {
 #if defined(USE_JPEG_HWFC)
     return USE_JPEG_HWFC;
@@ -6803,13 +7124,6 @@ bool ExynosCamera1Parameters::isOwnScc(int cameraId)
         CLOGW("WRN(%s[%d]): FRONT_CAMERA_HAS_OWN_SCC is not defined", __FUNCTION__, __LINE__);
 #endif
     }
-
-    return ret;
-}
-
-bool ExynosCamera1Parameters::isCompanion(int cameraId)
-{
-    bool ret = false;
 
     return ret;
 }

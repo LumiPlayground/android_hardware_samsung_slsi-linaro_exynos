@@ -60,33 +60,15 @@ void updateNodeGroupInfo(
     if (bdsSize.w > bayerCropSize.w || bdsSize.h > bayerCropSize.h) {
         CLOGW2("Bcrop size(%dx%d) < BDS size(%dx%d). Fix it.",
                 bayerCropSize.w, bayerCropSize.h, bdsSize.w, bdsSize.h);
-
-        if (isReprocessing == true &&
-                params->getReprocessingMode() == PROCESSING_MODE_REPROCESSING_PROCESSED_BAYER) {
-            bayerCropSize.x = 0;
-            bayerCropSize.y = 0;
-            bayerCropSize.w = bdsSize.w;
-            bayerCropSize.h = bdsSize.h;
-        } else {
-            bdsSize.w = bayerCropSize.w;
-            bdsSize.h = bayerCropSize.h;
-        }
-    }
-
-    if (params->isUseBDS() == false) {
-        if (bdsSize.w != bayerCropSize.w || bdsSize.h != bayerCropSize.h) {
-            CLOGW2("Bcrop size(%dx%d) != BDS size(%dx%d). Fix it.",
-                    bayerCropSize.w, bayerCropSize.h, bdsSize.w, bdsSize.h);
-            bdsSize.w = bayerCropSize.w;
-            bdsSize.h = bayerCropSize.h;
-        }
+        bdsSize.w = bayerCropSize.w;
+        bdsSize.h = bayerCropSize.h;
     }
 
     if (isReprocessing == false) {
         if (params->isUseIspInputCrop() == true)
             ispSize = sizeControlInfo.yuvCropSize;
         else
-            ispSize = bdsSize;
+            ispSize = sizeControlInfo.bdsSize;
 
         if (params->isUseMcscInputCrop() == true)
             mcscInputSize = sizeControlInfo.yuvCropSize;
@@ -95,9 +77,7 @@ void updateNodeGroupInfo(
 
         mcsc0Size = sizeControlInfo.hwPreviewSize;
 
-        if (params->getReprocessingMode() == PROCESSING_MODE_NON_REPROCESSING_YUV) {
-            mcsc1Size = mcscInputSize;
-        } else if (params->getHighResolutionCallbackMode() == true) {
+        if (params->getHighResolutionCallbackMode() == true) {
             mcsc1Size = sizeControlInfo.hwPreviewSize;
         } else {
             mcsc1Size = sizeControlInfo.previewSize;
@@ -108,49 +88,40 @@ void updateNodeGroupInfo(
         else
             mcsc2Size = sizeControlInfo.hwVideoSize;
 
-        if (params->isFullOtfPreview() == true) {
-            if (mcsc0Size.w > mcscInputSize.w || mcsc0Size.h > mcscInputSize.h)
-                mcsc0Size = mcscInputSize;
-
-            if (mcsc1Size.w > mcscInputSize.w || mcsc1Size.h > mcscInputSize.h)
-                mcsc1Size = mcscInputSize;
-
-            if (mcsc2Size.w > mcscInputSize.w || mcsc2Size.h > mcscInputSize.h)
-                mcsc2Size = mcscInputSize;
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+        if ((params->getCameraId() == CAMERA_ID_FRONT || params->getCameraId() == CAMERA_ID_BACK_1) &&
+            (params->getDualMode() == true)) {
+            mcsc2Size = sizeControlInfo.hwPreviewSize;
         }
+#endif
+
     } else {
         if (params->isUseReprocessingIspInputCrop() == true)
             ispSize = sizeControlInfo.yuvCropSize;
         else
-            ispSize = bdsSize;
+            ispSize = sizeControlInfo.bdsSize;
 
         if (params->isUseReprocessingMcscInputCrop() == true)
             mcscInputSize = sizeControlInfo.yuvCropSize;
         else
             mcscInputSize = ispSize;
 
-        switch (params->getNumOfHwChains()) {
-        case 1:
+        if (params->isSingleChain() == true) {
             mcsc1Size = sizeControlInfo.pictureSize;
             mcsc2Size = sizeControlInfo.thumbnailSize;
 
-            if (params->getOutPutFormatNV21Enable() == true)
+            if (params->getOutPutFormatNV21Enable())
                 mcsc0Size = sizeControlInfo.pictureSize;
             else
                 mcsc0Size = sizeControlInfo.previewSize;
-            break;
-        case 2:
+        } else {
             mcsc3Size = sizeControlInfo.pictureSize;
             mcsc4Size = sizeControlInfo.thumbnailSize;
 
-            if (params->getOutPutFormatNV21Enable() == true)
+            if (params->getOutPutFormatNV21Enable())
                 mcsc1Size = sizeControlInfo.pictureSize;
             else
                 mcsc1Size = sizeControlInfo.previewSize;
-            break;
-        default:
-            CLOGE2("Unsupported HW chain count(%d)!", params->getNumOfHwChains());
-            break;
         }
     }
 
@@ -248,6 +219,16 @@ void updateNodeGroupInfo(
         case FIMC_IS_VIDEO_SS3VC1_NUM:
         case FIMC_IS_VIDEO_SS3VC2_NUM:
         case FIMC_IS_VIDEO_SS3VC3_NUM:
+#ifdef SAMSUNG_QUICK_SWITCH
+        case FIMC_IS_VIDEO_SS4VC0_NUM:
+        case FIMC_IS_VIDEO_SS4VC1_NUM:
+        case FIMC_IS_VIDEO_SS4VC2_NUM:
+        case FIMC_IS_VIDEO_SS4VC3_NUM:
+        case FIMC_IS_VIDEO_SS5VC0_NUM:
+        case FIMC_IS_VIDEO_SS5VC1_NUM:
+        case FIMC_IS_VIDEO_SS5VC2_NUM:
+        case FIMC_IS_VIDEO_SS5VC3_NUM:
+#endif
             /* SENSOR : [X] : SENSOR output size for zsl bayer */
             setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, sensorSize.w, sensorSize.h);
             perframePosition++;
@@ -322,6 +303,15 @@ void updateNodeGroupInfo(
                 ratioCropSize.w = mcscInputSize.w;
                 ratioCropSize.h = mcscInputSize.h;
             }
+
+#if defined(USE_MCSC1_FOR_PREVIEWCALLBACK) && defined(SAMSUNG_HYPER_MOTION)
+            if (params->getHyperMotionMode() == true) {
+                params->getHyperMotionCropSize(mcscInputSize.w, mcscInputSize.h,
+                                                mcsc0Size.w, mcsc0Size.h,
+                                                &ratioCropSize.x, &ratioCropSize.y,
+                                                &ratioCropSize.w, &ratioCropSize.h);
+            }
+#endif
 
             setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
                                                     ratioCropSize.x, ratioCropSize.y,

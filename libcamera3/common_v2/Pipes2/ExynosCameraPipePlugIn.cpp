@@ -41,13 +41,48 @@ status_t ExynosCameraPipePlugIn::create(__unused int32_t *sensorIds)
         return ret;
     }
 
-    if (!m_supportMultiLibrary) {
-        ret = m_create(sensorIds);
-    } else {
-        m_loaderThread = new ExynosCameraThread<ExynosCameraPipePlugIn>(this, &ExynosCameraPipePlugIn::m_loaderThreadFunc, "LoaderThread");
+    if (m_globalPlugInFactory == NULL) {
+        CLOGE("m_globalPlugInFactory is NULL!!");
+        return INVALID_OPERATION;
     }
 
-    return ret;
+    /* create the plugIn by pipeId */
+    ret =  m_globalPlugInFactory->create(m_cameraId, m_pipeId, m_plugIn, m_plugInConverter, m_mode);
+    if (ret != NO_ERROR || m_plugIn == NULL || m_plugInConverter == NULL) {
+        CLOGE("plugIn create failed(cameraId(%d), pipeId(%d)", m_cameraId, m_pipeId);
+        return INVALID_OPERATION;
+    }
+
+    /* run create() in plugIn */
+    ret = m_plugIn->create();
+    if (ret != NO_ERROR) {
+        CLOGE("m_plugIn->create() fail");
+        return INVALID_OPERATION;
+    }
+
+    /* query() in plugIn */
+    ret = m_plugIn->query(&m_map);
+    if (ret != NO_ERROR) {
+        CLOGE("m_plugIn->query() fail");
+        return INVALID_OPERATION;
+    }
+
+    CLOGD("Info[v%d.%d, libname:%s, build time:%s %s, buf(src:%d, dst:%d)]",
+            GET_MAJOR_VERSION((Data_uint32_t)m_map[PLUGIN_VERSION]),
+            GET_MINOR_VERSION((Data_uint32_t)m_map[PLUGIN_VERSION]),
+            (Pointer_const_char_t)m_map[PLUGIN_LIB_NAME],
+            (Pointer_const_char_t)m_map[PLUGIN_BUILD_DATE],
+            (Pointer_const_char_t)m_map[PLUGIN_BUILD_TIME],
+            (Data_int32_t)m_map[PLUGIN_PLUGIN_MAX_SRC_BUF_CNT],
+            (Data_int32_t)m_map[PLUGIN_PLUGIN_MAX_DST_BUF_CNT]);
+
+    ret = m_plugInConverter->create(&m_map);
+    if (ret != NO_ERROR) {
+        CLOGE("m_plugInConverter->create() fail");
+        return INVALID_OPERATION;
+    }
+
+    return NO_ERROR;
 }
 
 status_t ExynosCameraPipePlugIn::destroy(void)
@@ -55,29 +90,14 @@ status_t ExynosCameraPipePlugIn::destroy(void)
     status_t ret = NO_ERROR;
     status_t funcRet = NO_ERROR;
 
-    ExynosCameraPlugInSP_sptr_t          plugIn;
-    ExynosCameraPlugInConverterSP_sptr_t plugInConverter;
-    keyList list;
-    keyList::iterator iter;
-    PlugInSP_sptr_t item;
-
-    m_getKeyList(&m_plugInList, &m_plugInListLock, &list);
-
-    for(iter = list.begin(); iter != list.end(); iter++) {
-        if (m_popItem(*iter, &m_plugInList, &m_plugInListLock, &item) != NO_ERROR) {
-            CLOGE("pop fail key(%d)", *iter);
-            continue;
-        }
-        plugIn = item->m_plugIn;
-        plugInConverter = item->m_plugInConverter;
-
-        ret = plugIn->destroy();
+    if (m_plugIn != NULL) {
+        ret = m_plugIn->destroy();
         funcRet |= ret;
         if (ret != NO_ERROR) {
             CLOGE("m_plugIn->destroy() fail");
         }
 
-        ret =  m_globalPlugInFactory->destroy(m_cameraId, plugIn, plugInConverter);
+        ret =  m_globalPlugInFactory->destroy(m_cameraId, m_plugIn, m_plugInConverter);
         funcRet |= ret;
         if (ret != NO_ERROR) {
             CLOGE("plugIn destroy failed(cameraId(%d), pipeId(%d)",
@@ -100,18 +120,22 @@ status_t ExynosCameraPipePlugIn::start(void)
 
     status_t ret = NO_ERROR;
 
+    if (m_plugIn == NULL) {
+        CLOGE("m_plugIn is NULL");
+        return INVALID_OPERATION;
+    }
+
     ret = ExynosCameraSWPipe::start();
     if (ret != NO_ERROR) {
         CLOGE("start was failed, ret(%d)", ret);
         return ret;
     }
 
-    if (!m_supportMultiLibrary) {
-        ret = m_start(m_plugIn);
-        if (ret != NO_ERROR) {
-            CLOGE("m_plugIn->start() fail");
-            return INVALID_OPERATION;
-        }
+    /* run start() in plugIn */
+    ret = m_plugIn->start();
+    if (ret != NO_ERROR) {
+        CLOGE("m_plugIn->start() fail");
+        return INVALID_OPERATION;
     }
 
     return ret;
@@ -124,18 +148,11 @@ status_t ExynosCameraPipePlugIn::stop(void)
     status_t ret = NO_ERROR;
     status_t funcRet = NO_ERROR;
 
-    keyList list;
-    keyList::iterator iter;
-    PlugInSP_sptr_t item;
-
-    m_getKeyList(&m_plugInList, &m_plugInListLock, &list);
-
-    for(iter = list.begin(); iter != list.end(); iter++) {
-        if (m_getItem(*iter, &m_plugInList, &m_plugInListLock, &item) != NO_ERROR) {
-            CLOGE("pop fail key(%d)", *iter);
-            continue;
-        }
-        funcRet |= m_stop(item->m_plugIn);
+    /* run stop() in plugIn */
+    ret = m_plugIn->stop();
+    funcRet |= ret;
+    if (ret != NO_ERROR) {
+        CLOGE("m_plugIn->stop() fail");
     }
 
     ret = ExynosCameraSWPipe::stop();
@@ -153,8 +170,44 @@ status_t ExynosCameraPipePlugIn::setupPipe(Map_t *map)
 
     status_t ret = NO_ERROR;
 
-    if (!m_supportMultiLibrary) {
-        ret = m_setupPipe(m_plugIn, m_plugInConverter, map);
+    if (m_plugInConverter == NULL) {
+        CLOGE("m_plugInConverter is NULL");
+        return INVALID_OPERATION;
+    }
+
+    if (m_plugIn == NULL) {
+        CLOGE("m_plugIn is NULL");
+        return INVALID_OPERATION;
+    }
+
+    if (map == NULL) {
+        CLOGE("map is NULL");
+        return INVALID_OPERATION;
+    }
+
+    /* prepare map */
+    (*map)[PLUGIN_CONVERT_TYPE]        = (Map_data_t)PLUGIN_CONVERT_SETUP_BEFORE;
+    (*map)[PLUGIN_CONVERT_PARAMETER]   = (Map_data_t)m_parameters;
+    (*map)[PLUGIN_CONVERT_CONFIGURATIONS]   = (Map_data_t)m_configurations;
+    ret = m_plugInConverter->setup(map);
+    if (ret != NO_ERROR) {
+        CLOGE("m_plugIn->setup() fail");
+        return INVALID_OPERATION;
+    }
+
+    /* run setup() in plugIn */
+    ret = m_plugIn->setup(map);
+    if (ret != NO_ERROR) {
+        CLOGE("m_plugIn->setup() fail");
+        return INVALID_OPERATION;
+    }
+
+    /* save the result to map */
+    (*map)[PLUGIN_CONVERT_TYPE]        = (Map_data_t)PLUGIN_CONVERT_SETUP_AFTER;
+    ret = m_plugInConverter->setup(map);
+    if (ret != NO_ERROR) {
+        CLOGE("m_plugIn->setup() fail");
+        return INVALID_OPERATION;
     }
 
     return ret;
@@ -162,8 +215,6 @@ status_t ExynosCameraPipePlugIn::setupPipe(Map_t *map)
 
 status_t ExynosCameraPipePlugIn::setParameter(int key, void *data)
 {
-    m_updateSetCmd(key, data);
-
     if (m_plugIn == NULL) {
         CLOGE("m_plugIn is NULL");
         return INVALID_OPERATION;
@@ -178,8 +229,6 @@ status_t ExynosCameraPipePlugIn::getParameter(int key, void *data)
         CLOGE("m_plugIn is NULL");
         return INVALID_OPERATION;
     }
-
-    m_updateGetCmd(key, data);
 
     return m_plugIn->getParameter(key, data);
 }
@@ -252,7 +301,6 @@ status_t ExynosCameraPipePlugIn::m_run(void)
     map[PLUGIN_CONVERT_TYPE]        = (Map_data_t)PLUGIN_CONVERT_PROCESS_BEFORE;
     map[PLUGIN_CONVERT_FRAME]       = (Map_data_t)frame.get();
     map[PLUGIN_CONVERT_PARAMETER]   = (Map_data_t)m_parameters;
-    map[PLUGIN_CONVERT_CONFIGURATIONS] = (Map_data_t)m_configurations;
 
     ret = m_plugInConverter->make(&map);
     if (ret != NO_ERROR) {
@@ -313,21 +361,13 @@ func_exit:
 
 ExynosCameraPipePlugIn::handle_status_t ExynosCameraPipePlugIn::m_handleFrameBefore(ExynosCameraFrameSP_sptr_t frame, Map_t *map)
 {
-    status_t ret;
     handle_status_t handleRet = PLUGIN_NO_ERROR;
 
-    switch (m_scenario) {
+    switch (m_pipeId) {
 #ifdef USE_DUAL_CAMERA
-#ifdef USES_DUAL_CAMERA_SOLUTION_FAKE
-    case PLUGIN_SCENARIO_FAKEFUSION_PREVIEW:
-    case PLUGIN_SCENARIO_FAKEFUSION_REPROCESSING:
-#endif
-#ifdef USES_DUAL_CAMERA_SOLUTION_ARCSOFT
-    case PLUGIN_SCENARIO_ZOOMFUSION_PREVIEW:
-    case PLUGIN_SCENARIO_ZOOMFUSION_REPROCESSING:
-    case PLUGIN_SCENARIO_BOKEHFUSION_PREVIEW:
-    case PLUGIN_SCENARIO_BOKEHFUSION_REPROCESSING:
-#endif
+    case PIPE_FUSION:
+    case PIPE_FUSION_FRONT:
+    case PIPE_FUSION_REPROCESSING:
     {
 #if 1
         switch (frame->getFrameType()) {
@@ -375,103 +415,161 @@ ExynosCameraPipePlugIn::handle_status_t ExynosCameraPipePlugIn::m_handleFrameBef
 #endif
         break;
     }
-#endif // USE_DUAL_CAMERA
+#endif
 
 #ifdef USES_SW_VDIS
-    case PLUGIN_SCENARIO_SWVDIS_PREVIEW:
+    case PIPE_VDIS:
+        {
+        int dstBufferIndex = -1;
+        ExynosCameraBuffer dstBuffer;
+
         (*map)[PLUGIN_PLUGIN_CUR_SRC_BUF_CNT] = (Data_int32_t)1;
+
+        ret = m_bufferManager[CAPTURE_NODE]->getBuffer(&dstBufferIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &dstBuffer);
+        if (ret != NO_ERROR) {
+            CLOGE("getBuffer fail, pipeId(%d), ret(%d), frame(%d)",
+                    m_pipeId, ret, frame->getFrameCount());
+
+            //Release SRC buffer
+            ExynosCameraBuffer srcBuffer;
+            ret = frame->getSrcBuffer(m_pipeId, &srcBuffer);
+            if (ret != NO_ERROR) {
+                CLOGE("getBuffer fail, pipeId(%d), ret(%d), frame(%d)",
+                        m_pipeId, ret, frame->getFrameCount());
+            }
+
+            ret = m_bufferManager[CAPTURE_NODE_3]->putBuffer(srcBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_NONE);
+            if (ret < NO_ERROR) {
+                CLOGE("getBufferManager fail, pipeId(%d), ret(%d), frame(%d), index(%d)",
+                        m_pipeId, ret, frame->getFrameCount(), srcBuffer.index);
+            }
+
+#ifdef SUPPORT_ME
+            //Relase ME buffer
+            ExynosCameraBuffer meBuffer;
+            ret = frame->getSrcBuffer(m_pipeId, &meBuffer, 1);
+            if (ret < NO_ERROR) {
+                CLOGE("getBuffer fail, pipeId(%d), ret(%d), frame(%d)",
+                        m_pipeId, ret, frame->getFrameCount());
+            }
+
+            ret = m_bufferManager[CAPTURE_NODE_2]->putBuffer(meBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_NONE);
+            if (ret < NO_ERROR) {
+                CLOGE("getBufferManager fail, pipeId(%d), ret(%d), frame(%d)",
+                        m_pipeId, ret, frame->getFrameCount());
+            }
+#endif
+
+            return PLUGIN_ERROR;
+        }
+
+        CLOGD("dst buffer index(%d)", dstBufferIndex);
+
+        ret = frame->setDstBufferState(getPipeId(), ENTITY_BUFFER_STATE_REQUESTED);
+        if (ret != NO_ERROR) {
+            CLOGE("setdst Buffer state failed(%d) frame(%d)", ret, frame->getFrameCount());
+            handleRet = PLUGIN_ERROR;
+        }
+
+        ret = frame->setDstBuffer(getPipeId(), dstBuffer);
+        if (ret != NO_ERROR) {
+            CLOGE("frame[%d]->setDstBuffer(%d) fail, ret(%d)",
+                    frame->getFrameCount(), getPipeId(), ret);
+            handleRet = PLUGIN_ERROR;
+        }
+        }
         break;
 #endif //USES_SW_VDIS
-    case PLUGIN_SCENARIO_HIFILLS_REPROCESSING:
-        (*map)[PLUGIN_PLUGIN_CUR_SRC_BUF_CNT] = (Data_int32_t)1;
-        break;
     default:
-        CLOGW("Unknown scenario(%d)", m_scenario);
-        (*map)[PLUGIN_PLUGIN_CUR_SRC_BUF_CNT] = (Data_int32_t)1;
         break;
     }
 
     return handleRet;
 }
 
-ExynosCameraPipePlugIn::handle_status_t ExynosCameraPipePlugIn::m_handleFrameAfter(ExynosCameraFrameSP_sptr_t frame, Map_t *map)
+ExynosCameraPipePlugIn::handle_status_t ExynosCameraPipePlugIn::m_handleFrameAfter(__unused ExynosCameraFrameSP_sptr_t frame, __unused Map_t *map)
 {
+#ifdef USES_SW_VDIS
     status_t ret;
+#endif
     handle_status_t handleRet = PLUGIN_NO_ERROR;
 
-    switch (m_scenario) {
+    switch (m_pipeId) {
 #ifdef USES_SW_VDIS
-    case PLUGIN_SCENARIO_SWVDIS_PREVIEW:
+    case PIPE_VDIS:
         {
-            buffer_manager_tag_t initTag;
-            ExynosCameraBuffer srcBuffer;
+            ExynosCameraBuffer buffer;
             ExynosCameraBuffer dstBuffer;
             entity_buffer_state_t bufferState = ENTITY_BUFFER_STATE_NOREQ;
 
             int32_t srcBufIndex = -1;
             int32_t dstBufValid = -1;
 
+            //Release SRC buffer
+            ret = frame->getSrcBuffer(m_pipeId, &buffer);
+            if (ret < NO_ERROR) {
+                CLOGE("getBuffer fail, pipeId(%d), ret(%d), frame(%d)",
+                        m_pipeId, ret, frame->getFrameCount());
+            }
+#if 0
+            srcBufIndex = buffer.index;
+#else
+            srcBufIndex = (Data_uint32_t)(*map)[PLUGIN_SRC_BUF_USED];
+#endif
+            if (srcBufIndex != -1) {
+                CLOGD("release buffer(%d)", srcBufIndex);
+                ret = m_bufferManager[CAPTURE_NODE_3]->putBuffer(srcBufIndex, EXYNOS_CAMERA_BUFFER_POSITION_NONE);
+                if (ret < NO_ERROR) {
+                    CLOGE("getBufferManager fail, pipeId(%d), ret(%d), frame(%d), index(%d)",
+                            m_pipeId, ret, frame->getFrameCount(), srcBufIndex);
+                }
+            } else {
+                CLOGW("Skip release buffer(%d) buffer_used(%d)", buffer.index, srcBufIndex);
+            }
 
-            //Handle SRC buffer
-            ret = frame->getSrcBuffer(m_pipeId, &srcBuffer);
+#ifdef SUPPORT_ME
+            //Relase ME buffer
+            ret = frame->getSrcBuffer(m_pipeId, &buffer, 1);
             if (ret < NO_ERROR) {
                 CLOGE("getBuffer fail, pipeId(%d), ret(%d), frame(%d)",
                         m_pipeId, ret, frame->getFrameCount());
             }
 
-            srcBufIndex = (Data_uint32_t)(*map)[PLUGIN_SRC_BUF_USED];
+            ret = m_bufferManager[CAPTURE_NODE_2]->putBuffer(buffer.index, EXYNOS_CAMERA_BUFFER_POSITION_NONE);
+            if (ret < NO_ERROR) {
+                CLOGE("getBufferManager fail, pipeId(%d), ret(%d), frame(%d)",
+                        m_pipeId, ret, frame->getFrameCount());
+            }
+#endif
 
-            if (srcBufIndex != -1) {
-                CLOGD("release buffer(%d)", srcBufIndex);
-
-                srcBuffer.index = srcBufIndex;
-
-                bufferState = ENTITY_BUFFER_STATE_COMPLETE;
-            } else {
-                CLOGW("Skip release buffer(%d) buffer_used(%d)", srcBuffer.index, srcBufIndex);
-                bufferState = ENTITY_BUFFER_STATE_PROCESSING;
+            /* handling dst buffer */
+            ret = frame->getDstBuffer(m_pipeId, &dstBuffer);
+            if (ret < NO_ERROR) {
+                CLOGE("getBuffer fail, pipeId(%d), ret(%d), frame(%d)",
+                        m_pipeId, ret, frame->getFrameCount());
             }
 
-            ret = frame->setSrcBufferState(m_pipeId, bufferState);
-            if (ret != NO_ERROR) {
-                CLOGE("Failed to set SRC_BUFFER_STATE to replace target buffer index(%d) to release pipeId(%d), ret(%d), frame(%d)",
-                        srcBuffer.index, m_pipeId, ret, frame->getFrameCount());
-            }
-
-            ret = frame->setSrcBuffer(m_pipeId, srcBuffer);
-            if (ret != NO_ERROR) {
-                CLOGE("Failed to set SRC_BUFFER to replace target buffer index(%d) to release pipeId(%d), ret(%d), frame(%d)",
-                        srcBuffer.index, m_pipeId, ret, frame->getFrameCount());
-            }
-
-
-            //Handle DST buffer
             dstBufValid = (Data_uint32_t)(*map)[PLUGIN_DST_BUF_VALID];
             if (dstBufValid >= 0) {
+                bufferState = ENTITY_BUFFER_STATE_COMPLETE;
                 handleRet = PLUGIN_NO_ERROR;
             } else {
-                CLOGE("Invalid DST buffer(%d)", dstBufValid);
+                //Release DST buffer
+                bufferState = ENTITY_BUFFER_STATE_ERROR;
                 handleRet = PLUGIN_ERROR;
+
+                CLOGD("release dst buffer(%d)", dstBuffer.index);
+                ret = m_bufferManager[CAPTURE_NODE]->putBuffer(dstBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_NONE);
+                if (ret < NO_ERROR) {
+                    CLOGE("getBufferManager fail, pipeId(%d), ret(%d), frame(%d), index(%d)",
+                            m_pipeId, ret, frame->getFrameCount(), srcBufIndex);
+                }
             }
+
+            CLOGD("release src buf(%d) dst buf(I:%d)(V:%d)(S:%d) me buf(%d)", srcBufIndex, dstBuffer.index, dstBufValid, bufferState, buffer.index);
         }
         break;
 #endif
-    case PLUGIN_SCENARIO_HIFILLS_REPROCESSING:
-        {
-            ExynosCameraBuffer buffer;
-
-            ret = frame->getSrcBuffer(m_pipeId, &buffer);
-            if (ret < 0) {
-                CLOGE("getSrcBuffer fail, pipeId(%d), ret(%d)", m_pipeId, ret);
-            }
-
-            ret = m_bufferSupplier->putBuffer(buffer);
-            if (ret != NO_ERROR) {
-                CLOGE("[F%d B%d]Failed to putBuffer for JPEG_SRC. ret %d",
-                    frame->getFrameCount(), buffer.index, ret);
-            }
-        }
-        break;
     default:
         break;
     }
@@ -479,14 +577,13 @@ ExynosCameraPipePlugIn::handle_status_t ExynosCameraPipePlugIn::m_handleFrameAft
     return handleRet;
 }
 
-void ExynosCameraPipePlugIn::m_init(int32_t *nodeNums)
+void ExynosCameraPipePlugIn::m_init(__unused int32_t *nodeNums)
 {
     /* get the singleton instance for plugInFactory */
     m_globalPlugInFactory = ExynosCameraSingleton<ExynosCameraFactoryPlugIn>::getInstance();
 
     m_plugIn = NULL;
     m_plugInConverter = NULL;
-    m_plugInList.clear();
 }
 
 status_t ExynosCameraPipePlugIn::m_setup(Map_t *map)
@@ -538,382 +635,5 @@ status_t ExynosCameraPipePlugIn::m_setup(Map_t *map)
 
     return ret;
 }
-
-status_t ExynosCameraPipePlugIn::m_create(__unused int32_t *sensorIds)
-{
-    status_t ret = NO_ERROR;
-    PlugInSP_sptr_t item;
-
-    if (m_globalPlugInFactory == NULL) {
-        CLOGE("m_globalPlugInFactory is NULL!!");
-        return INVALID_OPERATION;
-    }
-
-    /* create the plugIn by pipeId */
-    ret =  m_globalPlugInFactory->create(m_cameraId, m_pipeId, m_plugIn, m_plugInConverter, m_scenario);
-    if (ret != NO_ERROR || m_plugIn == NULL || m_plugInConverter == NULL) {
-        CLOGE("plugIn create failed(cameraId(%d), pipeId(%d)", m_cameraId, m_pipeId);
-        return INVALID_OPERATION;
-    }
-
-    item = new PlugInObject(m_plugIn, m_plugInConverter);
-
-    m_pushItem(m_scenario, &m_plugInList, &m_plugInListLock, item);
-
-    /* run create() in plugIn */
-    ret = m_plugIn->create();
-    if (ret != NO_ERROR) {
-        CLOGE("m_plugIn->create() fail");
-        return INVALID_OPERATION;
-    }
-
-    /* query() in plugIn */
-    ret = m_plugIn->query(&m_map);
-    if (ret != NO_ERROR) {
-        CLOGE("m_plugIn->query() fail");
-        return INVALID_OPERATION;
-    }
-
-    CLOGD("Info[v%d.%d, libname:%s, build time:%s %s, buf(src:%d, dst:%d)]",
-            GET_MAJOR_VERSION((Data_uint32_t)m_map[PLUGIN_VERSION]),
-            GET_MINOR_VERSION((Data_uint32_t)m_map[PLUGIN_VERSION]),
-            (Pointer_const_char_t)m_map[PLUGIN_LIB_NAME],
-            (Pointer_const_char_t)m_map[PLUGIN_BUILD_DATE],
-            (Pointer_const_char_t)m_map[PLUGIN_BUILD_TIME],
-            (Data_int32_t)m_map[PLUGIN_PLUGIN_MAX_SRC_BUF_CNT],
-            (Data_int32_t)m_map[PLUGIN_PLUGIN_MAX_DST_BUF_CNT]);
-
-    ret = m_plugInConverter->create(&m_map);
-    if (ret != NO_ERROR) {
-        CLOGE("m_plugInConverter->create() fail");
-        return INVALID_OPERATION;
-    }
-
-    return NO_ERROR;
-}
-
-status_t ExynosCameraPipePlugIn::m_start(ExynosCameraPlugInSP_sptr_t plugIn)
-{
-    CLOGI("");
-
-    status_t ret = NO_ERROR;
-
-    if (plugIn == NULL) {
-        CLOGE("plugIn is NULL");
-        return INVALID_OPERATION;
-    }
-
-    /* run start() in plugIn */
-    if (ExynosCameraPlugIn::PLUGIN_START == plugIn->getState()) {
-        CLOGE("plugIn PLUGIN_START skipped, already START");
-    } else {
-        ret = plugIn->start();
-        if (ret != NO_ERROR) {
-            CLOGE("plugIn->start() fail");
-            return INVALID_OPERATION;
-        }
-    }
-
-    return ret;
-}
-
-status_t ExynosCameraPipePlugIn::m_stop(ExynosCameraPlugInSP_sptr_t plugIn)
-{
-    CLOGI("");
-
-    status_t ret = NO_ERROR;
-    status_t funcRet = NO_ERROR;
-
-    if (plugIn == NULL) {
-        CLOGE("plugIn is NULL");
-        return INVALID_OPERATION;
-    }
-
-    /* run stop() in plugIn */
-    if (ExynosCameraPlugIn::PLUGIN_STOP == plugIn->getState()) {
-        CLOGE("plugIn PLUGIN_STOP skipped, already STOP");
-    } else {
-        ret = plugIn->stop();
-        funcRet |= ret;
-        if (ret != NO_ERROR) {
-            CLOGE("plugIn->stop() fail");
-        }
-    }
-
-    return funcRet;
-}
-
-status_t ExynosCameraPipePlugIn::m_setupPipe(ExynosCameraPlugInSP_sptr_t plugIn, ExynosCameraPlugInConverterSP_sptr_t plugInConverter, Map_t *map)
-{
-    CLOGI("");
-
-    status_t ret = NO_ERROR;
-
-    if (plugInConverter == NULL) {
-        CLOGE("m_plugInConverter is NULL");
-        return INVALID_OPERATION;
-    }
-
-    if (plugIn == NULL) {
-        CLOGE("m_plugIn is NULL");
-        return INVALID_OPERATION;
-    }
-
-    if (map == NULL) {
-        CLOGE("map is NULL");
-        return INVALID_OPERATION;
-    }
-
-    /* prepare map */
-    (*map)[PLUGIN_CONVERT_TYPE]        = (Map_data_t)PLUGIN_CONVERT_SETUP_BEFORE;
-    (*map)[PLUGIN_CONVERT_PARAMETER]   = (Map_data_t)m_parameters;
-    (*map)[PLUGIN_CONVERT_CONFIGURATIONS]   = (Map_data_t)m_configurations;
-    ret = plugInConverter->setup(map);
-    if (ret != NO_ERROR) {
-        CLOGE("m_plugIn->setup() fail");
-        return INVALID_OPERATION;
-    }
-
-    /* run setup() in plugIn */
-    ret = plugIn->setup(map);
-    if (ret != NO_ERROR) {
-        CLOGE("m_plugIn->setup() fail");
-        return INVALID_OPERATION;
-    }
-
-    /* save the result to map */
-    (*map)[PLUGIN_CONVERT_TYPE]        = (Map_data_t)PLUGIN_CONVERT_SETUP_AFTER;
-    ret = plugInConverter->setup(map);
-    if (ret != NO_ERROR) {
-        CLOGE("m_plugIn->setup() fail");
-        return INVALID_OPERATION;
-    }
-
-    return ret;
-}
-
-
-status_t ExynosCameraPipePlugIn::m_pushItem(int key, PlugInMap *pluginList, Mutex *lock, PlugInSP_sptr_t item)
-{
-    status_t ret = NO_ERROR;
-    PlugInMap::iterator iter;
-
-    lock->lock();
-
-    iter = pluginList->find(key);
-    if (iter != pluginList->end()) {
-        CLOGE("push pluginList failed fail", key);
-        ret = INVALID_OPERATION;
-    } else {
-        PlugInPair object(key, item);
-        pluginList->insert(object);
-    }
-
-    lock->unlock();
-    return ret;
-}
-
-status_t ExynosCameraPipePlugIn::m_popItem(int key, PlugInMap *pluginList, Mutex *lock, PlugInSP_sptr_t *item)
-{
-    status_t ret = NO_ERROR;
-    PlugInMap::iterator iter;
-
-    lock->lock();
-
-    iter = pluginList->find(key);
-    if (iter != pluginList->end()) {
-        *item = iter->second;
-        pluginList->erase(iter);
-    } else {
-        CLOGE("pop pluginList failed fail", key);
-        ret = INVALID_OPERATION;
-    }
-
-    lock->unlock();
-    return ret;
-}
-
-status_t ExynosCameraPipePlugIn::m_getItem(int key, PlugInMap *pluginList, Mutex *lock, PlugInSP_sptr_t *item)
-{
-    status_t ret = NO_ERROR;
-    PlugInMap::iterator iter;
-
-    lock->lock();
-
-    iter = pluginList->find(key);
-    if (iter != pluginList->end()) {
-        *item = iter->second;
-    } else {
-        CLOGE("get pluginList failed fail", key);
-        ret = INVALID_OPERATION;
-    }
-
-    lock->unlock();
-    return ret;
-}
-
-bool ExynosCameraPipePlugIn::m_findItem(int key, PlugInMap *pluginList, Mutex *lock)
-{
-    bool ret = false;
-    PlugInMap::iterator iter;
-
-    lock->lock();
-
-    iter = pluginList->find(key);
-    if (iter != pluginList->end()) {
-        ret = true;
-    } else {
-        ret = false;
-    }
-
-    lock->unlock();
-    return ret;
-}
-
-status_t ExynosCameraPipePlugIn::m_getKeyList(PlugInMap *pluginList, Mutex *lock, keyList *list)
-{
-    status_t ret = NO_ERROR;
-    PlugInMap::iterator iter;
-
-    lock->lock();
-
-    for (iter = pluginList->begin(); iter != pluginList->end() ; iter++) {
-        list->push_back(iter->first);
-    }
-
-    lock->unlock();
-    return ret;
-}
-
-status_t ExynosCameraPipePlugIn::m_updateSetCmd(int cmd, void *data)
-{
-    status_t ret = NO_ERROR;
-    int nextScenario = -1;
-    int curScenario = -1;
-
-    if (m_supportMultiLibrary) {
-    }
-
-    switch(cmd) {
-    case PLUGIN_PARAMETER_KEY_PREPARE:
-        {
-            CLOGD("command PLUGIN_PARAMETER_KEY_PREPARE");
-
-            /* 0. thread join */
-            if (m_supportMultiLibrary) {
-                m_loaderThread->join();
-            }
-
-            /* 1. get scenario */
-            nextScenario = *(int*)data;
-            m_getScenario(curScenario);
-
-            if (m_findItem(nextScenario, &m_plugInList, &m_plugInListLock) == true) {
-                /* 2-1. update plugin data */
-                CLOGD("command PLUGIN_PARAMETER_KEY_PREPARE already load plugin");
-                PlugInSP_sptr_t item;
-                m_setScenario(nextScenario);
-                m_getItem(nextScenario, &m_plugInList, &m_plugInListLock, &item);
-                m_plugIn = item->m_plugIn;
-                m_plugInConverter = item->m_plugInConverter;
-            } else {
-                CLOGD("command PLUGIN_PARAMETER_KEY_PREPARE load plugin start");
-                /* 2-2-1 set scenario */
-                m_setScenario(nextScenario);
-
-                /* 2-2-2 create */
-                m_create();
-
-                /* 2-2-3 thread run */
-                if (m_supportMultiLibrary) {
-                    m_loaderThread->run(PRIORITY_URGENT_DISPLAY);
-                }
-            }
-        }
-        break;
-    case PLUGIN_PARAMETER_KEY_START:
-        {
-            CLOGD("command PLUGIN_PARAMETER_KEY_START");
-            /* 0. thread join */
-            if (m_supportMultiLibrary) {
-                m_loaderThread->join();
-            }
-
-            /* 1. start plugin */
-            m_start(m_plugIn);
-            m_plugIn->setParameter(cmd, data);
-        }
-        break;
-    case PLUGIN_PARAMETER_KEY_STOP:
-        {
-            CLOGD("command PLUGIN_PARAMETER_KEY_STOP");
-            /* 0. thread join */
-            if (m_supportMultiLibrary) {
-                m_loaderThread->join();
-            }
-
-            /* 1. stop plugin */
-            ret = m_stop(m_plugIn);
-            if (ret != NO_ERROR) {
-                CLOGE("plugIn is NULL, skipped stop");
-                return INVALID_OPERATION;
-            }
-
-            m_plugIn->setParameter(cmd, data);
-        }
-        break;
-    default:
-        break;
-    }
-
-    return ret;
-}
-
-status_t ExynosCameraPipePlugIn::m_updateGetCmd(int cmd, void *data)
-{
-    status_t ret = NO_ERROR;
-    int nextScenario = -1;
-
-    switch(cmd) {
-    case PLUGIN_PARAMETER_KEY_GET_SCENARIO:
-        {
-            CLOGD("command PLUGIN_PARAMETER_KEY_GET_SCENARIO scenario(%d)", m_scenario);
-            *(int*)data = m_scenario;
-        }
-        break;
-    default:
-        break;
-    }
-
-    return ret;
-}
-
-status_t ExynosCameraPipePlugIn::m_setScenario(int scenario)
-{
-    status_t ret = NO_ERROR;
-    if (m_scenario != scenario)
-        CLOGD("change scenario(%d -> %d)", m_scenario, scenario);
-
-    m_scenario = scenario;
-    return ret;
-}
-
-status_t ExynosCameraPipePlugIn::m_getScenario(int& scenario)
-{
-    status_t ret = NO_ERROR;
-    scenario = m_scenario;
-    return ret;
-}
-
-bool ExynosCameraPipePlugIn::m_loaderThreadFunc(void)
-{
-    bool ret = false;
-
-    /* 2. setup */
-    m_setupPipe(m_plugIn, m_plugInConverter, &m_map);
-
-    return ret;
-}
-
 
 }; /* namespace android */

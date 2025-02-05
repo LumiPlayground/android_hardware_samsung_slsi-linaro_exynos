@@ -194,8 +194,6 @@ status_t ExynosCameraPipeSTK_PREVIEW::m_run(void)
 
             m_thread_id = (*run_stk)(m_stk_handle, nv21_STK_in_Buffer.addr[0], nv21_STK_in_Buffer.addr[1], pixelformat);
 
-            ret = pthread_join(*m_thread_id, NULL);
-
             m_timer.stop();
             durationTime = m_timer.durationMsecs();
             CLOGI("STK Preview Execution Time : (%5d msec)", (int)durationTime);

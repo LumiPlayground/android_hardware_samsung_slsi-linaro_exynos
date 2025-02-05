@@ -35,6 +35,9 @@ ExynosCameraConfigurations::ExynosCameraConfigurations(int cameraId, int scenari
     case CAMERA_ID_FRONT:
         strncpy(m_name, "Front", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
         break;
+    case CAMERA_ID_SECURE:
+        strncpy(m_name, "Secure", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+        break;
 #ifdef USE_DUAL_CAMERA
     case CAMERA_ID_BACK_1:
         strncpy(m_name, "BackSlave", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
@@ -57,10 +60,6 @@ ExynosCameraConfigurations::ExynosCameraConfigurations(int cameraId, int scenari
     m_metaParameters.m_zoomRatio = 1.0f;
     m_metaParameters.m_flashMode = FLASH_MODE_OFF;
 
-    for (int i = 0; i < CAMERA_ID_MAX; i++) {
-        m_parameters[i] = NULL;
-    }
-
     m_exynosconfig = new ExynosConfigInfo();
     memset((void *)m_exynosconfig, 0x00, sizeof(struct ExynosConfigInfo));
 
@@ -69,9 +68,6 @@ ExynosCameraConfigurations::ExynosCameraConfigurations(int cameraId, int scenari
     m_flagRestartStream = false;
 
 #ifdef USE_DUAL_CAMERA
-    m_tryDualOperationMode = DUAL_OPERATION_MODE_MASTER;
-    m_tryDualOperationModeReprocessing = DUAL_OPERATION_MODE_MASTER;
-
     m_dualOperationMode = DUAL_OPERATION_MODE_NONE;
     m_dualOperationModeReprocessing = DUAL_OPERATION_MODE_NONE;
     m_dualOperationModeLockCount = 0;
@@ -86,6 +82,7 @@ ExynosCameraConfigurations::ExynosCameraConfigurations(int cameraId, int scenari
     memset(m_yuvWidth, 0, sizeof(m_yuvWidth));
     memset(m_yuvHeight, 0, sizeof(m_yuvHeight));
     memset(m_yuvFormat, 0, sizeof(m_yuvFormat));
+    memset(m_yuvPixelSize, 0, sizeof(m_yuvPixelSize));
     memset(m_yuvBufferCount, 0, sizeof(m_yuvBufferCount));
 
     m_mode[CONFIGURATION_DYNAMIC_BAYER_MODE] = (m_cameraId == CAMERA_ID_BACK) ? USE_DYNAMIC_BAYER : USE_DYNAMIC_BAYER_FRONT;
@@ -93,6 +90,9 @@ ExynosCameraConfigurations::ExynosCameraConfigurations(int cameraId, int scenari
     m_useDynamicBayer[CONFIG_MODE::HIGHSPEED_60] = (m_cameraId == CAMERA_ID_BACK) ? USE_DYNAMIC_BAYER_60FPS : USE_DYNAMIC_BAYER_60FPS_FRONT;
     m_useDynamicBayer[CONFIG_MODE::HIGHSPEED_120] = (m_cameraId == CAMERA_ID_BACK) ? USE_DYNAMIC_BAYER_120FPS : USE_DYNAMIC_BAYER_120FPS_FRONT;
     m_useDynamicBayer[CONFIG_MODE::HIGHSPEED_240] = (m_cameraId == CAMERA_ID_BACK) ? USE_DYNAMIC_BAYER_240FPS : USE_DYNAMIC_BAYER_240FPS_FRONT;
+#ifdef SAMSUNG_SSM
+    m_useDynamicBayer[CONFIG_MODE::SSM_240] = (m_cameraId == CAMERA_ID_BACK) ? USE_DYNAMIC_BAYER_240FPS : USE_DYNAMIC_BAYER_240FPS_FRONT;
+#endif
     m_useDynamicBayer[CONFIG_MODE::HIGHSPEED_480] = (m_cameraId == CAMERA_ID_BACK) ? USE_DYNAMIC_BAYER_480FPS : USE_DYNAMIC_BAYER_480FPS_FRONT;
 
     m_yuvBufferStat = false;
@@ -108,14 +108,6 @@ ExynosCameraConfigurations::ExynosCameraConfigurations(int cameraId, int scenari
     setModeValue(CONFIGURATION_YUV_STALL_PORT_USAGE, YUV_STALL_USAGE_DSCALED);
 
     m_exposureTimeCapture = 0L;
-
-#ifdef USES_DUAL_CAMERA_SOLUTION_ARCSOFT
-    m_arcSoftCameraIndex = 0;
-    m_arcSoftViewRatio = 1.0f;
-    m_arcSoftImageShiftX = 0;
-    m_arcSoftImageShiftY = 0;
-    m_arcSoftMaster3A = DUAL_OPERATION_MODE_MASTER;
-#endif
 
     m_vendorSpecificConstructor();
 
@@ -146,9 +138,11 @@ void ExynosCameraConfigurations::setDefaultCameraInfo(void)
     for (int i = 0; i < YUV_MAX; i++) {
         /* YUV */
         setYuvFormat(V4L2_PIX_FMT_NV21, i);
+        setYuvPixelSize(CAMERA_PIXEL_SIZE_8BIT, i);
 
         /* YUV_STALL */
         setYuvFormat(V4L2_PIX_FMT_NV21, i + YUV_MAX);
+        setYuvPixelSize(CAMERA_PIXEL_SIZE_8BIT, i + YUV_MAX);
     }
 
     /* Initalize Binning scale ratio */
@@ -156,24 +150,6 @@ void ExynosCameraConfigurations::setDefaultCameraInfo(void)
 
     setMode(CONFIGURATION_RECORDING_MODE, false);
     setMode(CONFIGURATION_PIP_MODE, false);
-}
-
-void ExynosCameraConfigurations::setParameters(int cameraId, ExynosCameraParameters *parameters)
-{
-    if (cameraId < CAMERA_ID_BACK || CAMERA_ID_MAX <= cameraId) {
-        android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Invalid cameraId(%d)", __FUNCTION__, __LINE__, cameraId);
-    }
-
-    m_parameters[cameraId] = parameters;
-}
-
-ExynosCameraParameters *ExynosCameraConfigurations::getParameters(int cameraId)
-{
-    if(cameraId < CAMERA_ID_BACK || CAMERA_ID_MAX <= cameraId) {
-        android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Invalid cameraId(%d)", __FUNCTION__, __LINE__, cameraId);
-    }
-
-    return m_parameters[cameraId];
 }
 
 int ExynosCameraConfigurations::getScenario(void)
@@ -214,6 +190,9 @@ bool ExynosCameraConfigurations::setConfigMode(uint32_t mode)
     case CONFIG_MODE::HIGHSPEED_120:
     case CONFIG_MODE::HIGHSPEED_240:
     case CONFIG_MODE::HIGHSPEED_480:
+#ifdef SAMSUNG_SSM
+    case CONFIG_MODE::SSM_240:
+#endif
         m_exynosconfig->current = &m_exynosconfig->info[mode];
         m_exynosconfig->mode = mode;
         ret = true;
@@ -233,6 +212,9 @@ int ExynosCameraConfigurations::getConfigMode(void) const
     case CONFIG_MODE::HIGHSPEED_120:
     case CONFIG_MODE::HIGHSPEED_240:
     case CONFIG_MODE::HIGHSPEED_480:
+#ifdef SAMSUNG_SSM
+    case CONFIG_MODE::SSM_240:
+#endif
         ret = m_exynosconfig->mode;
         break;
     default:
@@ -246,25 +228,30 @@ void ExynosCameraConfigurations::updateMetaParameter(struct CameraMetaParameters
 {
     memcpy(&this->m_metaParameters, metaParameters, sizeof(struct CameraMetaParameters));
     setModeValue(CONFIGURATION_FLASH_MODE, metaParameters->m_flashMode);
+#ifdef SAMSUNG_OT
+    setMode(CONFIGURATION_OBJECT_TRACKING_MODE, metaParameters->m_startObjectTracking);
+#endif
 }
 
-status_t ExynosCameraConfigurations::checkYuvFormat(const int format, const int outputPortId)
+status_t ExynosCameraConfigurations::checkYuvFormat(const int format, const camera_pixel_size pixelSize, const int outputPortId)
 {
     status_t ret = NO_ERROR;
-    int curYuvFormat = -1;
-    int newYuvFormat = -1;
+    int curYuvFormat = -1, newYuvFormat = -1;
+    int curPixelSize = getYuvPixelSize(outputPortId), newPixelSize = pixelSize;
 
     newYuvFormat = HAL_PIXEL_FORMAT_2_V4L2_PIX(format);
     curYuvFormat = getYuvFormat(outputPortId);
 
-    if (newYuvFormat != curYuvFormat) {
+    if ((newYuvFormat != curYuvFormat)
+            || (newPixelSize != curPixelSize)) {
         char curFormatName[V4L2_FOURCC_LENGTH] = {};
         char newFormatName[V4L2_FOURCC_LENGTH] = {};
         getV4l2Name(curFormatName, V4L2_FOURCC_LENGTH, curYuvFormat);
         getV4l2Name(newFormatName, V4L2_FOURCC_LENGTH, newYuvFormat);
-        CLOGI("curYuvFormat %s newYuvFormat %s outputPortId %d",
-                curFormatName, newFormatName, outputPortId);
+        CLOGI("curYuvFormat %s newYuvFormat %s pixelSizeNum %d outputPortId %d",
+                curFormatName, newFormatName, pixelSize, outputPortId);
         setYuvFormat(newYuvFormat, outputPortId);
+        setYuvPixelSize(pixelSize, outputPortId);
     }
 
     return ret;
@@ -283,6 +270,13 @@ status_t ExynosCameraConfigurations::checkPreviewFpsRange(uint32_t minFps, uint3
     }
 
     if (curMinFps != minFps || curMaxFps != maxFps) {
+#ifdef SAMSUNG_SSM
+        if (getModeValue(CONFIGURATION_SHOT_MODE) != SAMSUNG_ANDROID_CONTROL_SHOOTING_MODE_SUPER_SLOW_MOTION
+#ifdef SAMSUNG_FACTORY_SSM_TEST
+            && getModeValue(CONFIGURATION_OPERATION_MODE) != OPERATION_MODE_SSM_TEST
+#endif
+        )
+#endif
         {
             if (curMaxFps <= 30 && maxFps == 60) {
                 /* 60fps mode */
@@ -296,6 +290,12 @@ status_t ExynosCameraConfigurations::checkPreviewFpsRange(uint32_t minFps, uint3
         }
 
         setPreviewFpsRange(minFps, maxFps);
+
+#ifdef USE_LIMITATION_FOR_THIRD_PARTY
+        if (m_fpsProperty > 0) {
+            CLOGI("set to %d fps depends on fps property", m_fpsProperty/1000);
+        }
+#endif
     }
 
     return ret;
@@ -334,6 +334,22 @@ status_t ExynosCameraConfigurations::m_adjustPreviewFpsRange(__unused uint32_t &
         CLOGV("PIPRecordingHint(true), newMaxFps=%d", newMaxFps);
     }
 
+#ifdef USE_LIMITATION_FOR_THIRD_PARTY
+    if (getSamsungCamera() == false
+        && !flagSpecialMode) {
+        switch (m_fpsProperty) {
+        case 30000:
+        case 15000:
+            newMinFps = m_fpsProperty / 1000;
+            newMaxFps = m_fpsProperty / 1000;
+            break;
+        default:
+            /* Don't use to set fixed fps in the hal side. */
+            break;
+        }
+    }
+#endif
+
     return NO_ERROR;
 }
 
@@ -367,6 +383,38 @@ int ExynosCameraConfigurations::getYuvFormat(const int index)
     }
 
     return m_yuvFormat[index];
+}
+
+void ExynosCameraConfigurations::setYuvPixelSize(const camera_pixel_size pixelSize, const int index)
+{
+    int pixelSizeArrayNum = sizeof(m_yuvPixelSize) / sizeof(m_yuvPixelSize[0]);
+
+    if (pixelSizeArrayNum != YUV_OUTPUT_PORT_ID_MAX) {
+        android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Invalid yuvPixelSize array length %d."\
+                            " YUV_OUTPUT_PORT_ID_MAX %d",
+                            __FUNCTION__, __LINE__,
+                            pixelSizeArrayNum,
+                            YUV_OUTPUT_PORT_ID_MAX);
+        return;
+    }
+
+    m_yuvPixelSize[index] = pixelSize;
+}
+
+camera_pixel_size ExynosCameraConfigurations::getYuvPixelSize(const int index)
+{
+    int pixelSizeArrayNum = sizeof(m_yuvPixelSize) / sizeof(m_yuvPixelSize[0]);
+
+    if (pixelSizeArrayNum != YUV_OUTPUT_PORT_ID_MAX) {
+        android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Invalid yuvPixelSize array length %d."\
+                            " YUV_OUTPUT_PORT_ID_MAX %d",
+                            __FUNCTION__, __LINE__,
+                            pixelSizeArrayNum,
+                            YUV_OUTPUT_PORT_ID_MAX);
+        return CAMERA_PIXEL_SIZE_8BIT;
+    }
+
+    return m_yuvPixelSize[index];
 }
 
 status_t ExynosCameraConfigurations::setYuvBufferCount(const int count, const int outputPortId)
@@ -481,16 +529,6 @@ enum DUAL_REPROCESSING_MODE ExynosCameraConfigurations::getDualReprocessingMode(
     }
 }
 
-void ExynosCameraConfigurations::setTryDualOperationMode(enum DUAL_OPERATION_MODE mode)
-{
-    m_tryDualOperationMode = mode;
-}
-
-enum DUAL_OPERATION_MODE ExynosCameraConfigurations::getTryDualOperationMode(void)
-{
-    return m_tryDualOperationMode;
-}
-
 void ExynosCameraConfigurations::setDualOperationMode(enum DUAL_OPERATION_MODE mode)
 {
     m_dualOperationMode = mode;
@@ -499,16 +537,6 @@ void ExynosCameraConfigurations::setDualOperationMode(enum DUAL_OPERATION_MODE m
 enum DUAL_OPERATION_MODE ExynosCameraConfigurations::getDualOperationMode(void)
 {
     return m_dualOperationMode;
-}
-
-void ExynosCameraConfigurations::setTryDualOperationModeReprocessing(enum DUAL_OPERATION_MODE mode)
-{
-    m_tryDualOperationModeReprocessing = mode;
-}
-
-enum DUAL_OPERATION_MODE ExynosCameraConfigurations::getTryDualOperationModeReprocessing(void)
-{
-    return m_tryDualOperationModeReprocessing;
 }
 
 void ExynosCameraConfigurations::setDualOperationModeReprocessing(enum DUAL_OPERATION_MODE mode)

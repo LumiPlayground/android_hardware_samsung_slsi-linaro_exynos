@@ -38,21 +38,31 @@
 #endif
 #define SET_METHOD3(m) m : HAL3_camera_device_##m
 
-#define MAX_NUM_OF_CAMERA 2
-
 /* init camera module */
 #define INIT_MODULE_PATH "/sys/class/camera/rear/fw_update"
 
 namespace android {
 
 static int sCameraInfo[][2] = {
+#if !defined(BOARD_FRONT_CAMERA_ONLY_USE)
     {
         CAMERA_FACING_BACK,
         BACK_ROTATION,  /* orientation */
-    }, {
+    },
+#endif
+    {
         CAMERA_FACING_FRONT,
         FRONT_ROTATION,  /* orientation */
     }
+};
+
+static CameraInfo sCameraHiddenInfo[] = {
+#if defined(BOARD_SECURE_CAMERA_SUPPORT)
+    {
+        CAMERA_FACING_FRONT,
+        FRONT_ROTATION,  /* orientation */
+    }
+#endif
 };
 
 /* This struct used in device3.3 service arbitration */
@@ -63,11 +73,29 @@ struct CameraConfigInfo {
 };
 
 const CameraConfigInfo sCameraConfigInfo[] = {
+#if !defined(BOARD_FRONT_CAMERA_ONLY_USE)
     {
         51,      /* resoruce_cost               : [0 , 100] */
         NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
         0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
-    }, {
+    },
+#endif
+    {
+        51,      /* resoruce_cost               : [0 , 100] */
+        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
+        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
+    },
+    {
+        51,      /* resoruce_cost               : [0 , 100] */
+        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
+        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
+    },
+    {
+        51,      /* resoruce_cost               : [0 , 100] */
+        NULL,    /* conflicting_devices         : NULL, (char *[]){"1"}, (char *[]){"0", "1"} */
+        0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
+    },
+    {
         51,      /* resoruce_cost               : [0, 100] */
         NULL,    /* conflicting_devices         : NULL, (char *[]){"0"}, (char *[]){"0", "1"} */
         0,       /* conflicting_devices_lenght  : The length of the array in the conflicting_devices field */
@@ -90,13 +118,15 @@ static Mutex            g_cam_configLock[MAX_NUM_OF_CAMERA];
 static Mutex            g_cam_previewLock[MAX_NUM_OF_CAMERA];
 static Mutex            g_cam_recordingLock[MAX_NUM_OF_CAMERA];
 #endif
-static bool             g_cam_torchEnabled = false;
+static bool             g_cam_torchEnabled[MAX_NUM_OF_CAMERA] = {false, false};
 pthread_t		g_thread;
 
 static inline ExynosCamera3 *obj(const struct camera3_device *dev)
 {
     return reinterpret_cast<ExynosCamera3 *>(dev->priv);
 };
+
+static int HAL_getCameraId(int cameraId);
 
 /**
  * Open camera device
@@ -168,7 +198,7 @@ static void HAL3_camera_device_dump(const struct camera3_device *dev, int fd);
 /**
  * Retrun the camera hardware info
  */
-static int HAL_getCameraInfo(int cameraId, struct camera_info *info);
+static int HAL_getCameraInfo(int camera_id, struct camera_info *info);
 
 /**
  * Provide callback function pointers to the HAL module to inform framework
@@ -180,6 +210,7 @@ static int HAL_set_callbacks(const camera_module_callbacks_t *callbacks);
  * Return number of the camera hardware
  */
 static int HAL_getNumberOfCameras();
+static int HAL_getNumberOfHiddenCameras();
 
 #ifdef USE_ONE_INTERFACE_FILE
 static inline ExynosCamera *obj(struct camera_device *dev)

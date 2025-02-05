@@ -22,12 +22,16 @@
 #include "ExynosCameraSensorInfoBase.h"
 #include "ExynosExif.h"
 
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#include "ExynosCameraFusionInclude.h"
+#endif
+
 namespace android {
 
 #ifdef SENSOR_NAME_GET_FROM_FILE
 int g_rearSensorId = -1;
-int g_rear2SensorId = -1;
 int g_frontSensorId = -1;
+int g_secureSensorId = -1;
 #endif
 
 /* #define CALIBRATE_BCROP5_SIZE */  /* HACK for istor EVT0 3aa h/w bcrop5 */
@@ -58,11 +62,9 @@ int getSensorId(int camId)
 
     if (camId == CAMERA_ID_BACK)
         curSensorId = &g_rearSensorId;
-    else if (camId == CAMERA_ID_BACK_1)
-        curSensorId = &g_rear2SensorId;
-    else if (camId == CAMERA_ID_BACK_1)
-        curSensorId = &g_rear2SensorId;
-    else
+    else if (camId == CAMERA_ID_SECURE)
+        curSensorId = &g_secureSensorId;
+    else 
         curSensorId = &g_frontSensorId;
 
     if (*curSensorId < 0) {
@@ -214,6 +216,20 @@ ExynosSensorInfoBase::ExynosSensorInfoBase()
     /* flite->3aa otf support */
     flite3aaOtfSupport = true;
 
+    /* Parameter for SECURE Camera */
+    minGain = 0;
+    maxGain = 0;
+    minShutterSpeed = 0;
+    maxShutterSpeed = 0;
+    minDac = 0;
+    maxDac = 0;
+    minPulseDelay = 0;
+    maxPulseDelay = 0;
+    minPulseWidth = 0;
+    maxPulseWidth = 0;
+    minLedMaxTime = 0;
+    maxLedMaxTime = 0;
+
     rearPreviewListMax = 0;
     frontPreviewListMax = 0;
     rearPictureListMax = 0;
@@ -332,6 +348,10 @@ ExynosSensorInfoBase::ExynosSensorInfoBase()
     videoSizeBnsLut             = NULL;
     dualPreviewSizeLut          = NULL;
     dualVideoSizeLut            = NULL;
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    dualCameraPreviewSizeLut    = NULL;
+    dualCameraVideoSizeLut      = NULL;
+#endif
     videoSizeLutHighSpeed       = NULL;
     videoSizeLutHighSpeed60     = NULL;
     videoSizeLutHighSpeed120    = NULL;
@@ -363,6 +383,10 @@ ExynosSensorInfoBase::ExynosSensorInfoBase()
     leds = NULL;
     ledsLength = NULL;
 
+#ifdef SAMSUNG_COMPANION
+    vendorPafAvailable = 0;
+#endif
+
     /* Android Info Static Metadata */
     supportedHwLevel = 0;
 
@@ -378,6 +402,9 @@ ExynosSensorInfoBase::ExynosSensorInfoBase()
     effectList = 0;
     hiddenEffectList = 0;
 
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    dof = new DOF_BASE;
+#endif
 }
 
 ExynosSensorIMX135Base::ExynosSensorIMX135Base() : ExynosSensorInfoBase()
@@ -1138,6 +1165,25 @@ void ExynosSensorS5K3L8Base::m_init(int cameraId)
         dualVideoSizeLut      = VIDEO_SIZE_LUT_3L8_BDS;
 #endif //  USE_BNS_DUAL_RECORDING
 
+#if defined(BOARD_CAMERA_USES_DUAL_CAMERA)
+        switch (cameraId) {
+        case CAMERA_ID_BACK:
+        case CAMERA_ID_FRONT_1:
+            dualCameraPreviewSizeLut = PREVIEW_SIZE_LUT_3L8_BDS_DUAL_CAMERA_WIDE;
+            dualCameraVideoSizeLut   = VIDEO_SIZE_LUT_3L8_BDS_DUAL_CAMERA_WIDE;
+            break;
+        case CAMERA_ID_FRONT:
+        case CAMERA_ID_BACK_1:
+            dualCameraPreviewSizeLut = PREVIEW_SIZE_LUT_3L8_BDS_DUAL_CAMERA_TELE;
+            dualCameraVideoSizeLut   = VIDEO_SIZE_LUT_3L8_BDS_DUAL_CAMERA_TELE;
+            break;
+        default:
+           android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Invalid cameraId(%d), assert!!!!",
+                    __FUNCTION__, __LINE__, cameraId);
+           break;
+        }
+#endif
+
         videoSizeLutHighSpeed60  = VIDEO_SIZE_LUT_HIGH_SPEED_3L8_BNS;
         videoSizeLutHighSpeed120 = VIDEO_SIZE_LUT_HIGH_SPEED_3L8_BNS;
         vtcallSizeLut         = VTCALL_SIZE_LUT_3L8_BNS;
@@ -1205,6 +1251,9 @@ void ExynosSensorS5K3L8Base::m_init(int cameraId)
     frontFPSList       = S5K3L8_FPS_RANGE_LIST;
     hiddenFrontFPSList   = S5K3L8_HIDDEN_FPS_RANGE_LIST;
 
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    dof = new DOF_3L8;
+#endif
 };
 
 #if 0
@@ -1308,6 +1357,13 @@ ExynosSensorS5K2P2Base::ExynosSensorS5K2P2Base() : ExynosSensorInfoBase()
         | FOCUS_MODE_CONTINUOUS_VIDEO
         | FOCUS_MODE_CONTINUOUS_PICTURE
         | FOCUS_MODE_TOUCH
+#ifdef SAMSUNG_OT
+        | FOCUS_MODE_OBJECT_TRACKING_PICTURE
+        | FOCUS_MODE_OBJECT_TRACKING_VIDEO
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+        | FOCUS_MODE_MANUAL
+#endif
         ;
 
     sceneModeList =
@@ -1326,7 +1382,12 @@ ExynosSensorS5K2P2Base::ExynosSensorS5K2P2Base() : ExynosSensorInfoBase()
         | SCENE_MODE_PARTY
         | SCENE_MODE_SPORTS
         | SCENE_MODE_CANDLELIGHT
-        */
+#ifdef SAMSUNG_FOOD_MODE
+        | SCENE_MODE_FOOD
+#endif */
+#ifdef SAMSUNG_COMPANION
+        | SCENE_MODE_HDR
+#endif
         ;
 
     whiteBalanceList =
@@ -1536,6 +1597,10 @@ ExynosSensorS5K3P3Base::ExynosSensorS5K3P3Base() : ExynosSensorInfoBase()
         | FOCUS_MODE_CONTINUOUS_VIDEO
         | FOCUS_MODE_CONTINUOUS_PICTURE
         | FOCUS_MODE_TOUCH
+#ifdef SAMSUNG_OT
+        | FOCUS_MODE_OBJECT_TRACKING_PICTURE
+        | FOCUS_MODE_OBJECT_TRACKING_VIDEO
+#endif
         ;
 
     sceneModeList =
@@ -1554,6 +1619,9 @@ ExynosSensorS5K3P3Base::ExynosSensorS5K3P3Base() : ExynosSensorInfoBase()
         | SCENE_MODE_PARTY
         | SCENE_MODE_SPORTS
         | SCENE_MODE_CANDLELIGHT*/
+#ifdef SAMSUNG_COMPANION
+        | SCENE_MODE_HDR
+#endif
         ;
 
     whiteBalanceList =
@@ -1747,6 +1815,9 @@ ExynosSensorS5K2P2_12MBase::ExynosSensorS5K2P2_12MBase() : ExynosSensorInfoBase(
         | SCENE_MODE_PARTY
         | SCENE_MODE_SPORTS
         | SCENE_MODE_CANDLELIGHT*/
+#ifdef SAMSUNG_COMPANION
+        | SCENE_MODE_HDR
+#endif
         ;
 
     whiteBalanceList =
@@ -1940,6 +2011,9 @@ ExynosSensorS5K2P3Base::ExynosSensorS5K2P3Base() : ExynosSensorInfoBase()
                 | SCENE_MODE_PARTY
                 | SCENE_MODE_SPORTS
                 | SCENE_MODE_CANDLELIGHT*/
+#ifdef SAMSUNG_COMPANION
+        | SCENE_MODE_HDR
+#endif
         ;
 
     whiteBalanceList =
@@ -2021,75 +2095,33 @@ ExynosSensorS5K2P3Base::ExynosSensorS5K2P3Base() : ExynosSensorInfoBase()
 
 ExynosSensorS5K2P8Base::ExynosSensorS5K2P8Base() : ExynosSensorInfoBase()
 {
-    maxPreviewW = 3840;
-    maxPreviewH = 2160;
-    maxPictureW = 5312;
-    maxPictureH = 2988;
-    maxVideoW = 3840;
-    maxVideoH = 2160;
-    maxSensorW = 5328;
-    maxSensorH = 3000;
-    sensorMarginW = 16;
-    sensorMarginH = 12;
-
-    maxThumbnailW = 512;
-    maxThumbnailH = 384;
+    maxZoomLevel = MAX_ZOOM_LEVEL;
+    maxZoomRatio = MAX_ZOOM_RATIO;
+/*
+    maxPreviewW = 1920;
+    maxPreviewH = 1080;
+    maxVideoW = 1920;
+    maxVideoH = 1080;
 
     fNumberNum = 22;
     fNumberDen = 10;
-    focalLengthNum = 480;
+    focalLengthNum = 330;
     focalLengthDen = 100;
     focusDistanceNum = 0;
     focusDistanceDen = 0;
     apertureNum = 227;
     apertureDen = 100;
 
-    horizontalViewAngle[SIZE_RATIO_16_9] = 62.2f;
-    horizontalViewAngle[SIZE_RATIO_4_3] = 48.8f;
-    horizontalViewAngle[SIZE_RATIO_1_1] = 37.4f;
+    horizontalViewAngle[SIZE_RATIO_16_9] = 56.0f;
+    horizontalViewAngle[SIZE_RATIO_4_3] = 43.4f;
+    horizontalViewAngle[SIZE_RATIO_1_1] = 33.6f;
     horizontalViewAngle[SIZE_RATIO_3_2] = 55.2f;
     horizontalViewAngle[SIZE_RATIO_5_4] = 48.8f;
     horizontalViewAngle[SIZE_RATIO_5_3] = 58.4f;
     horizontalViewAngle[SIZE_RATIO_11_9] = 48.8f;
     verticalViewAngle = 39.4f;
     focalLengthIn35mmLength = 31;
-
-    minFps = 1;
-    maxFps = 30;
-
-    minExposureCompensation = -4;
-    maxExposureCompensation = 4;
-    exposureCompensationStep = 0.5f;
-    minExposureTime = 32;
-    maxExposureTime = 10000000;
-    minWBK = 2300;
-    maxWBK = 10000;
-    maxNumDetectedFaces = 16;
-    maxNumFocusAreas = 2;
-    maxNumMeteringAreas = 1;
-    maxBasicZoomLevel = MAX_BASIC_ZOOM_LEVEL;
-    maxZoomLevel = MAX_ZOOM_LEVEL;
-    maxZoomRatio = MAX_ZOOM_RATIO;
-
-    zoomSupport = true;
-    smoothZoomSupport = false;
-    videoSnapshotSupport = true;
-    videoStabilizationSupport = true;
-    autoWhiteBalanceLockSupport = true;
-    autoExposureLockSupport = true;
-
-    /* vendor specifics */
-    highResolutionCallbackW = 3264;
-    highResolutionCallbackH = 1836;
-    highSpeedRecording60WFHD = 1920;
-    highSpeedRecording60HFHD = 1080;
-    highSpeedRecording60W = 1008;
-    highSpeedRecording60H = 566;
-    highSpeedRecording120W = 1008;
-    highSpeedRecording120H = 566;
-    scalableSensorSupport = true;
-    bnsSupport = true;
-
+*/
     effectList =
           EFFECT_NONE
         | EFFECT_MONO
@@ -2163,10 +2195,7 @@ ExynosSensorS5K2P8Base::ExynosSensorS5K2P8Base() : ExynosSensorInfoBase()
         sizeTableSupport      = true;
     }
 
-    fastAeStableLutMax          = sizeof(FAST_AE_STABLE_SIZE_LUT_2P8) / (sizeof(int) * SIZE_OF_LUT);
-    fastAeStableLut             = FAST_AE_STABLE_SIZE_LUT_2P8;
 
-    /* rear */
     /* Set the max of preview/picture/video lists */
     rearPreviewListMax      = sizeof(S5K2P8_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
     rearPictureListMax      = sizeof(S5K2P8_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
@@ -2188,29 +2217,6 @@ ExynosSensorS5K2P8Base::ExynosSensorS5K2P8Base() : ExynosSensorInfoBase()
     hiddenRearVideoList   = S5K2P8_HIDDEN_VIDEO_LIST;
     rearFPSList       = S5K2P8_FPS_RANGE_LIST;
     hiddenRearFPSList   = S5K2P8_HIDDEN_FPS_RANGE_LIST;
-
-    /* front */
-    /* Set the max of preview/picture/video lists */
-    frontPreviewListMax = rearPreviewListMax;
-    frontPictureListMax = rearPictureListMax;
-    hiddenFrontPreviewListMax = hiddenRearPreviewListMax;
-    hiddenFrontPictureListMax = hiddenRearPictureListMax;
-    //thumbnailListMax
-    frontVideoListMax = rearVideoListMax;
-    hiddenFrontVideoListMax = hiddenRearVideoListMax;
-    frontFPSListMax = rearFPSListMax;
-    hiddenFrontFPSListMax = hiddenRearFPSListMax;
-
-    /* Set supported preview/picture/video lists */
-    frontPreviewList = rearPreviewList;
-    frontPictureList = rearPictureList;
-    hiddenFrontPreviewList = hiddenRearPreviewList;
-    hiddenFrontPictureList = hiddenRearPictureList;
-    //thumbnailList
-    frontVideoList = rearVideoList;
-    hiddenFrontVideoList = hiddenRearVideoList;
-    frontFPSList = rearFPSList;
-    hiddenFrontFPSList = hiddenRearFPSList;
 };
 
 ExynosSensorS5K2T2Base::ExynosSensorS5K2T2Base() : ExynosSensorInfoBase()
@@ -2318,6 +2324,13 @@ ExynosSensorS5K2T2Base::ExynosSensorS5K2T2Base() : ExynosSensorInfoBase()
         | FOCUS_MODE_CONTINUOUS_VIDEO
         | FOCUS_MODE_CONTINUOUS_PICTURE
         | FOCUS_MODE_TOUCH
+#ifdef SAMSUNG_OT
+        | FOCUS_MODE_OBJECT_TRACKING_PICTURE
+        | FOCUS_MODE_OBJECT_TRACKING_VIDEO
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+        | FOCUS_MODE_MANUAL
+#endif
         ;
 
     sceneModeList =
@@ -2336,7 +2349,12 @@ ExynosSensorS5K2T2Base::ExynosSensorS5K2T2Base() : ExynosSensorInfoBase()
         | SCENE_MODE_PARTY
         | SCENE_MODE_SPORTS
         | SCENE_MODE_CANDLELIGHT
-        */
+#ifdef SAMSUNG_FOOD_MODE
+        | SCENE_MODE_FOOD
+#endif*/
+#ifdef SAMSUNG_COMPANION
+        | SCENE_MODE_HDR
+#endif
         ;
 
     whiteBalanceList =
@@ -2482,7 +2500,7 @@ ExynosSensorS5K6B2Base::ExynosSensorS5K6B2Base() : ExynosSensorInfoBase()
     exposureCompensationStep = 0.5f;
     maxNumDetectedFaces = 16;
     maxNumFocusAreas = 1;
-    maxNumMeteringAreas = 1;
+    maxNumMeteringAreas = 0;
     maxZoomLevel = MAX_ZOOM_LEVEL_FRONT;
     maxZoomRatio = MAX_ZOOM_RATIO_FRONT;
 
@@ -3533,7 +3551,6 @@ ExynosSensorS5K4H5Base::ExynosSensorS5K4H5Base() : ExynosSensorInfoBase()
         sizeTableSupport            = true;
     }
 
-    /* rear */
     /* Set the max of preview/picture/video lists */
     rearPreviewListMax      = sizeof(S5K4H5_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
     rearPictureListMax      = sizeof(S5K4H5_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
@@ -3555,29 +3572,6 @@ ExynosSensorS5K4H5Base::ExynosSensorS5K4H5Base() : ExynosSensorInfoBase()
     hiddenRearVideoList   = S5K4H5_HIDDEN_VIDEO_LIST;
     rearFPSList       = S5K4H5_FPS_RANGE_LIST;
     hiddenRearFPSList   = S5K4H5_HIDDEN_FPS_RANGE_LIST;
-
-    /* front */
-    /* Set the max of preview/picture/video lists */
-    frontPreviewListMax = rearPreviewListMax;
-    frontPictureListMax = rearPictureListMax;
-    hiddenFrontPreviewListMax = hiddenRearPreviewListMax;
-    hiddenFrontPictureListMax = hiddenRearPictureListMax;
-    //thumbnailListMax
-    frontVideoListMax = rearVideoListMax;
-    hiddenFrontVideoListMax = hiddenRearVideoListMax;
-    frontFPSListMax = rearFPSListMax;
-    hiddenFrontFPSListMax = hiddenRearFPSListMax;
-
-    /* Set supported preview/picture/video lists */
-    frontPreviewList = rearPreviewList;
-    frontPictureList = rearPictureList;
-    hiddenFrontPreviewList = hiddenRearPreviewList;
-    hiddenFrontPictureList = hiddenRearPictureList;
-    //thumbnailList
-    frontVideoList = rearVideoList;
-    hiddenFrontVideoList = hiddenRearVideoList;
-    frontFPSList = rearFPSList;
-    hiddenFrontFPSList = hiddenRearFPSList;
 };
 
 ExynosSensorS5K4H5YCBase::ExynosSensorS5K4H5YCBase() : ExynosSensorInfoBase()
@@ -3976,16 +3970,12 @@ void ExynosSensorS5K3M3Base::m_init(int cameraId)
 {
     maxPreviewW = 1920;
     maxPreviewH = 1080;
-
-    maxPictureW = 4032;
-    maxPictureH = 3024;
-
+    maxPictureW = 4160;
+    maxPictureH = 3120;
     maxVideoW = 3840;
     maxVideoH = 2160;
-
-    maxSensorW = 4032;
-    maxSensorH = 3024;
-
+    maxSensorW = 4160;
+    maxSensorH = 3120;
     sensorMarginW = 0;
     sensorMarginH = 0;
 
@@ -4125,52 +4115,69 @@ void ExynosSensorS5K3M3Base::m_init(int cameraId)
     bnsSupport = true;
 
     if (bnsSupport == true) {
-#if defined(USE_BNS_PREVIEW)
-        previewSizeLutMax     = sizeof(PREVIEW_SIZE_LUT_3M3_BNS) / (sizeof(int) * SIZE_OF_LUT);
-#else
-        previewSizeLutMax     = sizeof(PREVIEW_SIZE_LUT_3M3)    / (sizeof(int) * SIZE_OF_LUT);
-#endif
-        videoSizeLutMax       = sizeof(VIDEO_SIZE_LUT_3M3)      / (sizeof(int) * SIZE_OF_LUT);
-        pictureSizeLutMax     = sizeof(PICTURE_SIZE_LUT_3M3)        / (sizeof(int) * SIZE_OF_LUT);
-        vtcallSizeLutMax      = sizeof(VTCALL_SIZE_LUT_3M3)     / (sizeof(int) * SIZE_OF_LUT);
-        videoSizeLutHighSpeed60Max  = sizeof(VIDEO_SIZE_LUT_60FPS_HIGH_SPEED_3M3) / (sizeof(int) * SIZE_OF_LUT);
-        videoSizeLutHighSpeed120Max = sizeof(VIDEO_SIZE_LUT_120FPS_HIGH_SPEED_3M3) / (sizeof(int) * SIZE_OF_LUT);
-        fastAeStableLutMax          = sizeof(FAST_AE_STABLE_SIZE_LUT_3M3) / (sizeof(int) * SIZE_OF_LUT);
 
 #if defined(USE_BNS_PREVIEW)
-        previewSizeLut        = PREVIEW_SIZE_LUT_3M3_BNS;
+        previewSizeLutMax     = sizeof(PREVIEW_SIZE_LUT_3M3_BNS_15) / (sizeof(int) * SIZE_OF_LUT);
 #else
-        previewSizeLut        = PREVIEW_SIZE_LUT_3M3;
+        previewSizeLutMax     = sizeof(PREVIEW_SIZE_LUT_3M3_BDS)    / (sizeof(int) * SIZE_OF_LUT);
 #endif
-        videoSizeLut          = VIDEO_SIZE_LUT_3M3;
-        videoSizeBnsLut       = VIDEO_SIZE_LUT_3M3_BNS;
+        videoSizeLutMax       = sizeof(VIDEO_SIZE_LUT_3M3_BDS)      / (sizeof(int) * SIZE_OF_LUT);
+        pictureSizeLutMax     = sizeof(PICTURE_SIZE_LUT_3M3)        / (sizeof(int) * SIZE_OF_LUT);
+        vtcallSizeLutMax      = sizeof(VTCALL_SIZE_LUT_3M3_BNS)     / (sizeof(int) * SIZE_OF_LUT);
+
+        videoSizeLutHighSpeed60Max  = sizeof(VIDEO_SIZE_LUT_HIGH_SPEED_3M3_BNS) / (sizeof(int) * SIZE_OF_LUT);
+        videoSizeLutHighSpeed120Max = sizeof(VIDEO_SIZE_LUT_HIGH_SPEED_3M3_BNS) / (sizeof(int) * SIZE_OF_LUT);
+
+#if defined(USE_BNS_PREVIEW)
+        previewSizeLut        = PREVIEW_SIZE_LUT_3M3_BNS_15;
+#else
+        previewSizeLut        = PREVIEW_SIZE_LUT_3M3_BDS;
+#endif
+        videoSizeLut          = VIDEO_SIZE_LUT_3M3_BDS;
+        videoSizeBnsLut       = VIDEO_SIZE_LUT_3M3_BNS_15;
         pictureSizeLut        = PICTURE_SIZE_LUT_3M3;
 
 #if defined(USE_BNS_DUAL_PREVIEW)
 #if defined(DUAL_BNS_RATIO) && (DUAL_BNS_RATIO == 1500)
-        dualPreviewSizeLut    = PREVIEW_SIZE_LUT_3M3_BNS;
+        dualPreviewSizeLut    = PREVIEW_SIZE_LUT_3M3_BNS_15;
 #else
-        dualPreviewSizeLut    = PREVIEW_SIZE_LUT_3M3_BNS;
+        dualPreviewSizeLut    = PREVIEW_SIZE_LUT_3M3_BNS_20;
 #endif
 #else
-        dualPreviewSizeLut    = PREVIEW_SIZE_LUT_3M3;
+        dualPreviewSizeLut    = PREVIEW_SIZE_LUT_3M3_BDS;
 #endif // USE_BNS_DUAL_PREVIEW
 
 #if defined(USE_BNS_DUAL_RECORDING)
 #if defined(DUAL_BNS_RATIO) && (DUAL_BNS_RATIO == 1500)
-        dualVideoSizeLut      = VIDEO_SIZE_LUT_3M3_BNS;
+        dualVideoSizeLut      = VIDEO_SIZE_LUT_3M3_BNS_15;
 #else
-        dualVideoSizeLut      = VIDEO_SIZE_LUT_3M3_BNS;
+        dualVideoSizeLut      = VIDEO_SIZE_LUT_3M3_BNS_20;
 #endif
 #else
-        dualVideoSizeLut      = VIDEO_SIZE_LUT_3M3;
+        dualVideoSizeLut      = VIDEO_SIZE_LUT_3M3_BDS;
 #endif //  USE_BNS_DUAL_RECORDING
 
-        videoSizeLutHighSpeed60  = VIDEO_SIZE_LUT_60FPS_HIGH_SPEED_3M3;
-        videoSizeLutHighSpeed120 = VIDEO_SIZE_LUT_120FPS_HIGH_SPEED_3M3;
-        vtcallSizeLut         = VTCALL_SIZE_LUT_3M3;
-        fastAeStableLut       = FAST_AE_STABLE_SIZE_LUT_3M3;
-
+#if defined(BOARD_CAMERA_USES_DUAL_CAMERA)
+        switch (cameraId) {
+        case CAMERA_ID_BACK:
+        case CAMERA_ID_FRONT_1:
+            dualCameraPreviewSizeLut = PREVIEW_SIZE_LUT_3M3_BDS_DUAL_CAMERA_WIDE;
+            dualCameraVideoSizeLut   = VIDEO_SIZE_LUT_3M3_BDS_DUAL_CAMERA_WIDE;
+            break;
+        case CAMERA_ID_FRONT:
+        case CAMERA_ID_BACK_1:
+            dualCameraPreviewSizeLut = PREVIEW_SIZE_LUT_3M3_BDS_DUAL_CAMERA_TELE;
+            dualCameraVideoSizeLut   = VIDEO_SIZE_LUT_3M3_BDS_DUAL_CAMERA_TELE;
+            break;
+        default:
+           android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Invalid cameraId(%d), assert!!!!",
+                    __FUNCTION__, __LINE__, cameraId);
+           break;
+        }
+#endif
+        videoSizeLutHighSpeed60  = VIDEO_SIZE_LUT_HIGH_SPEED_3M3_BNS;
+        videoSizeLutHighSpeed120 = VIDEO_SIZE_LUT_HIGH_SPEED_3M3_BNS;
+        vtcallSizeLut         = VTCALL_SIZE_LUT_3M3_BNS;
         sizeTableSupport      = true;
     } else {
         previewSizeLutMax     = 0;
@@ -4179,7 +4186,6 @@ void ExynosSensorS5K3M3Base::m_init(int cameraId)
         vtcallSizeLutMax      = 0;
         videoSizeLutHighSpeed60Max  = 0;
         videoSizeLutHighSpeed120Max = 0;
-        fastAeStableLutMax = 0;
 
         previewSizeLut        = NULL;
         pictureSizeLut        = NULL;
@@ -4188,7 +4194,6 @@ void ExynosSensorS5K3M3Base::m_init(int cameraId)
         vtcallSizeLut         = NULL;
         videoSizeLutHighSpeed60  = NULL;
         videoSizeLutHighSpeed120 = NULL;
-        fastAeStableLut = NULL;
 
         sizeTableSupport      = false;
     }
@@ -4237,6 +4242,9 @@ void ExynosSensorS5K3M3Base::m_init(int cameraId)
     frontFPSList       = S5K3M3_FPS_RANGE_LIST;
     hiddenFrontFPSList   = S5K3M3_HIDDEN_FPS_RANGE_LIST;
 
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    dof = new DOF_3M3;
+#endif
 };
 
 ExynosSensorS5K5E2Base::ExynosSensorS5K5E2Base() : ExynosSensorInfoBase()
@@ -4892,6 +4900,13 @@ ExynosSensorIMX240Base::ExynosSensorIMX240Base() : ExynosSensorInfoBase()
         | FOCUS_MODE_CONTINUOUS_VIDEO
         | FOCUS_MODE_CONTINUOUS_PICTURE
         | FOCUS_MODE_TOUCH
+#ifdef SAMSUNG_OT
+        | FOCUS_MODE_OBJECT_TRACKING_PICTURE
+        | FOCUS_MODE_OBJECT_TRACKING_VIDEO
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+        | FOCUS_MODE_MANUAL
+#endif
         ;
 
     sceneModeList =
@@ -4910,7 +4925,12 @@ ExynosSensorIMX240Base::ExynosSensorIMX240Base() : ExynosSensorInfoBase()
         | SCENE_MODE_PARTY
         | SCENE_MODE_SPORTS
         | SCENE_MODE_CANDLELIGHT
-        */
+#ifdef SAMSUNG_FOOD_MODE
+        | SCENE_MODE_FOOD
+#endif */
+#ifdef SAMSUNG_COMPANION
+        | SCENE_MODE_HDR
+#endif
         ;
 
     whiteBalanceList =
@@ -5114,6 +5134,13 @@ ExynosSensorIMX228Base::ExynosSensorIMX228Base() : ExynosSensorInfoBase()
         | FOCUS_MODE_CONTINUOUS_VIDEO
         | FOCUS_MODE_CONTINUOUS_PICTURE
         | FOCUS_MODE_TOUCH
+#ifdef SAMSUNG_OT
+        | FOCUS_MODE_OBJECT_TRACKING_PICTURE
+        | FOCUS_MODE_OBJECT_TRACKING_VIDEO
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+        | FOCUS_MODE_MANUAL
+#endif
         ;
 
     sceneModeList =
@@ -5132,7 +5159,12 @@ ExynosSensorIMX228Base::ExynosSensorIMX228Base() : ExynosSensorInfoBase()
         | SCENE_MODE_PARTY
         | SCENE_MODE_SPORTS
         | SCENE_MODE_CANDLELIGHT
-        */
+#ifdef SAMSUNG_FOOD_MODE
+        | SCENE_MODE_FOOD
+#endif*/
+#ifdef SAMSUNG_COMPANION
+        | SCENE_MODE_HDR
+#endif
         ;
 
     whiteBalanceList =
@@ -5883,6 +5915,10 @@ ExynosSensorIMX320_3H1Base::ExynosSensorIMX320_3H1Base() : ExynosSensorInfoBase(
         | FOCUS_MODE_CONTINUOUS_VIDEO
         | FOCUS_MODE_CONTINUOUS_PICTURE
         | FOCUS_MODE_TOUCH
+#ifdef SAMSUNG_OT
+        | FOCUS_MODE_OBJECT_TRACKING_PICTURE
+        | FOCUS_MODE_OBJECT_TRACKING_VIDEO
+#endif
         ;
 
     sceneModeList =
@@ -6423,6 +6459,13 @@ ExynosSensorS5K5E6Base::ExynosSensorS5K5E6Base() : ExynosSensorInfoBase()
     autoExposureLockSupport = true;
     visionModeSupport = true;
 
+    minGain = 1;
+    maxGain = 160;
+    minShutterSpeed = 1; //   0.1ms
+    maxShutterSpeed = 330; //  33.0ms
+    minDac = 1; //     0mA
+    maxDac = 10; //  950mA
+
     antiBandingList =
           ANTIBANDING_AUTO
         | ANTIBANDING_50HZ
@@ -6835,6 +6878,13 @@ ExynosSensorIMX240_2P2Base::ExynosSensorIMX240_2P2Base() : ExynosSensorInfoBase(
         | FOCUS_MODE_CONTINUOUS_VIDEO
         | FOCUS_MODE_CONTINUOUS_PICTURE
         | FOCUS_MODE_TOUCH
+#ifdef SAMSUNG_OT
+        | FOCUS_MODE_OBJECT_TRACKING_PICTURE
+        | FOCUS_MODE_OBJECT_TRACKING_VIDEO
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+        | FOCUS_MODE_MANUAL
+#endif
         ;
 
     sceneModeList =
@@ -6853,7 +6903,12 @@ ExynosSensorIMX240_2P2Base::ExynosSensorIMX240_2P2Base() : ExynosSensorInfoBase(
         | SCENE_MODE_PARTY
         | SCENE_MODE_SPORTS
         | SCENE_MODE_CANDLELIGHT
-        */
+#ifdef SAMSUNG_FOOD_MODE
+        | SCENE_MODE_FOOD
+#endif */
+#ifdef SAMSUNG_COMPANION
+        | SCENE_MODE_HDR
+#endif
         ;
 
     whiteBalanceList =
@@ -7176,6 +7231,13 @@ ExynosSensorIMX333_2L2Base::ExynosSensorIMX333_2L2Base() : ExynosSensorInfoBase(
         | FOCUS_MODE_CONTINUOUS_VIDEO
         | FOCUS_MODE_CONTINUOUS_PICTURE
         | FOCUS_MODE_TOUCH
+#ifdef SAMSUNG_OT
+        | FOCUS_MODE_OBJECT_TRACKING_PICTURE
+        | FOCUS_MODE_OBJECT_TRACKING_VIDEO
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+        | FOCUS_MODE_MANUAL
+#endif
         ;
 
     sceneModeList =
@@ -7194,7 +7256,12 @@ ExynosSensorIMX333_2L2Base::ExynosSensorIMX333_2L2Base() : ExynosSensorInfoBase(
         | SCENE_MODE_PARTY
         | SCENE_MODE_SPORTS
         | SCENE_MODE_CANDLELIGHT
-        */
+#ifdef SAMSUNG_FOOD_MODE
+        | SCENE_MODE_FOOD
+#endif */
+#ifdef SAMSUNG_COMPANION
+        /*| SCENE_MODE_HDR*/
+#endif
         ;
 
     whiteBalanceList =
@@ -7407,6 +7474,13 @@ ExynosSensorIMX260_2L1Base::ExynosSensorIMX260_2L1Base() : ExynosSensorInfoBase(
         | FOCUS_MODE_CONTINUOUS_VIDEO
         | FOCUS_MODE_CONTINUOUS_PICTURE
         | FOCUS_MODE_TOUCH
+#ifdef SAMSUNG_OT
+        | FOCUS_MODE_OBJECT_TRACKING_PICTURE
+        | FOCUS_MODE_OBJECT_TRACKING_VIDEO
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+        | FOCUS_MODE_MANUAL
+#endif
         ;
 
     sceneModeList =
@@ -7425,7 +7499,12 @@ ExynosSensorIMX260_2L1Base::ExynosSensorIMX260_2L1Base() : ExynosSensorInfoBase(
         | SCENE_MODE_PARTY
         | SCENE_MODE_SPORTS
         | SCENE_MODE_CANDLELIGHT
-        */
+#ifdef SAMSUNG_FOOD_MODE
+        | SCENE_MODE_FOOD
+#endif */
+#ifdef SAMSUNG_COMPANION
+        | SCENE_MODE_HDR
+#endif
         ;
 
     whiteBalanceList =
@@ -7587,7 +7666,7 @@ ExynosSensorS5K2L7Base::ExynosSensorS5K2L7Base() : ExynosSensorInfoBase()
     maxWBK = 10000;
     maxNumDetectedFaces = 16;
     maxNumFocusAreas = 1;
-    maxNumMeteringAreas = 1;
+    maxNumMeteringAreas = 0;
     maxZoomLevel = MAX_ZOOM_LEVEL;
     maxZoomRatio = MAX_ZOOM_RATIO;
 
@@ -7638,6 +7717,13 @@ ExynosSensorS5K2L7Base::ExynosSensorS5K2L7Base() : ExynosSensorInfoBase()
         | FOCUS_MODE_CONTINUOUS_VIDEO
         | FOCUS_MODE_CONTINUOUS_PICTURE
         | FOCUS_MODE_TOUCH
+#ifdef SAMSUNG_OT
+        | FOCUS_MODE_OBJECT_TRACKING_PICTURE
+        | FOCUS_MODE_OBJECT_TRACKING_VIDEO
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+        | FOCUS_MODE_MANUAL
+#endif
         ;
 
     sceneModeList =
@@ -7656,7 +7742,12 @@ ExynosSensorS5K2L7Base::ExynosSensorS5K2L7Base() : ExynosSensorInfoBase()
         | SCENE_MODE_PARTY
         | SCENE_MODE_SPORTS
         | SCENE_MODE_CANDLELIGHT
-        */
+#ifdef SAMSUNG_FOOD_MODE
+        | SCENE_MODE_FOOD
+#endif */
+#ifdef SAMSUNG_COMPANION
+        | SCENE_MODE_HDR
+#endif
         ;
 
     whiteBalanceList =
@@ -7688,18 +7779,18 @@ ExynosSensorS5K2L7Base::ExynosSensorS5K2L7Base() : ExynosSensorInfoBase()
 #if defined(USE_BNS_PREVIEW)
         previewSizeLutMax     = sizeof(PREVIEW_SIZE_LUT_S5K2L7_BNS) / (sizeof(int) * SIZE_OF_LUT);
 #else
-        previewSizeLutMax     = sizeof(PREVIEW_SIZE_LUT_S5K2L7_BDS) / (sizeof(int) * SIZE_OF_LUT);
+        previewSizeLutMax     = sizeof(PREVIEW_SIZE_LUT_S5K2L7) / (sizeof(int) * SIZE_OF_LUT);
 #endif
 
 #ifdef ENABLE_8MP_FULL_FRAME
         videoSizeLutMax       = sizeof(VIDEO_SIZE_LUT_S5K2L7_8MP_FULL)       / (sizeof(int) * SIZE_OF_LUT);
 #else
-        videoSizeLutMax       = sizeof(VIDEO_SIZE_LUT_S5K2L7_BDS)       / (sizeof(int) * SIZE_OF_LUT);
+        videoSizeLutMax       = sizeof(VIDEO_SIZE_LUT_S5K2L7)       / (sizeof(int) * SIZE_OF_LUT);
 #endif
         pictureSizeLutMax     = sizeof(PICTURE_SIZE_LUT_S5K2L7)     / (sizeof(int) * SIZE_OF_LUT);
         vtcallSizeLutMax      = sizeof(VTCALL_SIZE_LUT_S5K2L7)     / (sizeof(int) * SIZE_OF_LUT);
 
-        videoSizeLutHighSpeed60Max  = sizeof(VIDEO_SIZE_LUT_S5K2L7_BDS) / (sizeof(int) * SIZE_OF_LUT);
+        videoSizeLutHighSpeed60Max  = sizeof(VIDEO_SIZE_LUT_S5K2L7) / (sizeof(int) * SIZE_OF_LUT);
         videoSizeLutHighSpeed120Max = sizeof(VIDEO_SIZE_LUT_120FPS_HIGH_SPEED_S5K2L7) / (sizeof(int) * SIZE_OF_LUT);
         videoSizeLutHighSpeed240Max = sizeof(VIDEO_SIZE_LUT_240FPS_HIGH_SPEED_S5K2L7) / (sizeof(int) * SIZE_OF_LUT);
         fastAeStableLutMax          = sizeof(FAST_AE_STABLE_SIZE_LUT_S5K2L7) / (sizeof(int) * SIZE_OF_LUT);
@@ -7707,17 +7798,17 @@ ExynosSensorS5K2L7Base::ExynosSensorS5K2L7Base() : ExynosSensorInfoBase()
 #if defined(USE_BNS_PREVIEW)
         previewSizeLut              = PREVIEW_SIZE_LUT_S5K2L7_BNS;
 #else
-        previewSizeLut              = PREVIEW_SIZE_LUT_S5K2L7_BDS;
+        previewSizeLut              = PREVIEW_SIZE_LUT_S5K2L7;
 #endif
         dualPreviewSizeLut          = PREVIEW_SIZE_LUT_S5K2L7_BNS;
 
 #ifdef ENABLE_8MP_FULL_FRAME
         videoSizeLut                = VIDEO_SIZE_LUT_S5K2L7_8MP_FULL;
 #else
-        videoSizeLut                = VIDEO_SIZE_LUT_S5K2L7_BDS;
+        videoSizeLut                = VIDEO_SIZE_LUT_S5K2L7;
 #endif
         pictureSizeLut              = PICTURE_SIZE_LUT_S5K2L7;
-        videoSizeLutHighSpeed60     = VIDEO_SIZE_LUT_S5K2L7_BDS;
+        videoSizeLutHighSpeed60     = VIDEO_SIZE_LUT_S5K2L7;
         videoSizeLutHighSpeed120    = VIDEO_SIZE_LUT_120FPS_HIGH_SPEED_S5K2L7;
         videoSizeLutHighSpeed240    = VIDEO_SIZE_LUT_240FPS_HIGH_SPEED_S5K2L7;
         fastAeStableLut             = FAST_AE_STABLE_SIZE_LUT_S5K2L7;
@@ -7945,869 +8036,6 @@ ExynosSensorOV5670Base::ExynosSensorOV5670Base() : ExynosSensorInfoBase()
     hiddenFrontVideoList   = OV5670_HIDDEN_VIDEO_LIST;
     frontFPSList       = OV5670_FPS_RANGE_LIST;
     hiddenFrontFPSList   = OV5670_HIDDEN_FPS_RANGE_LIST;
-};
-
-void ExynosSensorS5K2P7SXBase::m_init(int cameraId)
-{
-    maxPreviewW = 3840;
-    maxPreviewH = 2160;
-    maxPictureW = 4608;
-    maxPictureH = 3456;
-    maxVideoW = 1920;
-    maxVideoH = 1080;
-    maxSensorW = 4608;
-    maxSensorH = 3456;
-    sensorMarginW = 0;
-    sensorMarginH = 0;
-    //check until here
-    maxThumbnailW = 512;
-    maxThumbnailH = 384;
-
-    fNumberNum = 19;
-    fNumberDen = 10;
-    focalLengthNum = 360;
-    focalLengthDen = 100;
-    focusDistanceNum = 0;
-    focusDistanceDen = 0;
-    apertureNum = 185;
-    apertureDen = 100;
-
-    horizontalViewAngle[SIZE_RATIO_16_9] = 64.0f;
-    horizontalViewAngle[SIZE_RATIO_4_3] = 64.0f;
-    horizontalViewAngle[SIZE_RATIO_1_1] = 50.0f;
-    horizontalViewAngle[SIZE_RATIO_3_2] = 64.0f;
-    horizontalViewAngle[SIZE_RATIO_5_4] = 60.0f;
-    horizontalViewAngle[SIZE_RATIO_5_3] = 60.0f;
-    horizontalViewAngle[SIZE_RATIO_11_9] = 46.0f;
-    verticalViewAngle = 39.0f;
-    focalLengthIn35mmLength = 27;
-
-    minFps = 1;
-    maxFps = 30;
-
-#ifdef USE_SUBDIVIDED_EV
-    minExposureCompensation = -20;
-    maxExposureCompensation = 20;
-    exposureCompensationStep = 0.1f;
-#else
-    minExposureCompensation = -4;
-    maxExposureCompensation = 4;
-    exposureCompensationStep = 0.5f;
-#endif
-    maxNumDetectedFaces = 16;
-    maxNumFocusAreas = 1;
-    maxNumMeteringAreas = 0;
-    maxZoomLevel = MAX_ZOOM_LEVEL;
-    maxZoomRatio = MAX_ZOOM_RATIO;
-
-    zoomSupport = true;
-    smoothZoomSupport = false;
-    videoSnapshotSupport = true;
-    videoStabilizationSupport = false;
-    autoWhiteBalanceLockSupport = true;
-    autoExposureLockSupport = true;
-
-    antiBandingList =
-          ANTIBANDING_AUTO
-        | ANTIBANDING_50HZ
-        | ANTIBANDING_60HZ
-        | ANTIBANDING_OFF
-        ;
-
-    effectList =
-          EFFECT_NONE
-        ;
-
-    hiddenEffectList =
-          EFFECT_NONE
-        | EFFECT_MONO
-        | EFFECT_NEGATIVE
-        | EFFECT_SEPIA
-#ifndef USE_CAMERA2_API_SUPPORT
-        | EFFECT_BEAUTY_FACE
-#endif
-        ;
-
-    if (cameraId == CAMERA_ID_FRONT) {
-        flashModeList =
-              FLASH_MODE_OFF;
-
-        focusModeList =
-            /* FOCUS_MODE_AUTO*/
-            FOCUS_MODE_INFINITY
-            /*| FOCUS_MODE_MACRO*/
-            | FOCUS_MODE_FIXED
-            /*| FOCUS_MODE_EDOF*/
-            /*| FOCUS_MODE_CONTINUOUS_VIDEO*/
-            /*| FOCUS_MODE_CONTINUOUS_PICTURE*/
-            /*| FOCUS_MODE_TOUCH*/
-            ;
-    } else {
-        flashModeList =
-              FLASH_MODE_OFF
-            | FLASH_MODE_AUTO
-            | FLASH_MODE_ON
-            //| FLASH_MODE_RED_EYE
-            | FLASH_MODE_TORCH;
-
-        focusModeList =
-              FOCUS_MODE_AUTO
-            | FOCUS_MODE_INFINITY
-            | FOCUS_MODE_MACRO
-            //| FOCUS_MODE_FIXED
-            //| FOCUS_MODE_EDOF
-            | FOCUS_MODE_CONTINUOUS_VIDEO
-            | FOCUS_MODE_CONTINUOUS_PICTURE
-            | FOCUS_MODE_TOUCH;
-    }
-
-    sceneModeList =
-          SCENE_MODE_AUTO
-        /*| SCENE_MODE_ACTION
-        | SCENE_MODE_PORTRAIT
-        | SCENE_MODE_LANDSCAPE
-        | SCENE_MODE_NIGHT
-        | SCENE_MODE_NIGHT_PORTRAIT
-        | SCENE_MODE_THEATRE
-        | SCENE_MODE_BEACH
-        | SCENE_MODE_SNOW
-        | SCENE_MODE_SUNSET
-        | SCENE_MODE_STEADYPHOTO
-        | SCENE_MODE_FIREWORKS
-        | SCENE_MODE_PARTY
-        | SCENE_MODE_SPORTS
-        | SCENE_MODE_CANDLELIGHT*/
-        ;
-
-    whiteBalanceList =
-          WHITE_BALANCE_AUTO
-        | WHITE_BALANCE_INCANDESCENT
-        | WHITE_BALANCE_FLUORESCENT
-        //| WHITE_BALANCE_WARM_FLUORESCENT
-        | WHITE_BALANCE_DAYLIGHT
-        | WHITE_BALANCE_CLOUDY_DAYLIGHT
-        //| WHITE_BALANCE_TWILIGHT
-        //| WHITE_BALANCE_SHADE
-        ;
-
-    /* vendor specifics */
-    highResolutionCallbackW = 3264;
-    highResolutionCallbackH = 1836;
-    highSpeedRecording60WFHD = 1920;
-    highSpeedRecording60HFHD = 1080;
-    highSpeedRecording60W = 1008;
-    highSpeedRecording60H = 566;
-    highSpeedRecording120W = 1008;
-    highSpeedRecording120H = 566;
-    scalableSensorSupport = true;
-    bnsSupport = false;
-
-    previewSizeLutMax           = sizeof(PREVIEW_SIZE_LUT_S5K2P7SX) / (sizeof(int) * SIZE_OF_LUT);
-    pictureSizeLutMax           = sizeof(PICTURE_SIZE_LUT_S5K2P7SX) / (sizeof(int) * SIZE_OF_LUT);
-    videoSizeLutMax             = sizeof(VIDEO_SIZE_LUT_S5K2P7SX_BNS) / (sizeof(int) * SIZE_OF_LUT);
-
-    vtcallSizeLutMax            = sizeof(VTCALL_SIZE_LUT_S5K2P7SX) / (sizeof(int) * SIZE_OF_LUT);
-    videoSizeLutHighSpeed60Max  = sizeof(VIDEO_SIZE_LUT_S5K2P7SX_BNS) / (sizeof(int) * SIZE_OF_LUT);
-    videoSizeLutHighSpeed120Max = sizeof(VIDEO_SIZE_LUT_120FPS_HIGH_SPEED_S5K2P7SX_BNS) / (sizeof(int) * SIZE_OF_LUT);
-    fastAeStableLutMax          = sizeof(FAST_AE_STABLE_SIZE_LUT_S5K2P7SX_BNS) / (sizeof(int) * SIZE_OF_LUT);
-
-    previewSizeLut              = PREVIEW_SIZE_LUT_S5K2P7SX;
-    pictureSizeLut              = PICTURE_SIZE_LUT_S5K2P7SX;
-    videoSizeLut                = VIDEO_SIZE_LUT_S5K2P7SX_BNS;
-    videoSizeBnsLut             = VIDEO_SIZE_LUT_S5K2P7SX_BNS;
-
-    dualPreviewSizeLut          = PREVIEW_SIZE_LUT_S5K2P7SX_BNS;
-
-    vtcallSizeLut               = VTCALL_SIZE_LUT_S5K2P7SX;
-    videoSizeLutHighSpeed60     = VIDEO_SIZE_LUT_S5K2P7SX_BNS;
-    videoSizeLutHighSpeed120    = VIDEO_SIZE_LUT_120FPS_HIGH_SPEED_S5K2P7SX_BNS;
-    fastAeStableLut             = FAST_AE_STABLE_SIZE_LUT_S5K2P7SX_BNS;
-
-    sizeTableSupport      = true;
-
-    if (cameraId == CAMERA_ID_FRONT) {
-        /* Set the max of front preview/picture/video lists */
-        frontPreviewListMax      = sizeof(S5K2P7SX_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        frontPictureListMax      = sizeof(S5K2P7SX_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenFrontPreviewListMax    = sizeof(S5K2P7SX_HIDDEN_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenFrontPictureListMax    = sizeof(S5K2P7SX_HIDDEN_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        thumbnailListMax    = sizeof(S5K2P7SX_THUMBNAIL_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        frontVideoListMax        = sizeof(S5K2P7SX_VIDEO_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenFrontVideoListMax    = sizeof(S5K2P7SX_HIDDEN_VIDEO_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        frontFPSListMax        = sizeof(S5K2P7SX_FPS_RANGE_LIST) / (sizeof(int) * 2);
-        hiddenFrontFPSListMax    = sizeof(S5K2P7SX_HIDDEN_FPS_RANGE_LIST) / (sizeof(int) * 2);
-
-        /* Set supported front preview/picture/video lists */
-        frontPreviewList     = S5K2P7SX_PREVIEW_LIST;
-        frontPictureList     = S5K2P7SX_PICTURE_LIST;
-        hiddenFrontPreviewList   = S5K2P7SX_HIDDEN_PREVIEW_LIST;
-        hiddenFrontPictureList   = S5K2P7SX_HIDDEN_PICTURE_LIST;
-        thumbnailList   = S5K2P7SX_THUMBNAIL_LIST;
-        frontVideoList       = S5K2P7SX_VIDEO_LIST;
-        hiddenFrontVideoList   = S5K2P7SX_HIDDEN_VIDEO_LIST;
-        frontFPSList       = S5K2P7SX_FPS_RANGE_LIST;
-        hiddenFrontFPSList   = S5K2P7SX_HIDDEN_FPS_RANGE_LIST;
-    } else {
-        /* Set the max of preview/picture/video lists */
-        rearPreviewListMax      = sizeof(S5K2P7SX_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        rearPictureListMax      = sizeof(S5K2P7SX_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenRearPreviewListMax    = sizeof(S5K2P7SX_HIDDEN_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenRearPictureListMax    = sizeof(S5K2P7SX_HIDDEN_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        thumbnailListMax    = sizeof(S5K2P7SX_THUMBNAIL_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        rearVideoListMax        = sizeof(S5K2P7SX_VIDEO_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenRearVideoListMax    = sizeof(S5K2P7SX_HIDDEN_VIDEO_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        rearFPSListMax        = sizeof(S5K2P7SX_FPS_RANGE_LIST) / (sizeof(int) * 2);
-        hiddenRearFPSListMax    = sizeof(S5K2P7SX_HIDDEN_FPS_RANGE_LIST) / (sizeof(int) * 2);
-
-        /* Set supported preview/picture/video lists */
-        rearPreviewList     = S5K2P7SX_PREVIEW_LIST;
-        rearPictureList     = S5K2P7SX_PICTURE_LIST;
-        hiddenRearPreviewList   = S5K2P7SX_HIDDEN_PREVIEW_LIST;
-        hiddenRearPictureList   = S5K2P7SX_HIDDEN_PICTURE_LIST;
-        thumbnailList   = S5K2P7SX_THUMBNAIL_LIST;
-        rearVideoList       = S5K2P7SX_VIDEO_LIST;
-        hiddenRearVideoList   = S5K2P7SX_HIDDEN_VIDEO_LIST;
-        rearFPSList       = S5K2P7SX_FPS_RANGE_LIST;
-        hiddenRearFPSList   = S5K2P7SX_HIDDEN_FPS_RANGE_LIST;
-    }
-};
-
-void ExynosSensorS5K3P8SPBase::m_init(int cameraId)
-{
-    maxPreviewW = 3840;
-    maxPreviewH = 2160;
-    maxPictureW = 4608;
-    maxPictureH = 3456;
-    maxVideoW = 1920;
-    maxVideoH = 1080;
-    maxSensorW = 4608;
-    maxSensorH = 3456;
-    sensorMarginW = 0;
-    sensorMarginH = 0;
-    //check until here
-    maxThumbnailW = 512;
-    maxThumbnailH = 384;
-
-    fNumberNum = 19;
-    fNumberDen = 10;
-    focalLengthNum = 360;
-    focalLengthDen = 100;
-    focusDistanceNum = 0;
-    focusDistanceDen = 0;
-    apertureNum = 185;
-    apertureDen = 100;
-
-    horizontalViewAngle[SIZE_RATIO_16_9] = 64.0f;
-    horizontalViewAngle[SIZE_RATIO_4_3] = 64.0f;
-    horizontalViewAngle[SIZE_RATIO_1_1] = 50.0f;
-    horizontalViewAngle[SIZE_RATIO_3_2] = 64.0f;
-    horizontalViewAngle[SIZE_RATIO_5_4] = 60.0f;
-    horizontalViewAngle[SIZE_RATIO_5_3] = 60.0f;
-    horizontalViewAngle[SIZE_RATIO_11_9] = 46.0f;
-    verticalViewAngle = 39.0f;
-    focalLengthIn35mmLength = 27;
-
-    minFps = 1;
-    maxFps = 30;
-
-#ifdef USE_SUBDIVIDED_EV
-    minExposureCompensation = -20;
-    maxExposureCompensation = 20;
-    exposureCompensationStep = 0.1f;
-#else
-    minExposureCompensation = -4;
-    maxExposureCompensation = 4;
-    exposureCompensationStep = 0.5f;
-#endif
-    maxNumDetectedFaces = 16;
-    maxNumFocusAreas = 1;
-    maxNumMeteringAreas = 0;
-    maxZoomLevel = MAX_ZOOM_LEVEL;
-    maxZoomRatio = MAX_ZOOM_RATIO;
-
-    zoomSupport = true;
-    smoothZoomSupport = false;
-    videoSnapshotSupport = true;
-    videoStabilizationSupport = false;
-    autoWhiteBalanceLockSupport = true;
-    autoExposureLockSupport = true;
-
-    antiBandingList =
-          ANTIBANDING_AUTO
-        | ANTIBANDING_50HZ
-        | ANTIBANDING_60HZ
-        | ANTIBANDING_OFF
-        ;
-
-    effectList =
-          EFFECT_NONE
-        ;
-
-    hiddenEffectList =
-          EFFECT_NONE
-        | EFFECT_MONO
-        | EFFECT_NEGATIVE
-        | EFFECT_SEPIA
-#ifndef USE_CAMERA2_API_SUPPORT
-        | EFFECT_BEAUTY_FACE
-#endif
-        ;
-
-    if (cameraId == CAMERA_ID_FRONT) {
-        flashModeList =
-              FLASH_MODE_OFF;
-
-        focusModeList =
-            /* FOCUS_MODE_AUTO*/
-            FOCUS_MODE_INFINITY
-            /*| FOCUS_MODE_MACRO*/
-            | FOCUS_MODE_FIXED
-            /*| FOCUS_MODE_EDOF*/
-            /*| FOCUS_MODE_CONTINUOUS_VIDEO*/
-            /*| FOCUS_MODE_CONTINUOUS_PICTURE*/
-            /*| FOCUS_MODE_TOUCH*/
-            ;
-    } else {
-        flashModeList =
-              FLASH_MODE_OFF
-            | FLASH_MODE_AUTO
-            | FLASH_MODE_ON
-            //| FLASH_MODE_RED_EYE
-            | FLASH_MODE_TORCH;
-
-        focusModeList =
-              FOCUS_MODE_AUTO
-            | FOCUS_MODE_INFINITY
-            | FOCUS_MODE_MACRO
-            //| FOCUS_MODE_FIXED
-            //| FOCUS_MODE_EDOF
-            | FOCUS_MODE_CONTINUOUS_VIDEO
-            | FOCUS_MODE_CONTINUOUS_PICTURE
-            | FOCUS_MODE_TOUCH;
-    }
-
-    sceneModeList =
-          SCENE_MODE_AUTO
-        /*| SCENE_MODE_ACTION
-        | SCENE_MODE_PORTRAIT
-        | SCENE_MODE_LANDSCAPE
-        | SCENE_MODE_NIGHT
-        | SCENE_MODE_NIGHT_PORTRAIT
-        | SCENE_MODE_THEATRE
-        | SCENE_MODE_BEACH
-        | SCENE_MODE_SNOW
-        | SCENE_MODE_SUNSET
-        | SCENE_MODE_STEADYPHOTO
-        | SCENE_MODE_FIREWORKS
-        | SCENE_MODE_PARTY
-        | SCENE_MODE_SPORTS
-        | SCENE_MODE_CANDLELIGHT*/
-        ;
-
-    whiteBalanceList =
-          WHITE_BALANCE_AUTO
-        | WHITE_BALANCE_INCANDESCENT
-        | WHITE_BALANCE_FLUORESCENT
-        //| WHITE_BALANCE_WARM_FLUORESCENT
-        | WHITE_BALANCE_DAYLIGHT
-        | WHITE_BALANCE_CLOUDY_DAYLIGHT
-        //| WHITE_BALANCE_TWILIGHT
-        //| WHITE_BALANCE_SHADE
-        ;
-
-    /* vendor specifics */
-    highResolutionCallbackW = 3264;
-    highResolutionCallbackH = 1836;
-    highSpeedRecording60WFHD = 1920;
-    highSpeedRecording60HFHD = 1080;
-    highSpeedRecording60W = 1008;
-    highSpeedRecording60H = 566;
-    highSpeedRecording120W = 1008;
-    highSpeedRecording120H = 566;
-    scalableSensorSupport = true;
-    bnsSupport = false;
-
-    if (bnsSupport == true) {
-        previewSizeLutMax           = 0;
-        pictureSizeLutMax           = 0;
-
-        vtcallSizeLutMax            = 0;
-        videoSizeLutMax             = 0;
-        videoSizeLutHighSpeed60Max  = 0;
-        videoSizeLutHighSpeed120Max = 0;
-        fastAeStableLutMax          = 0;
-
-        previewSizeLut              = NULL;
-        pictureSizeLut              = NULL;
-        vtcallSizeLut               = NULL;
-        videoSizeLut                = NULL;
-        videoSizeBnsLut             = NULL;
-        videoSizeLutHighSpeed60     = NULL;
-        videoSizeLutHighSpeed120    = NULL;
-        fastAeStableLut             = NULL;
-        sizeTableSupport            = false;
-    } else {
-        previewSizeLutMax           = sizeof(PREVIEW_SIZE_LUT_S5K3P8SP_BNS) / (sizeof(int) * SIZE_OF_LUT);
-        pictureSizeLutMax           = sizeof(PICTURE_SIZE_LUT_S5K3P8SP) / (sizeof(int) * SIZE_OF_LUT);
-        videoSizeLutMax             = sizeof(VIDEO_SIZE_LUT_S5K3P8SP_BNS) / (sizeof(int) * SIZE_OF_LUT);
-
-        vtcallSizeLutMax            = sizeof(VTCALL_SIZE_LUT_S5K3P8SP) / (sizeof(int) * SIZE_OF_LUT);
-        videoSizeLutHighSpeed60Max  = sizeof(VIDEO_SIZE_LUT_S5K3P8SP_BNS) / (sizeof(int) * SIZE_OF_LUT);
-        videoSizeLutHighSpeed120Max = sizeof(VIDEO_SIZE_LUT_120FPS_HIGH_SPEED_S5K3P8SP_BNS) / (sizeof(int) * SIZE_OF_LUT);
-        fastAeStableLutMax          = sizeof(FAST_AE_STABLE_SIZE_LUT_S5K3P8SP) / (sizeof(int) * SIZE_OF_LUT);
-
-        previewSizeLut              = PREVIEW_SIZE_LUT_S5K3P8SP_BNS;
-        pictureSizeLut              = PICTURE_SIZE_LUT_S5K3P8SP;
-        videoSizeLut                = VIDEO_SIZE_LUT_S5K3P8SP_BNS;
-        videoSizeBnsLut             = VIDEO_SIZE_LUT_S5K3P8SP_BNS;
-
-        dualPreviewSizeLut          = PREVIEW_SIZE_LUT_S5K3P8SP_BNS;
-
-        vtcallSizeLut               = VTCALL_SIZE_LUT_S5K3P8SP;
-        videoSizeLutHighSpeed60     = VIDEO_SIZE_LUT_S5K3P8SP_BNS;
-        videoSizeLutHighSpeed120    = VIDEO_SIZE_LUT_120FPS_HIGH_SPEED_S5K3P8SP_BNS;
-        fastAeStableLut             = FAST_AE_STABLE_SIZE_LUT_S5K3P8SP;
-
-        sizeTableSupport      = true;
-    }
-
-    if (cameraId == CAMERA_ID_FRONT) {
-        /* Set the max of front preview/picture/video lists */
-        frontPreviewListMax      = sizeof(S5K3P8SP_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        frontPictureListMax      = sizeof(S5K3P8SP_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenFrontPreviewListMax    = sizeof(S5K3P8SP_HIDDEN_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenFrontPictureListMax    = sizeof(S5K3P8SP_HIDDEN_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        thumbnailListMax    = sizeof(S5K3P8SP_THUMBNAIL_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        frontVideoListMax        = sizeof(S5K3P8SP_VIDEO_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenFrontVideoListMax    = sizeof(S5K3P8SP_HIDDEN_VIDEO_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        frontFPSListMax        = sizeof(S5K3P8SP_FPS_RANGE_LIST) / (sizeof(int) * 2);
-        hiddenFrontFPSListMax    = sizeof(S5K3P8SP_HIDDEN_FPS_RANGE_LIST) / (sizeof(int) * 2);
-
-        /* Set supported front preview/picture/video lists */
-        frontPreviewList     = S5K3P8SP_PREVIEW_LIST;
-        frontPictureList     = S5K3P8SP_PICTURE_LIST;
-        hiddenFrontPreviewList   = S5K3P8SP_HIDDEN_PREVIEW_LIST;
-        hiddenFrontPictureList   = S5K3P8SP_HIDDEN_PICTURE_LIST;
-        thumbnailList   = S5K3P8SP_THUMBNAIL_LIST;
-        frontVideoList       = S5K3P8SP_VIDEO_LIST;
-        hiddenFrontVideoList   = S5K3P8SP_HIDDEN_VIDEO_LIST;
-        frontFPSList       = S5K3P8SP_FPS_RANGE_LIST;
-        hiddenFrontFPSList   = S5K3P8SP_HIDDEN_FPS_RANGE_LIST;
-    } else {
-        /* Set the max of preview/picture/video lists */
-        rearPreviewListMax      = sizeof(S5K3P8SP_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        rearPictureListMax      = sizeof(S5K3P8SP_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenRearPreviewListMax    = sizeof(S5K3P8SP_HIDDEN_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenRearPictureListMax    = sizeof(S5K3P8SP_HIDDEN_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        thumbnailListMax    = sizeof(S5K3P8SP_THUMBNAIL_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        rearVideoListMax        = sizeof(S5K3P8SP_VIDEO_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        hiddenRearVideoListMax    = sizeof(S5K3P8SP_HIDDEN_VIDEO_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-        rearFPSListMax        = sizeof(S5K3P8SP_FPS_RANGE_LIST) / (sizeof(int) * 2);
-        hiddenRearFPSListMax    = sizeof(S5K3P8SP_HIDDEN_FPS_RANGE_LIST) / (sizeof(int) * 2);
-
-        /* Set supported preview/picture/video lists */
-        rearPreviewList     = S5K3P8SP_PREVIEW_LIST;
-        rearPictureList     = S5K3P8SP_PICTURE_LIST;
-        hiddenRearPreviewList   = S5K3P8SP_HIDDEN_PREVIEW_LIST;
-        hiddenRearPictureList   = S5K3P8SP_HIDDEN_PICTURE_LIST;
-        thumbnailList   = S5K3P8SP_THUMBNAIL_LIST;
-        rearVideoList       = S5K3P8SP_VIDEO_LIST;
-        hiddenRearVideoList   = S5K3P8SP_HIDDEN_VIDEO_LIST;
-        rearFPSList       = S5K3P8SP_FPS_RANGE_LIST;
-        hiddenRearFPSList   = S5K3P8SP_HIDDEN_FPS_RANGE_LIST;
-    }
-};
-
-ExynosSensorOV5695Base::ExynosSensorOV5695Base() : ExynosSensorInfoBase()
-{
-    maxPreviewW = 2560;
-    maxPreviewH = 1920;
-    maxPictureW = 2576;
-    maxPictureH = 1932;
-    maxVideoW = 2576;
-    maxVideoH = 1452;
-    maxSensorW = 2592;
-    maxSensorH = 1944;
-    sensorMarginW = 16;
-    sensorMarginH = 12;
-
-    maxThumbnailW = 512;
-    maxThumbnailH = 384;
-
-    fNumberNum = 20;
-    fNumberDen = 10;
-    focalLengthNum = 185;
-    focalLengthDen = 100;
-    focusDistanceNum = 0;
-    focusDistanceDen = 0;
-    apertureNum = 227;
-    apertureDen = 100;
-
-    horizontalViewAngle[SIZE_RATIO_16_9] = 69.8f;
-    horizontalViewAngle[SIZE_RATIO_4_3] = 55.2f;
-    horizontalViewAngle[SIZE_RATIO_1_1] = 42.8f;
-    horizontalViewAngle[SIZE_RATIO_3_2] = 55.2f;
-    horizontalViewAngle[SIZE_RATIO_5_4] = 48.8f;
-    horizontalViewAngle[SIZE_RATIO_5_3] = 58.4f;
-    horizontalViewAngle[SIZE_RATIO_11_9] = 48.8f;
-    verticalViewAngle = 39.4f;
-    focalLengthIn35mmLength = 27;
-
-    minFps = 1;
-    maxFps = 30;
-
-    minExposureCompensation = -4;
-    maxExposureCompensation = 4;
-    exposureCompensationStep = 0.5f;
-    maxNumDetectedFaces = 16;
-    maxNumFocusAreas = 1;
-    maxNumMeteringAreas = 1;
-    maxZoomLevel = MAX_ZOOM_LEVEL;
-    maxZoomRatio = MAX_ZOOM_RATIO;
-
-    zoomSupport = true;
-    smoothZoomSupport = false;
-    videoSnapshotSupport = true;
-    videoStabilizationSupport = false;
-    autoWhiteBalanceLockSupport = true;
-    autoExposureLockSupport = true;
-    visionModeSupport = true;
-
-    antiBandingList =
-          ANTIBANDING_AUTO
-        | ANTIBANDING_50HZ
-        | ANTIBANDING_60HZ
-        | ANTIBANDING_OFF
-        ;
-
-    effectList =
-          EFFECT_NONE
-        ;
-
-    hiddenEffectList =
-          EFFECT_AQUA
-        | EFFECT_MONO
-        | EFFECT_NEGATIVE
-        | EFFECT_SEPIA
-        | EFFECT_POSTERIZE
-        | EFFECT_COLD_VINTAGE
-        | EFFECT_BLUE
-        | EFFECT_RED_YELLOW
-        ;
-
-    flashModeList =
-          FLASH_MODE_OFF
-        /*| FLASH_MODE_AUTO*/
-        /*| FLASH_MODE_ON*/
-        /*| FLASH_MODE_RED_EYE*/
-        /*| FLASH_MODE_TORCH*/
-        ;
-
-    focusModeList =
-        /* FOCUS_MODE_AUTO*/
-        FOCUS_MODE_INFINITY
-        /*| FOCUS_MODE_MACRO*/
-        | FOCUS_MODE_FIXED
-        /*| FOCUS_MODE_EDOF*/
-        /*| FOCUS_MODE_CONTINUOUS_VIDEO*/
-        /*| FOCUS_MODE_CONTINUOUS_PICTURE*/
-        /*| FOCUS_MODE_TOUCH*/
-        ;
-
-    sceneModeList =
-          SCENE_MODE_AUTO
-        /*| SCENE_MODE_ACTION
-        | SCENE_MODE_PORTRAIT
-        | SCENE_MODE_LANDSCAPE
-        | SCENE_MODE_NIGHT
-        | SCENE_MODE_NIGHT_PORTRAIT
-        | SCENE_MODE_THEATRE
-        | SCENE_MODE_BEACH
-        | SCENE_MODE_SNOW
-        | SCENE_MODE_SUNSET
-        | SCENE_MODE_STEADYPHOTO
-        | SCENE_MODE_FIREWORKS
-        | SCENE_MODE_SPORTS
-        | SCENE_MODE_PARTY
-        | SCENE_MODE_CANDLELIGHT*/;
-
-    whiteBalanceList =
-          WHITE_BALANCE_AUTO
-        | WHITE_BALANCE_INCANDESCENT
-        | WHITE_BALANCE_FLUORESCENT
-        /* WHITE_BALANCE_WARM_FLUORESCENT*/
-        | WHITE_BALANCE_DAYLIGHT
-        | WHITE_BALANCE_CLOUDY_DAYLIGHT
-        /* WHITE_BALANCE_TWILIGHT*/
-        /* WHITE_BALANCE_SHADE*/
-        ;
-    shutterModeList =
-          NORMAL
-        | CONTINUOUS_SHOT
-        | MULTI_EXPOSURE_SHOT
-        ;
-   recordModeList =
-        NORMAL_RECORDING;
-
-    previewSizeLutMax           = 0;
-    pictureSizeLutMax           = 0;
-    videoSizeLutMax             = 0;
-    previewSizeLut              = NULL;
-    pictureSizeLut              = NULL;
-    videoSizeLut                = NULL;
-    sizeTableSupport            = false;
-
-    /* vendor specifics */
-    highResolutionCallbackW = 3264;
-    highResolutionCallbackH = 1836;
-    highSpeedRecording60WFHD = 1920;
-    highSpeedRecording60HFHD = 1080;
-    highSpeedRecording60W = 1008;
-    highSpeedRecording60H = 566;
-    highSpeedRecording120W = 1008;
-    highSpeedRecording120H = 566;
-    scalableSensorSupport = true;
-    bnsSupport = false;
-
-    previewSizeLutMax           = sizeof(PREVIEW_SIZE_LUT_OV5695) / (sizeof(int) * SIZE_OF_LUT);
-    pictureSizeLutMax           = sizeof(PICTURE_SIZE_LUT_OV5695) / (sizeof(int) * SIZE_OF_LUT);
-    videoSizeLutMax             = sizeof(VIDEO_SIZE_LUT_OV5695) / (sizeof(int) * SIZE_OF_LUT);
-    videoSizeLutHighSpeed60Max  = 0;
-    videoSizeLutHighSpeed120Max = 0;
-
-    previewSizeLut              = PREVIEW_SIZE_LUT_OV5695;
-    pictureSizeLut              = PICTURE_SIZE_LUT_OV5695;
-    videoSizeLut                = VIDEO_SIZE_LUT_OV5695;
-    dualVideoSizeLut            = VIDEO_SIZE_LUT_OV5695;
-    videoSizeBnsLut             = NULL;
-    videoSizeLutHighSpeed60     = NULL;
-    videoSizeLutHighSpeed120    = NULL;
-    sizeTableSupport            = true;
-
-    /* Set the max of preview/picture/video lists */
-    frontPreviewListMax      = sizeof(OV5695_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    frontPictureListMax      = sizeof(OV5695_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    hiddenFrontPreviewListMax    = sizeof(OV5695_HIDDEN_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    hiddenFrontPictureListMax    = sizeof(OV5695_HIDDEN_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    thumbnailListMax    = sizeof(OV5695_THUMBNAIL_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    frontVideoListMax        = sizeof(OV5695_VIDEO_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    hiddenFrontVideoListMax    = sizeof(OV5695_HIDDEN_VIDEO_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    frontFPSListMax        = sizeof(OV5695_FPS_RANGE_LIST) / (sizeof(int) * 2);
-    hiddenFrontFPSListMax    = sizeof(OV5695_HIDDEN_FPS_RANGE_LIST) / (sizeof(int) * 2);
-
-    /* Set supported preview/picture/video lists */
-    frontPreviewList     = OV5695_PREVIEW_LIST;
-    frontPictureList     = OV5695_PICTURE_LIST;
-    hiddenFrontPreviewList   = OV5695_HIDDEN_PREVIEW_LIST;
-    hiddenFrontPictureList   = OV5695_HIDDEN_PICTURE_LIST;
-    thumbnailList   = OV5695_THUMBNAIL_LIST;
-    frontVideoList       = OV5695_VIDEO_LIST;
-    hiddenFrontVideoList   = OV5695_HIDDEN_VIDEO_LIST;
-    frontFPSList       = OV5695_FPS_RANGE_LIST;
-    hiddenFrontFPSList   = OV5695_HIDDEN_FPS_RANGE_LIST;
-};
-
-ExynosSensorIMX386Base::ExynosSensorIMX386Base() : ExynosSensorInfoBase()
-{
-    maxPreviewW = 3840;
-    maxPreviewH = 2160;
-    maxPictureW = 4000;
-    maxPictureH = 3000;
-    maxVideoW = 3840;
-    maxVideoH = 2160;
-    maxSensorW = 4032;
-    maxSensorH = 3016;
-    sensorMarginW = 16;
-    sensorMarginH = 4;
-
-    maxThumbnailW = 512;
-    maxThumbnailH = 384;
-
-    fNumberNum = 20;
-    fNumberDen = 10;
-    focalLengthNum = 480;
-    focalLengthDen = 100;
-    focusDistanceNum = 0;
-    focusDistanceDen = 0;
-    apertureNum = 227;
-    apertureDen = 100;
-
-    horizontalViewAngle[SIZE_RATIO_16_9] = 62.2f;
-    horizontalViewAngle[SIZE_RATIO_4_3] = 48.8f;
-    horizontalViewAngle[SIZE_RATIO_1_1] = 37.4f;
-    horizontalViewAngle[SIZE_RATIO_3_2] = 55.2f;
-    horizontalViewAngle[SIZE_RATIO_5_4] = 48.8f;
-    horizontalViewAngle[SIZE_RATIO_5_3] = 58.4f;
-    horizontalViewAngle[SIZE_RATIO_11_9] = 48.8f;
-    verticalViewAngle = 39.4f;
-    focalLengthIn35mmLength = 31;
-
-    minFps = 1;
-    maxFps = 30;
-
-    minExposureCompensation = -4;
-    maxExposureCompensation = 4;
-    exposureCompensationStep = 0.5f;
-    minExposureTime = 32;
-    maxExposureTime = 10000000;
-    minWBK = 2300;
-    maxWBK = 10000;
-    maxNumDetectedFaces = 16;
-    maxNumFocusAreas = 2;
-#ifdef MANUAL_FOCUS_ENABLE
-    minManualFocus = 0;
-    maxManualFocus = 1023;
-#endif
-    maxNumMeteringAreas = 1;
-    maxBasicZoomLevel = MAX_BASIC_ZOOM_LEVEL;
-    maxZoomLevel = MAX_ZOOM_LEVEL;
-    maxZoomRatio = MAX_ZOOM_RATIO;
-
-    zoomSupport = true;
-    smoothZoomSupport = false;
-    videoSnapshotSupport = true;
-    videoStabilizationSupport = true;
-    autoWhiteBalanceLockSupport = true;
-    autoExposureLockSupport = true;
-
-    /* vendor specifics */
-    highResolutionCallbackW = 3264;
-    highResolutionCallbackH = 1836;
-    highSpeedRecording60WFHD = 1920;
-    highSpeedRecording60HFHD = 1080;
-    highSpeedRecording60W = 1008;
-    highSpeedRecording60H = 566;
-    highSpeedRecording120W = 1008;
-    highSpeedRecording120H = 566;
-    scalableSensorSupport = true;
-    bnsSupport = true;
-
-    antiBandingList =
-          ANTIBANDING_AUTO
-        | ANTIBANDING_50HZ
-        | ANTIBANDING_60HZ
-        | ANTIBANDING_OFF
-        ;
-
-    effectList =
-          EFFECT_NONE
-        ;
-
-    hiddenEffectList =
-          EFFECT_NONE
-        | EFFECT_MONO
-        | EFFECT_NEGATIVE
-        | EFFECT_SOLARIZE
-        | EFFECT_SEPIA
-        | EFFECT_POSTERIZE
-        | EFFECT_WHITEBOARD
-        | EFFECT_BLACKBOARD
-        | EFFECT_AQUA
-        ;
-
-    flashModeList =
-          FLASH_MODE_OFF
-       /*| FLASH_MODE_AUTO*/
-       /*| FLASH_MODE_ON*/
-       /*| FLASH_MODE_RED_EYE*/
-       /*| FLASH_MODE_TORCH*/
-       ;
-
-    focusModeList =
-          FOCUS_MODE_AUTO
-        | FOCUS_MODE_INFINITY
-        | FOCUS_MODE_MACRO
-        | FOCUS_MODE_FIXED
-        | FOCUS_MODE_EDOF
-        | FOCUS_MODE_CONTINUOUS_VIDEO
-        | FOCUS_MODE_CONTINUOUS_PICTURE
-        | FOCUS_MODE_TOUCH;
-
-    sceneModeList =
-          SCENE_MODE_AUTO
-        | SCENE_MODE_ACTION
-        | SCENE_MODE_PORTRAIT
-        | SCENE_MODE_LANDSCAPE
-        | SCENE_MODE_NIGHT
-        | SCENE_MODE_NIGHT_PORTRAIT
-        | SCENE_MODE_THEATRE
-        | SCENE_MODE_BEACH
-        | SCENE_MODE_SNOW
-        | SCENE_MODE_SUNSET
-        | SCENE_MODE_STEADYPHOTO
-        | SCENE_MODE_FIREWORKS
-        | SCENE_MODE_PARTY
-        | SCENE_MODE_SPORTS
-        | SCENE_MODE_CANDLELIGHT
-        ;
-
-    whiteBalanceList =
-          WHITE_BALANCE_AUTO
-        | WHITE_BALANCE_INCANDESCENT
-        | WHITE_BALANCE_FLUORESCENT
-        //| WHITE_BALANCE_WARM_FLUORESCENT
-        | WHITE_BALANCE_DAYLIGHT
-        | WHITE_BALANCE_CLOUDY_DAYLIGHT
-        //| WHITE_BALANCE_TWILIGHT
-        //| WHITE_BALANCE_SHADE
-        | WHITE_BALANCE_CUSTOM_K
-        ;
-
-    shutterModeList =
-          NORMAL
-        | CONTINUOUS_SHOT
-        | MULTI_EXPOSURE_SHOT
-        | LIGHT_FIELD_CAPTURE
-        ;
-    recordModeList =
-        NORMAL_RECORDING
-       |SLOW_RECORDING;
-    // | VIDEO_ANTISHAKING
-    // | VIDEO_HDR;
-
-#if defined(USE_BNS_PREVIEW)
-    previewSizeLutMax    = sizeof(PREVIEW_SIZE_LUT_IMX386_BINNING2) / (sizeof(int) * SIZE_OF_LUT);
-#else
-    previewSizeLutMax    = sizeof(PREVIEW_SIZE_LUT_IMX386) / (sizeof(int) * SIZE_OF_LUT);
-#endif
-    videoSizeLutMax      = sizeof(VIDEO_SIZE_LUT_IMX386)  / (sizeof(int) * SIZE_OF_LUT);
-    pictureSizeLutMax    = sizeof(PICTURE_SIZE_LUT_IMX386) / (sizeof(int) * SIZE_OF_LUT);
-
-#if defined(USE_BNS_PREVIEW)
-    previewSizeLut       = PREVIEW_SIZE_LUT_IMX386_BINNING2;
-#else
-    previewSizeLut       = PREVIEW_SIZE_LUT_IMX386;
-#endif
-    videoSizeLut         = VIDEO_SIZE_LUT_IMX386;
-    pictureSizeLut       = PICTURE_SIZE_LUT_IMX386;
-
-    videoSizeLutHighSpeed       = VIDEO_SIZE_LUT_IMX386_HIGHSPEED;
-    videoSizeLutHighSpeed120    = VIDEO_SIZE_LUT_IMX386_HIGHSPEED;
-    videoSizeLutHighSpeed120Max = sizeof(VIDEO_SIZE_LUT_IMX386_HIGHSPEED)  / (sizeof(int) * SIZE_OF_LUT);
-
-    sizeTableSupport            = true;
-
-    /* Set the max of preview/picture/video lists */
-    rearPreviewListMax          = sizeof(IMX386_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    rearPictureListMax          = sizeof(IMX386_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    hiddenRearPreviewListMax    = sizeof(IMX386_HIDDEN_PREVIEW_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    hiddenRearPictureListMax    = sizeof(IMX386_HIDDEN_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    hiddenRearScalablePictureListMax = sizeof(IMX386_HIDDEN_SCALABLE_PICTURE_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    thumbnailListMax            = sizeof(IMX386_THUMBNAIL_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    rearVideoListMax            = sizeof(IMX386_VIDEO_LIST) / (sizeof(int) * SIZE_OF_RESOLUTION);
-    rearFPSListMax              = sizeof(IMX386_FPS_RANGE_LIST) / (sizeof(int) * 2);
-    hiddenRearFPSListMax        = sizeof(IMX386_HIDDEN_FPS_RANGE_LIST) / (sizeof(int) * 2);
-
-    /* Set supported preview/picture/video lists */
-    rearPreviewList    = IMX386_PREVIEW_LIST;
-    rearPictureList    = IMX386_PICTURE_LIST;
-    hiddenRearPreviewList    = IMX386_HIDDEN_PREVIEW_LIST;
-    hiddenRearPictureList    = IMX386_HIDDEN_PICTURE_LIST;
-    hiddenRearScalablePictureList = IMX386_HIDDEN_SCALABLE_PICTURE_LIST;
-    thumbnailList      = IMX386_THUMBNAIL_LIST;
-    rearVideoList      = IMX386_VIDEO_LIST;
-    rearFPSList         = IMX386_FPS_RANGE_LIST;
-    hiddenRearFPSList   = IMX386_HIDDEN_FPS_RANGE_LIST;
 };
 
 }; /* namespace android */

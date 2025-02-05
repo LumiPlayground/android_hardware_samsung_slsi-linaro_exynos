@@ -18,17 +18,15 @@
 
 #include "ExynosCameraDualFrameSelector.h"
 
-#ifdef USE_DUAL_CAMERA_LOG_TRACE
-#define DUAL_DEBUG
-#endif
+/* #define DUAL_DEBUG */
 #define DUAL_SELECTOR_CALIB_TIME (2) // 2msec
 
 /*
- * ID : SyncId, S.State : Select State, Type : SyncObj Type
+ * ID : SyncId, S.State : Select State
  * H.F : HAL FrameCount, D.F : Driver FrameCount, T : Timestamp, D.T : Diff Time
  */
-#define ONE_SYNC_OBJ_ID "[CAM%d/HF%d/MF%d/T:%d/ID:%d/S.State:%d/Type:%d]"
-#define TWO_SYNC_OBJ_ID "[D.T:%dms][CAM%d/H.F%d/M.F%d/T:%d/ID:%d/S.State:%d/Type:%d vs CAM%d/H.F%d/M.F%d/T:%d/ID:%d/S.State:%d/Type:%d]"
+#define ONE_SYNC_OBJ_ID "[CAM%d/HF%d/MF%d/T:%d/ID:%d/S.State:%d]"
+#define TWO_SYNC_OBJ_ID "[D.T:%dms][CAM%d/H.F%d/M.F%d/T:%d/ID:%d/S.State:%d vs CAM%d/H.F%d/M.F%d/T:%d/ID:%d/S.State:%d]"
 
 #define ONE_SYNC_OBJ_ARGS(syncObj) \
     (syncObj)->getCameraId(),   \
@@ -36,8 +34,7 @@
     ((syncObj)->getFrame() != NULL) ? (syncObj)->getFrame()->getMetaFrameCount() : -1, \
     (syncObj)->getTimeStamp(), \
     (syncObj)->getSyncId(), \
-    (syncObj)->getSelectState(), \
-    (syncObj)->getType()
+    (syncObj)->getSelectState()
 
 #define SYNC_OBJ_DIFF_TIME_ARGS(syncObj, otherObj) \
         (abs((syncObj)->getTimeStamp() - (otherObj)->getTimeStamp()))
@@ -109,7 +106,6 @@ ExynosCameraDualFrameSelector::SyncObj::SyncObj()
     m_nodeIndex = -1;
     m_timeStamp = 0;
     m_selectState = SELECT_STATE_BASE;
-    m_type = TYPE_BASE;
     memset(m_name, 0x00, sizeof(m_name));
     m_syncId = -1;
 }
@@ -133,7 +129,6 @@ status_t ExynosCameraDualFrameSelector::SyncObj::create(int cameraId,
     m_nodeIndex = nodeIndex;
     m_timeStamp = (int)(ns2ms(m_frame->getTimeStamp()));
     m_selectState = SELECT_STATE_NO_SELECTED;
-    m_type = TYPE_NORMAL;
 
 #ifdef DUAL_DEBUG
     strncpy(m_name, name,  EXYNOS_CAMERA_NAME_STR_SIZE - 1);
@@ -264,19 +259,6 @@ void ExynosCameraDualFrameSelector::SyncObj::setSelectState(ExynosCameraDualFram
     m_selectState = selectState;
 }
 
-ExynosCameraDualFrameSelector::SyncObj::type_t ExynosCameraDualFrameSelector::SyncObj::getType(void)
-{
-    return m_type;
-}
-
-void ExynosCameraDualFrameSelector::SyncObj::makeDummy(int cameraId, int timeStamp)
-{
-    m_cameraId = cameraId;
-    m_timeStamp = timeStamp;
-    m_selectState = SELECT_STATE_NO_SELECTED;
-    m_type = TYPE_DUMMY;
-}
-
 /*
  * Class Message
  */
@@ -366,17 +348,13 @@ status_t ExynosCameraDualFrameSelector::init(void)
     m_prepareHoldCount = 0;
     m_msgIndex = 0;
     m_validCameraCnt = 0;
-    m_lastSyncType = SYNC_TYPE_BASE;
-    m_lastTimeStamp = 0;
 
     for (int i = 0; i < CAMERA_ID_MAX; i++) {
         m_flagValidCameraId[i] = false;
         m_bufMgr[i] = NULL;
         m_param[i] = NULL;
-        m_selector[i] = NULL;
         m_flagNotifyRegister[i] = false;
         m_flagRemoveFrameRegister[i] = false;
-        m_flagSetInfo[i] = false;
     }
 
     return ret;
@@ -391,13 +369,12 @@ status_t ExynosCameraDualFrameSelector::deinit(int cameraId)
 
     Mutex::Autolock lock(m_lock);
 
-    if (m_flagSetInfo[cameraId] == true &&
+    if (m_flagValidCameraId[cameraId] == true &&
             m_validCameraCnt > 0) {
         m_validCameraCnt--;
-        m_flagSetInfo[cameraId] = false;
+        m_flagValidCameraId[cameraId] = false;
         m_bufMgr[cameraId] = NULL;
         m_param[cameraId] = NULL;
-        m_selector[cameraId] = NULL;
         m_flagNotifyRegister[cameraId] = false;
         m_flagRemoveFrameRegister[cameraId] = false;
         m_notifyQ[cameraId].release();
@@ -408,15 +385,10 @@ status_t ExynosCameraDualFrameSelector::deinit(int cameraId)
             m_holdCount = 1;
             m_prepareHoldCount = 0;
             m_msgIndex = 0;
-            m_lastSyncType = SYNC_TYPE_BASE;
-            m_lastTimeStamp = 0;
-            for (int i = 0; i < CAMERA_ID_MAX; i++) {
-                m_flagValidCameraId[i] = false;
-            }
         }
     } else {
         DUAL_LOGI(cameraId, "already deinited(%d, %d)",
-                m_flagSetInfo[cameraId], m_validCameraCnt);
+                m_flagValidCameraId[cameraId], m_validCameraCnt);
     }
 
     return ret;
@@ -424,8 +396,7 @@ status_t ExynosCameraDualFrameSelector::deinit(int cameraId)
 
 status_t ExynosCameraDualFrameSelector::setInfo(int cameraId,
                      ExynosCameraParameters *param,
-                     ExynosCameraBufferManager *bufMgr,
-                     ExynosCameraFrameSelector *selector)
+                     ExynosCameraBufferManager *bufMgr)
 {
     status_t ret = NO_ERROR;
     int validCameraCnt = 0;
@@ -441,18 +412,9 @@ status_t ExynosCameraDualFrameSelector::setInfo(int cameraId,
 
     m_bufMgr[cameraId] = bufMgr;
     m_param[cameraId] = param;
-    m_selector[cameraId] = selector;
-
-    /* setInfor flag */
-    m_flagSetInfo[cameraId] = true;
-
-    /* global init */
-    if (m_validCameraCnt == 0) {
-        m_lastSyncType = SYNC_TYPE_BASE;
-        m_lastTimeStamp = 0;
-    }
 
     m_validCameraCnt++;
+    m_flagValidCameraId[cameraId] = true;
 
     /* when over than 2, assert */
     if (m_validCameraCnt > 2)
@@ -469,9 +431,7 @@ status_t ExynosCameraDualFrameSelector::manageNormalFrameHoldList(int cameraId,
     //ExynosCameraAutoTimer autoTimer(__func__);
 #endif
     status_t ret = NO_ERROR;
-    sync_type_t syncType;
     bool flagAllCameraSync = false;
-    bool flagDropFrame = false;
     int prepareHoldCount = 0;
 
     if (CAMERA_ID_MAX <= cameraId) {
@@ -484,11 +444,6 @@ status_t ExynosCameraDualFrameSelector::manageNormalFrameHoldList(int cameraId,
         return INVALID_OPERATION;
     }
 
-    if (frame->getFrameType() == FRAME_TYPE_INTERNAL) {
-        DUAL_LOGW(cameraId, "frame(%d) is internal frame", frame->getFrameCount());
-        return NO_ERROR;
-    }
-
     /* create SyncObj */
     SyncObj syncObj;
     SyncObj otherSyncObj;
@@ -498,12 +453,9 @@ status_t ExynosCameraDualFrameSelector::manageNormalFrameHoldList(int cameraId,
         return INVALID_OPERATION;
     }
 
-    DUAL_LOGV(cameraId, "list size[%d, %d] frame(Fcount:%d, Sync:%d, Type:%d)",
+    DUAL_LOGV(cameraId, "list size[%d, %d]",
             m_prepareSyncObjList[cameraId].size(),
-            m_syncObjList[cameraId].size(),
-            frame->getFrameCount(),
-            frame->getSyncType(),
-            frame->getFrameType());
+            m_syncObjList[cameraId].size());
 
     /* when smaller than 2, single stream is can be assume not synced frame. */
     int otherCameraId = m_findOppositeCameraId(cameraId);
@@ -516,85 +468,21 @@ status_t ExynosCameraDualFrameSelector::manageNormalFrameHoldList(int cameraId,
     /* to SyncObjList */
     Mutex::Autolock lock(m_lock);
 
-    syncType = frame->getSyncType();
-    switch (syncType) {
-        case SYNC_TYPE_BYPASS:
-        case SYNC_TYPE_SWITCH:
-            /*
-             * Transition type
-             *  This frame will be saved or droped.
-             *    save case : match with m_lastSyncType
-             *    drop case : not match with m_lastSyncType
-             */
-            if (frame->getFrameType() == FRAME_TYPE_TRANSITION) {
-                if (syncType == m_lastSyncType) {
-                    flagAllCameraSync = true;
-                } else {
-                    flagDropFrame = true;
-                }
-            } else {
-                /*
-                 * Normal type
-                 *  This frame will be saved or droped.
-                 *    save case : over than m_lastTimeStamp
-                 *    drop case : not match with m_lastSyncType
-                 */
-                m_lastSyncType = frame->getSyncType();
-                if (abs(syncObj.getTimeStamp() - m_lastTimeStamp) < 5) {
-                    ONE_SYNC_OBJ_LOGW(cameraId, &syncObj, "forcely drop the frame due to timestamp (vs %d)", m_lastTimeStamp);
-                    flagDropFrame = true;
-                } else {
-                    flagAllCameraSync = true;
-                }
-            }
-            break;
-        case SYNC_TYPE_SYNC:
-            if (frame->getFrameType() == FRAME_TYPE_TRANSITION) {
-                if (syncType != m_lastSyncType) {
-                    flagDropFrame = true;
-                }
-            } else {
-                m_lastSyncType = frame->getSyncType();
-            }
-            break;
-        default:
-            DUAL_ASSERT(cameraId, "invalid sync type(%d), frame(%d)",
-                    frame->getSyncType(), frame->getFrameCount());
-            break;
-    }
-
-    if (syncType == SYNC_TYPE_SYNC && otherCameraId < 0) {
+    /* case of not opening other camera */
+    if (otherCameraId < 0) {
         DUAL_LOGW(cameraId, "There's no opposite camera");
 
         /* push the syncObj to prepareSyncObjList */
         m_pushList(cameraId, &m_prepareSyncObjList[cameraId], &syncObj);
     } else {
-        /* In case of sync type, check the timestamp */
-        if (syncType == SYNC_TYPE_SYNC &&
-                m_checkSyncObjOnList(cameraId, &m_prepareSyncObjList[otherCameraId], &syncObj, &otherSyncObj))
+        /* check the timestamp */
+        if (m_checkSyncObjOnList(cameraId, &m_prepareSyncObjList[otherCameraId], &syncObj, &otherSyncObj))
             flagAllCameraSync = true;
 
-        if (flagDropFrame == true) {
-            ret = m_destroySyncObj(&syncObj, true, false);
-            if (ret != NO_ERROR)
-                ONE_SYNC_OBJ_LOGE(cameraId, &syncObj, "removed fail");
-
-            if (m_flagRemoveFrameRegister[cameraId] == true) {
-                ONE_SYNC_OBJ_LOGD(cameraId, &syncObj, "push the frame to removeFrameQ");
-                m_removeFrameQ[cameraId].pushProcessQ(&frame);
-            }
-        } else if (flagAllCameraSync == true) {
-            /* update lastTimeStamp */
-            m_lastTimeStamp = syncObj.getTimeStamp();
-
+        if (flagAllCameraSync) {
             /* set the syncID for synced frames */
             syncObj.setSyncId(m_syncId);
             otherSyncObj.setSyncId(m_syncId++);
-
-            /* make dummy syncObj */
-            if (syncType != SYNC_TYPE_SYNC) {
-                otherSyncObj.makeDummy(otherCameraId, syncObj.getTimeStamp());
-            }
 
             /* push the syncObj to syncObjList */
             m_pushList(cameraId, &m_syncObjList[cameraId], &syncObj);
@@ -606,8 +494,7 @@ status_t ExynosCameraDualFrameSelector::manageNormalFrameHoldList(int cameraId,
 
             /* flush the prepareSyncList until new SyncObj's timestamp */
             m_clearListUntilTimeStamp(cameraId, &m_prepareSyncObjList[cameraId], syncObj.getTimeStamp());
-            m_clearListUntilTimeStamp(cameraId, &m_prepareSyncObjList[otherCameraId],
-                    (syncType == SYNC_TYPE_SYNC) ? otherSyncObj.getTimeStamp() : syncObj.getTimeStamp());
+            m_clearListUntilTimeStamp(cameraId, &m_prepareSyncObjList[otherCameraId], otherSyncObj.getTimeStamp());
 
             /* notify */
             Message *msg;
@@ -623,64 +510,9 @@ status_t ExynosCameraDualFrameSelector::manageNormalFrameHoldList(int cameraId,
 
                 m_notifyQ[i].pushProcessQ(msg);
             }
-
-            if (syncType == SYNC_TYPE_SYNC) {
-                /* in case of backward pushing to each camera's original selector */
-                if (m_selector[cameraId] != NULL &&
-                        m_selector[otherCameraId] != NULL) {
-                    uint32_t originalSelectorSize = 0;
-                    uint32_t originalOtherSelectorSize = 0;
-
-                    /* get size of holding frame in original selector */
-                    originalSelectorSize = m_selector[cameraId]->getSizeOfHoldFrame();
-                    originalOtherSelectorSize = m_selector[otherCameraId]->getSizeOfHoldFrame();
-
-                    if (originalSelectorSize == originalOtherSelectorSize) {
-                        m_selector[cameraId]->setSyncFrameHoldCount(0);
-                        m_selector[otherCameraId]->setSyncFrameHoldCount(0);
-                    } else {
-                        /* increse the hold count not to remove the frame in original selector */
-                        m_selector[cameraId]->setSyncFrameHoldCount(m_selector[cameraId]->getSyncFrameHoldCount() + 1);
-                        m_selector[otherCameraId]->setSyncFrameHoldCount(m_selector[otherCameraId]->getSyncFrameHoldCount() + 1);
-                        DUAL_LOGW(cameraId, "each selector's size is not matched..(CAM%d size:%d != CAM%d size:%d)",
-                                cameraId, originalSelectorSize,
-                                otherCameraId, originalOtherSelectorSize);
-                    }
-
-                    /* push the frame own camera's original selector */
-                    ret = m_selector[cameraId]->manageFrameHoldList(syncObj.getFrame(),
-                            syncObj.getPipeId(),
-                            syncObj.getIsSrc(),
-                            syncObj.getNodeIndex());
-                    if (ret < 0) {
-                        ONE_SYNC_OBJ_LOGE(cameraId, &syncObj, "manageFrameHoldList fail!!!");
-                        DUAL_ASSERT(cameraId, "manageFrameHoldList(pipe(%d), src(%d), nodeIndex(%d)) fail!!",
-                                syncObj.getPipeId(),
-                                syncObj.getIsSrc(),
-                                syncObj.getNodeIndex());
-                    }
-
-                    /* push the frame other camera's original selector */
-                    ret = m_selector[otherCameraId]->manageFrameHoldList(otherSyncObj.getFrame(),
-                            otherSyncObj.getPipeId(),
-                            otherSyncObj.getIsSrc(),
-                            otherSyncObj.getNodeIndex());
-                    if (ret < 0) {
-                        ONE_SYNC_OBJ_LOGE(otherCameraId, &otherSyncObj, "manageFrameHoldList fail!!!");
-                        DUAL_ASSERT(otherCameraId, "manageFrameHoldList(pipe(%d), src(%d), nodeIndex(%d)) fail!!",
-                                otherSyncObj.getPipeId(),
-                                otherSyncObj.getIsSrc(),
-                                otherSyncObj.getNodeIndex());
-                    }
-                }
-            }
-        } else if (syncType == SYNC_TYPE_SYNC) {
+        } else {
             /* push the syncObj to prepareSyncObjList */
             m_pushList(cameraId, &m_prepareSyncObjList[cameraId], &syncObj);
-        } else {
-            DUAL_ASSERT(cameraId, "There's no case syncType(%d), frame(%d) lastSyncType(%d), lastTimeStamp(%d)",
-                    frame->getSyncType(), frame->getFrameCount(),
-                    m_lastSyncType, m_lastTimeStamp);
         }
     }
 
@@ -707,8 +539,7 @@ status_t ExynosCameraDualFrameSelector::manageNormalFrameHoldList(int cameraId,
     /* forcely maintain the prepareSyncList's size to half of holdCount */
     m_clearListUntilMinSize(cameraId, &m_prepareSyncObjList[cameraId], prepareHoldCount);
 
-    ONE_SYNC_OBJ_LOGV(cameraId, &syncObj, "pushed frame(prepare:%d, lastTimeStamp:%d, lastSyncType:%d)",
-            prepareHoldCount, m_lastTimeStamp, m_lastSyncType);
+    ONE_SYNC_OBJ_LOGV(cameraId, &syncObj, "pushed frame(prepare:%d)", prepareHoldCount);
 
     return ret;
 }
@@ -720,7 +551,6 @@ ExynosCameraFrameSP_sptr_t ExynosCameraDualFrameSelector::selectFrame(int camera
 #endif
 
     status_t ret = NO_ERROR;
-    ExynosCameraFrameSP_sptr_t returnFrame = NULL;
 
     int otherCameraId = m_findOppositeCameraId(cameraId);
     if (otherCameraId < 0) {
@@ -740,21 +570,19 @@ ExynosCameraFrameSP_sptr_t ExynosCameraDualFrameSelector::selectFrame(int camera
     int pipeId;
     int nodeIndex;
     SyncObj syncObj;
-    SyncObj::type_t syncObjType;
     ExynosCameraFrameSP_sptr_t selectedFrame = NULL;
-    sync_type_t syncType = SYNC_TYPE_BASE;
-    uint32_t frameType = FRAME_TYPE_BASE;
+    sync_type_t syncType;
+    uint32_t frameType;
 
     /* for slave */
     bool otherIsSrc;
     int otherPipeId;
     int otherNodeIndex;
     SyncObj otherSyncObj;
-    SyncObj::type_t otherSyncObjType;
     ExynosCameraBuffer otherBuffer;
     ExynosCameraFrameSP_sptr_t selectedOtherFrame = NULL;
-    sync_type_t otherSyncType = SYNC_TYPE_BASE;
-    uint32_t otherFrameType = FRAME_TYPE_BASE;
+    sync_type_t otherSyncType;
+    uint32_t otherFrameType;
 
     /* we must protect list of various camera. */
     Mutex::Autolock lock(m_lock);
@@ -785,83 +613,56 @@ ExynosCameraFrameSP_sptr_t ExynosCameraDualFrameSelector::selectFrame(int camera
     nodeIndex = syncObj.getNodeIndex();
     isSrc = syncObj.getIsSrc();
     selectedFrame = syncObj.getFrame();
-    syncObjType = syncObj.getType();
-    if (syncObjType != SyncObj::TYPE_DUMMY) {
-        syncType = selectedFrame->getSyncType();
-        frameType = selectedFrame->getFrameType();
-    }
+    syncType = selectedFrame->getSyncType();
+    frameType = selectedFrame->getFrameType();
 
     /* for slave */
     otherPipeId = otherSyncObj.getPipeId();
     otherNodeIndex = otherSyncObj.getNodeIndex();
     otherIsSrc = otherSyncObj.getIsSrc();
     selectedOtherFrame = otherSyncObj.getFrame();
-    otherSyncObjType = otherSyncObj.getType();
-    if (otherSyncObjType != SyncObj::TYPE_DUMMY) {
-        otherSyncType = selectedOtherFrame->getSyncType();
-        otherFrameType = selectedOtherFrame->getFrameType();
-    }
-
-    /* invalid situation */
-    if (syncObjType == SyncObj::TYPE_DUMMY &&
-            otherSyncObjType == SyncObj::TYPE_DUMMY) {
-        TWO_SYNC_OBJ_LOGE(cameraId, &syncObj, &otherSyncObj, "both syncObj are dummy..");
-        DUAL_ASSERT(cameraId, "Assert due to invalid dummy syncObjs");
-    }
-
-    /* invalid situation */
-    if (frameType == FRAME_TYPE_INTERNAL ||
-            otherFrameType == FRAME_TYPE_INTERNAL) {
-        TWO_SYNC_OBJ_LOGE(cameraId, &syncObj, &otherSyncObj, "There's a internal frame");
-        DUAL_ASSERT(cameraId, "Assert due to internal frame");
-    }
+    otherSyncType = selectedOtherFrame->getSyncType();
+    otherFrameType = selectedOtherFrame->getFrameType();
 
     /*
      *  frame    | camera[syncType][frameType ] + camera[syncType][frameType  ]
      * ---------------------------------------------------------------------------------
-     *  case    1) Master[    -   ][    -     ] + Slave [      Dummy          ] => select master
-     *  case    2) Master[       Dymmy        ] + Slave [-       ][-          ] => select slave
-     *  case    3) Master[Bypass  ][Normal    ] + Slave [-       ][-          ] => select master
-     *  case    4) Master[-       ][-         ] + Slave [Switch  ][Normal     ] => select slave
-     *  case    5) Master[Sync    ][-         ] + Slave [Sync    ][-          ] => select master + slave
-     *  case    6) Master[Bypass  ][Transition] + Slave [-       ][-          ] => select master
-     *  case    7) Master[-       ][-         ] + Slave [Switch  ][Transition ] => select slave
-     *  other    )                                                              => drop
+     *  case    1) Master[Bypass  ][Normal    ] + Slave [-       ][-          ] => select master
+     *  case    2) Master[-       ][-         ] + Slave [Switch  ][Normal     ] => select slave
+     *  case    3) Master[Sync    ][-         ] + Slave [Sync    ][-          ] => select master + slave
+     *  case    4) Master[Bypass  ][Transition] + Slave [-       ][-          ] => select master
+     *  case    5) Master[-       ][-         ] + Slave [Switch  ][Transition ] => select slave
+     *  other    )                                                         => drop
+     *
+     *  but if selected frame have "Internal" frame type, drop the both frame
      */
-    if (otherSyncObjType == SyncObj::TYPE_DUMMY) {
+
+    if (syncType == SYNC_TYPE_BYPASS &&
+            (frameType != FRAME_TYPE_INTERNAL && frameType != FRAME_TYPE_TRANSITION)) {
         /* case 1 */
         flagSelectMaster = true;
         flagSelectSlave = false;
-    } else if (syncObjType == SyncObj::TYPE_DUMMY) {
+    } else if (otherSyncType == SYNC_TYPE_SWITCH &&
+            (otherFrameType != FRAME_TYPE_INTERNAL && otherFrameType != FRAME_TYPE_TRANSITION)) {
         /* case 2 */
         flagSelectMaster = false;
         flagSelectSlave = true;
-    } else if (syncType == SYNC_TYPE_BYPASS &&
-            frameType != FRAME_TYPE_TRANSITION) {
-        /* case 3 */
-        flagSelectMaster = true;
-        flagSelectSlave = false;
-    } else if (otherSyncType == SYNC_TYPE_SWITCH &&
-            (otherFrameType != FRAME_TYPE_TRANSITION)) {
-        /* case 4 */
-        flagSelectMaster = false;
-        flagSelectSlave = true;
     } else if (syncType == SYNC_TYPE_SYNC && otherSyncType == SYNC_TYPE_SYNC &&
-            (otherFrameType != FRAME_TYPE_INTERNAL)) {
-        /* case 5 */
+            (frameType != FRAME_TYPE_INTERNAL && otherFrameType != FRAME_TYPE_INTERNAL)) {
+        /* case 3 */
         flagSelectMaster = true;
         flagSelectSlave = true;
 
-        /* change the output node_index */
-        output_node_index = OUTPUT_NODE_2;
+	/* change the output node_index */
+	output_node_index = OUTPUT_NODE_2;
     } else if (syncType == SYNC_TYPE_BYPASS &&
             frameType == FRAME_TYPE_TRANSITION) {
-        /* case 6 */
+        /* case 4 */
         flagSelectMaster = true;
         flagSelectSlave = false;
     } else if (otherSyncType == SYNC_TYPE_SWITCH &&
             otherFrameType == FRAME_TYPE_TRANSITION) {
-        /* case 7 */
+        /* case 5 */
         flagSelectMaster = false;
         flagSelectSlave = true;
     } else {
@@ -888,9 +689,11 @@ ExynosCameraFrameSP_sptr_t ExynosCameraDualFrameSelector::selectFrame(int camera
     }
 
     /* select the frame */
-    if ((flagSelectMaster == true && flagSelectSlave == true)) {
+    if ((flagSelectMaster == true && flagSelectSlave == true) ||
+           (flagSelectMaster == false && flagSelectSlave == true)) {
         /*
          * 1) master + slave (set the slave's info to master)
+         * 2) slave (overwrite the frame info)
          */
         /* get the slave's Buffer and setting */
         ret = otherSyncObj.getBufferFromFrame(&otherBuffer);
@@ -943,19 +746,8 @@ ExynosCameraFrameSP_sptr_t ExynosCameraDualFrameSelector::selectFrame(int camera
         default:
             break;
         }
-
-        returnFrame = selectedFrame;
-    } else if ((flagSelectMaster == false && flagSelectSlave == true)) {
-        /* 2) slave */
-        if (selectedFrame != NULL && m_flagRemoveFrameRegister[cameraId] == true) {
-            ONE_SYNC_OBJ_LOGD(cameraId, &syncObj, "push the frame to removeFrameQ");
-            m_removeFrameQ[cameraId].pushProcessQ(&selectedFrame);
-        }
-        returnFrame = selectedOtherFrame;
-        returnFrame->setFrameState(FRAME_STATE_COMPLETE);
     } else {
         /* 3) master (don't do anything) */
-        returnFrame = selectedFrame;
     }
 
     /* release the unnecessary buffer */
@@ -971,39 +763,111 @@ ExynosCameraFrameSP_sptr_t ExynosCameraDualFrameSelector::selectFrame(int camera
             ONE_SYNC_OBJ_LOGE(cameraId, &otherSyncObj, "removed fail");
     }
 
-    return returnFrame;
+    return selectedFrame;
 }
 
 ExynosCameraFrameSP_sptr_t ExynosCameraDualFrameSelector::selectSingleFrame(int cameraId)
 {
+#ifdef DUAL_DEBUG
+    //ExynosCameraAutoTimer autoTimer(__func__);
+#endif
+
+    status_t ret = NO_ERROR;
+    bool popAllSyncObj = false;
+    SyncObj tempSyncObj;
+    SyncObj tempOtherSyncObj;
+    SyncObj *syncObj = NULL;
+    SyncObj *otherSyncObj = NULL;
+
+    int otherCameraId = m_findOppositeCameraId(cameraId);
+    if (otherCameraId < 0) {
+        DUAL_LOGE(cameraId, "There's no opposite camera");
+        return NULL;
+    }
+
+    if (getSizeOfSyncList(cameraId) <= 0) {
+        DUAL_LOGE(cameraId, "There's no synced frame");
+        return NULL;
+    }
+
     /* to SyncObjList */
     Mutex::Autolock lock(m_lock);
 
-    SyncObj syncObj = m_selectSingleSyncObj(cameraId);
+    /* check the integrity of SyncObjList */
+    if (m_syncObjList[cameraId].size() != m_syncObjList[otherCameraId].size()) {
+        DUAL_ASSERT(cameraId, "invalid size matching : syncObj size:%d/%d, prepareSyncObj size:%d/%d)",
+                m_syncObjList[cameraId].size(),
+                m_syncObjList[otherCameraId].size(),
+                m_prepareSyncObjList[cameraId].size(),
+                m_prepareSyncObjList[otherCameraId].size());
+    }
 
-    return syncObj.getFrame();
+    /* peek syncObj from sync obj */
+    if (m_peekList(cameraId, &m_syncObjList[cameraId], &syncObj, SyncObj::SELECT_STATE_WILL_BE_SELECTED) != NO_ERROR) {
+        if (m_peekList(cameraId, &m_syncObjList[cameraId], &syncObj, SyncObj::SELECT_STATE_NO_SELECTED) != NO_ERROR) {
+            DUAL_LOGW(cameraId, "There's no synced frame");
+            return NULL;
+        }
+    }
+
+    /* peek other camera's syncObj from sync obj */
+    if (m_peekList(cameraId, &m_syncObjList[otherCameraId], &otherSyncObj, syncObj->getSyncId()) != NO_ERROR) {
+        DUAL_ASSERT(cameraId, "Nothing in peekList : syncObj size:%d/%d, noSyncObj size:%d/%d)",
+                m_syncObjList[cameraId].size(),
+                m_syncObjList[otherCameraId].size(),
+                m_prepareSyncObjList[cameraId].size(),
+                m_prepareSyncObjList[otherCameraId].size());
+    }
+
+    /* if both camera selected synced frame, we actually pop the syncObj */
+    if (otherSyncObj->getSelectState() == SyncObj::SELECT_STATE_SELECTED) {
+        /* pop from sync obj */
+        if (m_popList(cameraId, &m_syncObjList[cameraId], &tempSyncObj, syncObj->getSyncId()) != NO_ERROR) {
+            DUAL_ASSERT(cameraId, "Nothing in popList : syncObj size:%d/%d, prepareSyncObj size:%d/%d)",
+                    m_syncObjList[cameraId].size(),
+                    m_syncObjList[otherCameraId].size(),
+                    m_prepareSyncObjList[cameraId].size(),
+                    m_prepareSyncObjList[otherCameraId].size());
+        }
+
+        /* pop from opposite camera's sync obj */
+        if (m_popList(cameraId, &m_syncObjList[otherCameraId], &tempOtherSyncObj, otherSyncObj->getSyncId()) != NO_ERROR) {
+            DUAL_ASSERT(cameraId, "Nothing in otherPopList : syncObj size:%d/%d, prepareSyncObj size:%d/%d)",
+                    m_syncObjList[cameraId].size(),
+                    m_syncObjList[otherCameraId].size(),
+                    m_prepareSyncObjList[cameraId].size(),
+                    m_prepareSyncObjList[otherCameraId].size());
+        }
+    } else {
+        /* change the select_state for both camera */
+        syncObj->setSelectState(SyncObj::SELECT_STATE_SELECTED);
+        otherSyncObj->setSelectState(SyncObj::SELECT_STATE_WILL_BE_SELECTED);
+
+        TWO_SYNC_OBJ_LOGV(cameraId, syncObj, otherSyncObj, "changed");
+    }
+
+    TWO_SYNC_OBJ_LOGV(cameraId, syncObj, otherSyncObj, "selected");
+
+    return syncObj->getFrame();
 }
 
 status_t ExynosCameraDualFrameSelector::releaseBuffer(int cameraId, ExynosCameraBuffer *buffer)
 {
     status_t ret = NO_ERROR;
-    ExynosCameraBufferManager *bufMgr = NULL;
 
     if ((buffer != NULL) && (buffer->index >= 0)) {
         DUAL_LOGV(cameraId, "index : %d", buffer->index);
 
-        bufMgr = (ExynosCameraBufferManager *)buffer->manager;
-
-        if (bufMgr == NULL) {
+        if (m_bufMgr[cameraId] == NULL) {
             DUAL_LOGE(cameraId, "buffer manager is null");
             ret = INVALID_OPERATION;
             return ret;
         } else {
-            ret = bufMgr->putBuffer(buffer->index, EXYNOS_CAMERA_BUFFER_POSITION_NONE);
+            ret = m_bufMgr[cameraId]->putBuffer(buffer->index, EXYNOS_CAMERA_BUFFER_POSITION_NONE);
             if (ret < 0) {
                 DUAL_LOGE(cameraId, "putBuffer failed (Index : %d)", buffer->index);
-                bufMgr->printBufferState();
-                bufMgr->printBufferQState();
+                m_bufMgr[cameraId]->printBufferState();
+                m_bufMgr[cameraId]->printBufferQState();
             }
         }
     }
@@ -1139,8 +1003,8 @@ status_t ExynosCameraDualFrameSelector::flush(int cameraId)
         if ((!m_flagValidCameraId[i]))
             continue;
 
-        m_clearListAll(i, &m_prepareSyncObjList[i]);
-        m_clearListAll(i, &m_syncObjList[i]);
+        m_clearListAll(cameraId, &m_prepareSyncObjList[i]);
+        m_clearListAll(cameraId, &m_syncObjList[i]);
     }
 
     return ret;
@@ -1148,8 +1012,6 @@ status_t ExynosCameraDualFrameSelector::flush(int cameraId)
 
 void ExynosCameraDualFrameSelector::dump(int cameraId)
 {
-    /* Sync List Dump */
-    Mutex::Autolock lock(m_lock);
 
     for (int i = 0; i < CAMERA_ID_MAX; i++) {
         if ((!m_flagValidCameraId[i]))
@@ -1157,6 +1019,9 @@ void ExynosCameraDualFrameSelector::dump(int cameraId)
 
         DUAL_LOGD(i, "=== DUMP ===");
         {
+            /* Sync List Dump */
+            Mutex::Autolock lock(m_lock);
+
             DUAL_LOGD(i, "=== PrepareObjList ===");
             m_printList(i, &m_prepareSyncObjList[i]);
 
@@ -1166,107 +1031,9 @@ void ExynosCameraDualFrameSelector::dump(int cameraId)
     }
 }
 
-void ExynosCameraDualFrameSelector::setFlagValidCameraId(int cameraId, int otherCameraId)
-{
-    Mutex::Autolock lock(m_lock);
-
-    /* global setting */
-    if (m_validCameraCnt == 0) {
-        m_flagValidCameraId[cameraId] = true;
-        m_flagValidCameraId[otherCameraId] = true;
-    }
-}
-
 /*
  * protected
  */
-ExynosCameraDualFrameSelector::SyncObj ExynosCameraDualFrameSelector::m_selectSingleSyncObj(int cameraId)
-{
-#ifdef DUAL_DEBUG
-    //ExynosCameraAutoTimer autoTimer(__func__);
-#endif
-
-    status_t ret = NO_ERROR;
-    bool popAllSyncObj = false;
-    SyncObj returnSyncObj;
-    SyncObj tempSyncObj;
-    SyncObj tempOtherSyncObj;
-    SyncObj *syncObj = NULL;
-    SyncObj *otherSyncObj = NULL;
-
-    int otherCameraId = m_findOppositeCameraId(cameraId);
-    if (otherCameraId < 0) {
-        DUAL_LOGE(cameraId, "There's no opposite camera");
-        return returnSyncObj;
-    }
-
-    if (m_syncObjList[cameraId].size() <= 0) {
-        DUAL_LOGE(cameraId, "There's no synced frame");
-        return returnSyncObj;
-    }
-
-    /* check the integrity of SyncObjList */
-    if (m_syncObjList[cameraId].size() != m_syncObjList[otherCameraId].size()) {
-        DUAL_ASSERT(cameraId, "invalid size matching : syncObj size:%d/%d, prepareSyncObj size:%d/%d)",
-                m_syncObjList[cameraId].size(),
-                m_syncObjList[otherCameraId].size(),
-                m_prepareSyncObjList[cameraId].size(),
-                m_prepareSyncObjList[otherCameraId].size());
-    }
-
-    /* peek syncObj from sync obj */
-    if (m_peekList(cameraId, &m_syncObjList[cameraId], &syncObj, SyncObj::SELECT_STATE_WILL_BE_SELECTED) != NO_ERROR) {
-        if (m_peekList(cameraId, &m_syncObjList[cameraId], &syncObj, SyncObj::SELECT_STATE_NO_SELECTED) != NO_ERROR) {
-            DUAL_LOGW(cameraId, "There's no synced frame");
-            return returnSyncObj;
-        } else {
-            returnSyncObj = *syncObj;
-        }
-    } else {
-        returnSyncObj = *syncObj;
-    }
-
-    /* peek other camera's syncObj from sync obj */
-    if (m_peekList(cameraId, &m_syncObjList[otherCameraId], &otherSyncObj, syncObj->getSyncId()) != NO_ERROR) {
-        DUAL_ASSERT(cameraId, "Nothing in peekList : syncObj size:%d/%d, noSyncObj size:%d/%d)",
-                m_syncObjList[cameraId].size(),
-                m_syncObjList[otherCameraId].size(),
-                m_prepareSyncObjList[cameraId].size(),
-                m_prepareSyncObjList[otherCameraId].size());
-    }
-
-    /* if both camera selected synced frame, we actually pop the syncObj */
-    if (otherSyncObj->getSelectState() == SyncObj::SELECT_STATE_SELECTED) {
-        /* pop from sync obj */
-        if (m_popList(cameraId, &m_syncObjList[cameraId], &tempSyncObj, syncObj->getSyncId()) != NO_ERROR) {
-            DUAL_ASSERT(cameraId, "Nothing in popList : syncObj size:%d/%d, prepareSyncObj size:%d/%d)",
-                    m_syncObjList[cameraId].size(),
-                    m_syncObjList[otherCameraId].size(),
-                    m_prepareSyncObjList[cameraId].size(),
-                    m_prepareSyncObjList[otherCameraId].size());
-        }
-
-        /* pop from opposite camera's sync obj */
-        if (m_popList(cameraId, &m_syncObjList[otherCameraId], &tempOtherSyncObj, otherSyncObj->getSyncId()) != NO_ERROR) {
-            DUAL_ASSERT(cameraId, "Nothing in otherPopList : syncObj size:%d/%d, prepareSyncObj size:%d/%d)",
-                    m_syncObjList[cameraId].size(),
-                    m_syncObjList[otherCameraId].size(),
-                    m_prepareSyncObjList[cameraId].size(),
-                    m_prepareSyncObjList[otherCameraId].size());
-        }
-    } else {
-        /* change the select_state for both camera */
-        syncObj->setSelectState(SyncObj::SELECT_STATE_SELECTED);
-        otherSyncObj->setSelectState(SyncObj::SELECT_STATE_WILL_BE_SELECTED);
-
-        TWO_SYNC_OBJ_LOGV(cameraId, syncObj, otherSyncObj, "changed");
-    }
-
-    TWO_SYNC_OBJ_LOGV(cameraId, &returnSyncObj, otherSyncObj, "selected");
-
-    return returnSyncObj;
-}
-
 int ExynosCameraDualFrameSelector::m_findOppositeCameraId(int cameraId)
 {
     int otherCameraId = -1;
@@ -1286,24 +1053,12 @@ int ExynosCameraDualFrameSelector::m_findOppositeCameraId(int cameraId)
 status_t ExynosCameraDualFrameSelector::m_destroySyncObj(SyncObj *syncObj, bool flagReleaseBuffer, bool notifyRemove)
 {
     status_t ret = NO_ERROR;
-    int cameraId;
-    int timeStamp;
-    int pipeId;
-    int nodeIndex;
-    bool isSrc;
     ExynosCameraBuffer buffer;
-    ExynosCameraFrameSP_sptr_t frame;
+    int cameraId = syncObj->getCameraId();
 
     if (syncObj == NULL) {
         DUAL_LOGE(cameraId, "syncObj is NULL(%d)", flagReleaseBuffer);
         return NO_ERROR;
-    }
-
-    cameraId = syncObj->getCameraId();
-
-    if (syncObj->getType() == SyncObj::TYPE_DUMMY) {
-        ONE_SYNC_OBJ_LOGV(cameraId, syncObj, "dummy syncObj");
-        goto p_dummy_node;
     }
 
     if (syncObj->getFrame() == NULL) {
@@ -1311,11 +1066,11 @@ status_t ExynosCameraDualFrameSelector::m_destroySyncObj(SyncObj *syncObj, bool 
         return NO_ERROR;
     }
 
-    frame = syncObj->getFrame();
-    timeStamp = syncObj->getTimeStamp();
-    pipeId = syncObj->getPipeId();
-    nodeIndex = syncObj->getNodeIndex();
-    isSrc = syncObj->getIsSrc();
+    ExynosCameraFrameSP_sptr_t frame = syncObj->getFrame();
+    int timeStamp = syncObj->getTimeStamp();
+    int pipeId = syncObj->getPipeId();
+    int nodeIndex = syncObj->getNodeIndex();
+    bool isSrc = syncObj->getIsSrc();
 
     ONE_SYNC_OBJ_LOGV(cameraId, syncObj, "removed(%d)", flagReleaseBuffer);
 
@@ -1340,7 +1095,6 @@ status_t ExynosCameraDualFrameSelector::m_destroySyncObj(SyncObj *syncObj, bool 
             releaseBuffer(cameraId, &buffer);
     }
 
-p_dummy_node:
     /* 3. destroy the syncObj */
     syncObj->destroy();
 
@@ -1470,7 +1224,7 @@ status_t ExynosCameraDualFrameSelector::m_popList(int cameraId, List<ExynosCamer
     do {
         if (r->getSyncId() == syncId) {
             *syncObj = *r;
-            r = list->erase(r);
+            list->erase(r);
             found = true;
             break;
         }
@@ -1505,7 +1259,7 @@ status_t ExynosCameraDualFrameSelector::m_popList(int cameraId, List<ExynosCamer
 
     ONE_SYNC_OBJ_LOGV(cameraId, syncObj, "poped");
 
-    r = list->erase(r);
+    list->erase(r);
 
     return NO_ERROR;
 };
@@ -1557,14 +1311,16 @@ status_t ExynosCameraDualFrameSelector::m_clearListAll(int cameraId, List<Exynos
     do {
         curSyncObj = *r;
 
-        ONE_SYNC_OBJ_LOGV(cameraId, &curSyncObj, "removed(%d) flag(%d)", list->size(), m_flagRemoveFrameRegister[cameraId]);
+        ONE_SYNC_OBJ_LOGV(cameraId, &curSyncObj, "removed(%d) flag(%d)", size, m_flagRemoveFrameRegister[cameraId]);
 
-        r = list->erase(r);
+        list->erase(r);
 
         /* release SyncObj with source buffer */
         ret = m_destroySyncObj(&curSyncObj, true, true);
         if (ret != NO_ERROR)
-            ONE_SYNC_OBJ_LOGE(cameraId, &curSyncObj, "removed(%d)", list->size());
+            ONE_SYNC_OBJ_LOGE(cameraId, &curSyncObj, "removed(%d)", size);
+
+        r++;
     } while (r != list->end());
 
     return NO_ERROR;
@@ -1589,24 +1345,27 @@ status_t ExynosCameraDualFrameSelector::m_clearListUntilMinSize(int cameraId, Li
     do {
         curSyncObj = *r;
 
-        if ((list->size()) <= minSize)
+        if (size <= minSize)
             break;
 
         /* remove only "no_selected" frame */
         if (curSyncObj.getSelectState() == SyncObj::SELECT_STATE_NO_SELECTED) {
 
-            ONE_SYNC_OBJ_LOGV(cameraId, &curSyncObj, "removed(%d/%d) flag(%d)", list->size(), minSize, m_flagRemoveFrameRegister[cameraId]);
+            ONE_SYNC_OBJ_LOGV(cameraId, &curSyncObj, "removed(%d/%d) flag(%d)", size, minSize, m_flagRemoveFrameRegister[cameraId]);
 
-            r = list->erase(r);
+            list->erase(r);
 
             /* release SyncObj with source buffer */
             ret = m_destroySyncObj(&curSyncObj, flagReleaseBuffer, true);
             if (ret != NO_ERROR)
-                ONE_SYNC_OBJ_LOGE(cameraId, &curSyncObj, "removed(%d/%d)", list->size(), minSize);
+                ONE_SYNC_OBJ_LOGE(cameraId, &curSyncObj, "removed(%d/%d)", size, minSize);
+
+            size--;
         } else {
-            ONE_SYNC_OBJ_LOGW(cameraId, &curSyncObj, "can't removed(%d/%d) flag(%d)", list->size(), minSize, m_flagRemoveFrameRegister[cameraId]);
-            r++;
+            ONE_SYNC_OBJ_LOGW(cameraId, &curSyncObj, "can't removed(%d/%d) flag(%d)", size, minSize, m_flagRemoveFrameRegister[cameraId]);
         }
+
+        r++;
     } while (r != list->end());
 
     return NO_ERROR;
@@ -1648,7 +1407,7 @@ status_t ExynosCameraDualFrameSelector::m_clearListUntilTimeStamp(int cameraId, 
 
             ONE_SYNC_OBJ_LOGV(cameraId, &curSyncObj, "removed(%d/%d) flag(%d)", curSyncObj.getTimeStamp(), timeStamp, m_flagRemoveFrameRegister[cameraId]);
 
-            r = list->erase(r);
+            list->erase(r);
 
             /* release SyncObj with source buffer */
             ret = m_destroySyncObj(&curSyncObj, flagReleaseBuffer, notifyRemove);
@@ -1656,8 +1415,9 @@ status_t ExynosCameraDualFrameSelector::m_clearListUntilTimeStamp(int cameraId, 
                 ONE_SYNC_OBJ_LOGE(cameraId, &curSyncObj, "removed(%d)", timeStamp);
         } else {
             ONE_SYNC_OBJ_LOGW(cameraId, &curSyncObj, "can't removed(%d/%d) flag(%d)", curSyncObj.getTimeStamp(), timeStamp, m_flagRemoveFrameRegister[cameraId]);
-            r++;
         }
+
+        r++;
     } while (r != list->end());
 
     return NO_ERROR;

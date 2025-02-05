@@ -32,6 +32,20 @@ ExynosCameraFrameFactory::~ExynosCameraFrameFactory()
         CLOGE("ERR(%s[%d]):destroy fail", __FUNCTION__, __LINE__);
 }
 
+#ifdef SAMSUNG_COMPANION
+status_t ExynosCameraFrameFactory::precreate(void)
+{
+    CLOGE("ERR(%s[%d]):Must use the concreate class, don't use superclass", __FUNCTION__, __LINE__);
+    return INVALID_OPERATION;
+}
+
+status_t ExynosCameraFrameFactory::postcreate(void)
+{
+    CLOGE("ERR(%s[%d]):Must use the concreate class, don't use superclass", __FUNCTION__, __LINE__);
+    return INVALID_OPERATION;
+}
+#endif
+
 status_t ExynosCameraFrameFactory::destroy(void)
 {
     CLOGI("INFO(%s[%d])", __FUNCTION__, __LINE__);
@@ -99,7 +113,14 @@ int ExynosCameraFrameFactory::m_getFliteNodenum()
 {
     int fliteNodeNim = FIMC_IS_VIDEO_SS0_NUM;
 
-    fliteNodeNim = (m_cameraId == CAMERA_ID_BACK)?MAIN_CAMERA_FLITE_NUM:FRONT_CAMERA_FLITE_NUM;
+#ifdef SAMSUNG_COMPANION
+    if(m_parameters->getUseCompanion() == true) {
+        fliteNodeNim = FIMC_IS_VIDEO_SS0_NUM;
+    } else
+#endif
+    {
+        fliteNodeNim = (m_cameraId == CAMERA_ID_BACK)?MAIN_CAMERA_FLITE_NUM:FRONT_CAMERA_FLITE_NUM;
+    }
 
     return fliteNodeNim;
 }
@@ -221,6 +242,12 @@ int ExynosCameraFrameFactory::setLeader(int sensorId, bool flagLeader)
            (sensorId & INPUT_VINDEX_MASK) |
            (sensorId & INPUT_MEMORY_MASK) |
            ((flagLeader)?1:0 & INPUT_LEADER_MASK);
+}
+
+status_t ExynosCameraFrameFactory::fastenAeStable(__unused int32_t numFrames, __unused ExynosCameraBuffer *buffers)
+{
+    CLOGE("ERR(%s[%d]):Must use the concreate class, don't use superclass", __FUNCTION__, __LINE__);
+    return NO_ERROR;
 }
 
 ExynosCameraFrame *ExynosCameraFrameFactory::createNewFrameOnlyOnePipe(int pipeId, int frameCnt)

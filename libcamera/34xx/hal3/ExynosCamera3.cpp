@@ -69,6 +69,37 @@ ExynosCamera3::ExynosCamera3(int cameraId, camera_metadata_t **info):
     m_requestMgr = new ExynosCameraRequestManager(cameraId, (ExynosCameraParameters *)m_parameters);
     m_requestMgr->setMetaDataConverter(m_metadataConverter);
 
+#ifdef SAMSUNG_COMPANION
+    m_companionNode = NULL;
+    m_companionThread = NULL;
+    CLOGI2("use_companion(%d)", cameraId, m_use_companion);
+
+    if (m_use_companion == true) {
+        m_companionThread = new mainCameraThread(this, &ExynosCamera3::m_companionThreadFunc,
+                                                  "companionshotThread", PRIORITY_URGENT_DISPLAY);
+        if (m_companionThread != NULL) {
+            m_companionThread->run();
+            CLOGD2("companionThread starts");
+        } else {
+            CLOGE2("failed the m_companionThread.");
+        }
+    }
+#endif
+
+#if defined(SAMSUNG_EEPROM)
+    m_eepromThread = NULL;
+    if ((m_use_companion == false) && (isEEprom(getCameraId()) == true)) {
+        m_eepromThread = new mainCameraThread(this, &ExynosCamera3::m_eepromThreadFunc,
+                                                  "cameraeepromThread", PRIORITY_URGENT_DISPLAY);
+        if (m_eepromThread != NULL) {
+            m_eepromThread->run();
+            CLOGD2("eepromThread starts");
+        } else {
+            CLOGE2("failed the m_eepromThread");
+        }
+    }
+#endif
+
     /* Create managers */
     m_createManagers();
 
@@ -142,6 +173,9 @@ ExynosCamera3::ExynosCamera3(int cameraId, camera_metadata_t **info):
     m_captureCount = 0;
 #ifdef MONITOR_LOG_SYNC
     m_syncLogDuration = 0;
+#endif
+#ifdef USE_FASTEN_AE_STABLE
+    m_flagRunFastAE = false;
 #endif
     m_flagStartFrameFactory = false;
     m_flagStartReprocessingFrameFactory = false;
@@ -1598,6 +1632,7 @@ status_t ExynosCamera3::flush()
 
     if (m_flushWaitEnable == false) {
         CLOGD2("No need to wait & flush");
+        m_stopCompanion();
         goto func_exit;
     }
 
@@ -1610,6 +1645,10 @@ status_t ExynosCamera3::flush()
     if (m_sccCaptureSelector != NULL)
         m_sccCaptureSelector->wakeselectDynamicFrames();
     m_captureThread->requestExitAndWait();
+
+    /* close companion node */
+    m_stopCompanion();
+
 
     /* Create frame for the waiting request */
     while (m_requestWaitingList.size() > 0) {
@@ -1825,6 +1864,57 @@ int ExynosCamera3::getCameraId() const
 {
     return m_cameraId;
 }
+
+#ifdef USE_FASTEN_AE_STABLE
+status_t ExynosCamera3::m_fastenAeStable(ExynosCamera3FrameFactory *factory)
+{
+    int ret = 0;
+    ExynosCameraBuffer fastenAeBuffer[NUM_FASTAESTABLE_BUFFERS];
+    ExynosCameraBufferManager *skipBufferMgr = NULL;
+    m_createInternalBufferManager(&skipBufferMgr, "SKIP_BUF");
+
+    unsigned int planeSize[EXYNOS_CAMERA_BUFFER_MAX_PLANES] = {0};
+    unsigned int bytesPerLine[EXYNOS_CAMERA_BUFFER_MAX_PLANES] = {0};
+    planeSize[0] = 32 * 64 * 2;
+    int planeCount  = 2;
+    int bufferCount = NUM_FASTAESTABLE_BUFFERS;
+
+    if (skipBufferMgr == NULL) {
+        CLOGE2("ERR(%s[%d]):createBufferManager failed");
+        goto func_exit;
+    }
+
+    ret = m_allocBuffers(skipBufferMgr, planeCount, planeSize, bytesPerLine, bufferCount, true, false);
+    if (ret < 0) {
+        CLOGE2("ERR(%s[%d]):m_3aaBufferMgr m_allocBuffers(bufferCount=%d) fail", bufferCount);
+        goto done;
+    }
+
+    for (int i = 0; i < bufferCount; i++) {
+        int index = i;
+        ret = skipBufferMgr->getBuffer(&index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &fastenAeBuffer[i]);
+        if (ret < 0) {
+            CLOGE2("getBuffer fail");
+            goto done;
+        }
+    }
+
+    ret = factory->fastenAeStable(bufferCount, fastenAeBuffer);
+    if (ret < 0) {
+        ret = INVALID_OPERATION;
+        CLOGE2("fastenAeStable fail(%d)", ret);
+    }
+
+done:
+    if (skipBufferMgr != NULL) {
+        skipBufferMgr->deinit();
+        delete skipBufferMgr;
+        skipBufferMgr = NULL;
+    }
+func_exit:
+    return ret;
+}
+#endif
 
 bool ExynosCamera3::m_mainThreadFunc(void)
 {
@@ -2485,7 +2575,7 @@ status_t ExynosCamera3::m_createInternalFrameFunc(void)
     return ret;
 }
 
-status_t ExynosCamera3::m_createPrepareFrameFunc(__unused ExynosCameraRequest *request)
+status_t ExynosCamera3::m_createPrepareFrameFunc(ExynosCameraRequest *request)
 {
     status_t ret = NO_ERROR;
     short retryCount = 4;
@@ -2513,6 +2603,19 @@ status_t ExynosCamera3::m_createPrepareFrameFunc(__unused ExynosCameraRequest *r
 
     if (m_factoryStartFlag == true) {
         m_factoryStartFlag = false;
+
+#ifdef USE_FASTEN_AE_STABLE
+        /* for FAST AE Stable */
+        if (request->getKey()== 0 &&
+            m_parameters->getUseFastenAeStable() == true &&
+            m_parameters->getCameraId() == CAMERA_ID_BACK &&
+            m_parameters->getDualMode() == false &&
+            m_parameters->getRecordingHint() == false &&
+            m_flagRunFastAE == false) {
+            m_flagRunFastAE = true;
+            m_fastenAeStable(factory);
+        }
+#endif
 
         ret = factory->initPipes();
         if (ret != NO_ERROR) {
@@ -2560,7 +2663,10 @@ status_t ExynosCamera3::m_createPrepareFrameFunc(__unused ExynosCameraRequest *r
                 taaBufferManager[factory->getNodeType(PIPE_3AA)] = m_3aaBufferMgr;
                 if (m_parameters->isUsing3acForIspc() == true)
                     taaBufferManager[factory->getNodeType(PIPE_3AC)] = m_yuvCaptureBufferMgr;
-
+#ifndef RAWDUMP_CAPTURE
+                else
+                    taaBufferManager[factory->getNodeType(PIPE_3AC)] = m_fliteBufferMgr;
+#endif
                 taaBufferManager[factory->getNodeType(PIPE_SCP)] = m_internalScpBufferMgr;
             }
         } else {
@@ -2721,7 +2827,18 @@ status_t ExynosCamera3::m_createFrameFunc(void)
     ExynosCameraRequest *request = NULL;
     int key = 0;
     /* 1. Get new service request from request manager */
+#ifdef USE_SKIP_FIRST_FRAME
+    /* HACK : Skip to update metadata for 2nd frame (fCount == 2)
+     * AE library does NOT refer to the 1st shot.
+     * To get the normal dynamic metadata for the 1st request from user,
+     * HAL must create the two frame which have the same control metadata.
+     * Therefore, the frame that has the frameCount 1 must not be updated
+     * with new request.
+     */
+    if (m_requestMgr->getServiceRequestCount() > 0 && m_internalFrameCount != 1) {
+#else
     if (m_requestMgr->getServiceRequestCount() > 0) {
+#endif
         m_popRequest(&request);
         key = request->getKey();
     }
@@ -3367,6 +3484,14 @@ status_t ExynosCamera3::m_constructFrameFactory(void)
         m_frameFactory[FRAME_FACTORY_TYPE_REPROCESSING] = factory;
     }
 
+    m_waitCompanionThreadEnd();
+
+/*
+#if defined(SAMSUNG_EEPROM)
+    m_parameters->setRomReadThreadDone(true);
+#endif
+*/
+
     for (int i = 0; i < FRAME_FACTORY_TYPE_MAX; i++) {
         factory = m_frameFactory[i];
         if ((factory != NULL) && (factory->isCreated() == false)) {
@@ -3606,7 +3731,7 @@ void ExynosCamera3::m_updateCropRegion(struct camera2_shot_ext *shot_ext)
     }
 
     if ((int)(shot_ext->shot.ctl.scaler.cropRegion[1]) < 0) {
-        CLOGE2("Invalid Crop Region, offsetY(%d), Change to 0",
+        CLOGE2("Invalid Crop Region, offsetX(%d), Change to 0",
                 shot_ext->shot.ctl.scaler.cropRegion[1]);
         shot_ext->shot.ctl.scaler.cropRegion[1] = 0;
     }
@@ -5950,7 +6075,11 @@ status_t ExynosCamera3::m_updateTimestamp(ExynosCameraFrame *frame, ExynosCamera
         return INVALID_OPERATION;
     }
 
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+    uint64_t timeStamp = shot_ext->shot.udm.sensor.timeStampBoot;
+#else
     uint64_t timeStamp = shot_ext->shot.dm.sensor.timeStamp;
+#endif
     uint64_t frameDuration = shot_ext->shot.dm.sensor.frameDuration;
 
     /* HACK: W/A for timeStamp reversion */
@@ -6186,6 +6315,7 @@ status_t ExynosCamera3::m_handlePreviewFrame(ExynosCameraFrame *frame, int pipeI
                 }
             }
         }
+
     case PIPE_SCP:
         ret = frame->getDstBuffer(entity->getPipeId(), &buffer, factory->getNodeType(PIPE_SCP));
         if (ret < 0) {
@@ -7207,12 +7337,16 @@ uint32_t ExynosCamera3::m_getBayerPipeId(void)
 
 status_t ExynosCamera3::m_pushRequest(camera3_capture_request *request)
 {
-    status_t ret = OK;
+    ExynosCameraRequest* req = NULL;
 
     CLOGV2("m_pushRequest frameCnt(%d)", request->frame_number);
 
-    ret = m_requestMgr->registerServiceRequest(request);
-    return ret;
+    req = m_requestMgr->registerServiceRequest(request);
+    if(req == NULL) {
+        return INVALID_OPERATION;
+    } else {
+        return OK;
+    }
 }
 
 status_t ExynosCamera3::m_popRequest(ExynosCameraRequest **request)
@@ -7723,6 +7857,210 @@ status_t ExynosCamera3::m_setPictureBuffer(void)
     return ret;
 }
 
+#ifdef SAMSUNG_COMPANION
+int ExynosCamera3::m_getSensorId(int m_cameraId)
+{
+    unsigned int scenario = 0;
+    unsigned int scenarioBit = 0;
+    unsigned int nodeNumBit = 0;
+    unsigned int sensorIdBit = 0;
+    unsigned int sensorId = getSensorId(m_cameraId);
+
+    scenarioBit = (scenario << SCENARIO_SHIFT);
+
+    nodeNumBit = ((FIMC_IS_VIDEO_SS0_NUM - FIMC_IS_VIDEO_SS0_NUM) << SSX_VINDEX_SHIFT);
+
+    sensorIdBit = (sensorId << 0);
+
+    return (scenarioBit) | (nodeNumBit) | (sensorIdBit);
+}
+
+bool ExynosCamera3::m_companionThreadFunc(void)
+{
+    CLOGI("INFO(%s[%d]):", __FUNCTION__, __LINE__);
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+    int loop = false;
+    int ret = 0;
+
+    m_timer.start();
+
+    m_companionNode = new ExynosCameraNode();
+
+    ret = m_companionNode->create("companion", m_cameraId);
+    if (ret < 0) {
+        CLOGE2("Companion Node create fail, ret(%d)", ret);
+    }
+
+    ret = m_companionNode->open(MAIN_CAMERA_COMPANION_NUM);
+    if (ret < 0) {
+        CLOGE2("Companion Node open fail, ret(%d)", ret);
+    }
+    CLOGD2("Companion Node(%d) opened running)", MAIN_CAMERA_COMPANION_NUM);
+
+    ret = m_companionNode->setInput(m_getSensorId(m_cameraId));
+    if (ret < 0) {
+        CLOGE2("Companion Node s_input fail, ret(%d)", ret);
+    }
+    CLOGD2("Companion Node(%d) s_input", MAIN_CAMERA_COMPANION_NUM);
+
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+    CLOGD2("duration time(%5d msec)", (int)durationTime);
+
+    /* one shot */
+    return loop;
+}
+#endif
+
+#if defined(SAMSUNG_EEPROM)
+bool ExynosCamera3::m_eepromThreadFunc(void)
+{
+    CLOGI("INFO(%s[%d]):", __FUNCTION__, __LINE__);
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+    char sensorFW[50] = {0,};
+    int ret = 0;
+    FILE *fp = NULL;
+
+    m_timer.start();
+
+    if(m_cameraId == CAMERA_ID_BACK) {
+        fp = fopen(SENSOR_FW_PATH_BACK, "r");
+    } else {
+        fp = fopen(SENSOR_FW_PATH_FRONT, "r");
+    }
+    if (fp == NULL) {
+        CLOGE2("failed to open sysfs. camera id = %d", m_cameraId);
+        goto err;
+    }
+
+    if (fgets(sensorFW, sizeof(sensorFW), fp) == NULL) {
+        CLOGE2("failed to read sysfs entry");
+        goto err;
+    }
+
+    /* int numread = strlen(sensorFW); */
+    CLOGI2("eeprom read complete. Sensor FW ver: %s", sensorFW);
+
+err:
+    if (fp != NULL)
+        fclose(fp);
+
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+    CLOGD2("duration time(%5d msec)", (int)durationTime);
+
+    /* one shot */
+    return false;
+}
+#endif
+
+status_t ExynosCamera3::m_startCompanion(void)
+{
+#ifdef SAMSUNG_COMPANION
+    if(m_parameters->isCompanion(getCameraId()) == true) {
+        if (m_companionNode == NULL) {
+            m_companionThread = new mainCameraThread(this, &ExynosCamera3::m_companionThreadFunc,
+                                                      "companionshotThread", PRIORITY_URGENT_DISPLAY);
+            if (m_companionThread != NULL) {
+                m_companionThread->run();
+                CLOGD2("companionThread starts");
+            } else {
+                CLOGE2("failed the m_companionThread.");
+            }
+        } else {
+            CLOGW2("m_companionNode != NULL. so, it already running");
+        }
+    }
+#endif
+
+#if defined(SAMSUNG_EEPROM)
+    if ((m_use_companion == false) && (isEEprom(getCameraId()) == true)) {
+        m_eepromThread = new mainCameraThread(this, &ExynosCamera3::m_eepromThreadFunc,
+                                                  "cameraeepromThread", PRIORITY_URGENT_DISPLAY);
+        if (m_eepromThread != NULL) {
+            m_eepromThread->run();
+            CLOGD2("eepromThread starts");
+        } else {
+            CLOGE2("failed the m_eepromThread");
+        }
+    }
+#endif
+
+    return NO_ERROR;
+}
+
+status_t ExynosCamera3::m_stopCompanion(void)
+{
+#ifdef SAMSUNG_COMPANION
+    if(m_parameters->isCompanion(getCameraId()) == true) {
+        if (m_companionThread != NULL) {
+            CLOGI2("wait m_companionThread");
+            m_companionThread->requestExitAndWait();
+            CLOGI2("wait m_companionThread end");
+        } else {
+            CLOGI2("m_companionThread is NULL");
+        }
+
+        if (m_companionNode != NULL) {
+            ExynosCameraDurationTimer timer;
+
+            timer.start();
+
+            if (m_companionNode->close() != NO_ERROR) {
+                CLOGE2("close fail");
+            }
+            delete m_companionNode;
+            m_companionNode = NULL;
+
+            CLOGD2("Companion Node(%d) closed", MAIN_CAMERA_COMPANION_NUM);
+
+            timer.stop();
+            CLOGD2("duration time(%5d msec)", (int)timer.durationMsecs());
+
+        }
+    }
+#endif
+
+#if defined(SAMSUNG_EEPROM)
+    if ((m_parameters->isCompanion(getCameraId()) == false) && (isEEprom(getCameraId()) == true)) {
+        if (m_eepromThread != NULL) {
+            CLOGI2("wait m_eepromThread");
+            m_eepromThread->requestExitAndWait();
+        } else {
+            CLOGI2("m_eepromThread is NULL");
+        }
+    }
+#endif
+
+    return NO_ERROR;
+}
+
+status_t ExynosCamera3::m_waitCompanionThreadEnd(void)
+{
+    ExynosCameraDurationTimer timer;
+
+    timer.start();
+
+#ifdef SAMSUNG_COMPANION
+    if (m_use_companion == true) {
+        if (m_companionThread != NULL) {
+            m_companionThread->join();
+        } else {
+            CLOGI2("m_companionThread is NULL");
+        }
+    }
+#endif
+
+    timer.stop();
+    CLOGI2("companion waiting time : duration time(%5d msec)", (int)timer.durationMsecs());
+
+    CLOGI2("companionThread join");
+
+    return NO_ERROR;
+}
+
 status_t ExynosCamera3::m_generateInternalFrame(uint32_t frameCount, ExynosCamera3FrameFactory *factory, List<ExynosCameraFrame *> *list, Mutex *listLock, ExynosCameraFrame **newFrame)
 {
     status_t ret = OK;
@@ -8139,6 +8477,15 @@ bool ExynosCamera3::m_monitorThreadFunc(void)
         CLOGE2("(%d)", dtpStatus);
         dump();
 
+#if 0//def CAMERA_GED_FEATURE
+        /* in GED */
+        android_printAssert(NULL, LOG_TAG, "killed by itself");
+#else
+        /* specifically defined */
+        /* m_notifyCb(CAMERA_MSG_ERROR, 1002, 0, m_callbackCookie); */
+        /* or */
+        /* android_printAssert(NULL, LOG_TAG, "killed by itself"); */
+#endif
         return false;
     }
 
@@ -8147,7 +8494,15 @@ bool ExynosCamera3::m_monitorThreadFunc(void)
     if (dtpStatus == 1) {
         CLOGE2("(%d)", dtpStatus);
         dump();
-
+#if 0//def CAMERA_GED_FEATURE
+        /* in GED */
+        android_printAssert(NULL, LOG_TAG, "killed by itself");
+#else
+        /* specifically defined */
+        /* m_notifyCb(CAMERA_MSG_ERROR, 1002, 0, m_callbackCookie); */
+        /* or */
+        /* android_printAssert(NULL, LOG_TAG, "killed by itself"); */
+#endif
         return false;
     }
 #endif
@@ -8160,7 +8515,32 @@ bool ExynosCamera3::m_monitorThreadFunc(void)
             CLOGE2("ERROR_DQ_BLOCKED) ; ERROR_DQ_BLOCKED_COUNT =20");
 
         dump();
-
+#ifdef SAMSUNG_TN_FEATURE
+#if 0
+        /* this tn feature was commented for 3.2 */
+        if (m_recordingEnabled == true
+          && m_parameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)
+          && m_recordingCallbackHeap != NULL
+          && m_callbackCookie != NULL) {
+          m_dataCbTimestamp(
+              0,
+              CAMERA_MSG_ERROR | CAMERA_MSG_VIDEO_FRAME,
+              m_recordingCallbackHeap,
+              0,
+              m_callbackCookie);
+              CLOGD2("Timestamp callback with CAMERA_MSG_ERROR");
+        }
+#endif
+#endif
+#if 0//def CAMERA_GED_FEATURE
+        /* in GED */
+        android_printAssert(NULL, LOG_TAG, "killed by itself");
+#else
+        /* specifically defined */
+        /* m_notifyCb(CAMERA_MSG_ERROR, 1002, 0, m_callbackCookie); */
+        /* or */
+        /* android_printAssert(NULL, LOG_TAG, "killed by itself"); */
+#endif
         return false;
     } else {
         CLOGV2(" (%d)", *threadState);

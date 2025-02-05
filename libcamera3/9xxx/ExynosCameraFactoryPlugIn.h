@@ -51,12 +51,12 @@ public:
     /*
      * Use this API to get the real object.
      */
-    status_t create(int cameraId, int pipeId, ExynosCameraPlugInSP_dptr_t plugIn, ExynosCameraPlugInConverterSP_dptr_t converter, int scenario);
+    status_t create(int cameraId, int pipeId, ExynosCameraPlugInSP_dptr_t plugIn, ExynosCameraPlugInConverterSP_dptr_t converter, PLUGIN::MODE mode);
     status_t destroy(int cameraId, ExynosCameraPlugInSP_dptr_t plugIn, ExynosCameraPlugInConverterSP_dptr_t converter);
     void     dump(int cameraId);
 
 protected:
-    int m_findPlugInIndexByPipeId(int cameraId, int id);
+    int      m_findPlugInIndexByPipeId(int cameraId, int pipeId);
 
 private:
     Mutex                    m_lock;

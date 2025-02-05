@@ -3,9 +3,6 @@
 LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
-LOCAL_PRELINK_MODULE := false
-LOCAL_PROPRIETARY_MODULE := true
-
 LOCAL_SRC_FILES := FakeFusion.cpp
 LOCAL_SHARED_LIBRARIES := libutils libcutils liblog libexynosutils
 

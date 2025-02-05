@@ -54,7 +54,7 @@ namespace android {
 class ExynosCameraPlugInVDIS : public ExynosCameraPlugIn {
 public:
     ExynosCameraPlugInVDIS() : ExynosCameraPlugIn() {}
-    ExynosCameraPlugInVDIS(int cameraId, int pipeId, int scenario) : ExynosCameraPlugIn(cameraId, pipeId, scenario) {
+    ExynosCameraPlugInVDIS(int cameraId, int pipeId, int mode) : ExynosCameraPlugIn(cameraId, pipeId, mode) {
         strncpy(m_name, "VDISPlugIn", (PLUGIN_NAME_STR_SIZE - 1));
     };
     virtual ~ExynosCameraPlugInVDIS() { ALOGD("%s", __FUNCTION__); };

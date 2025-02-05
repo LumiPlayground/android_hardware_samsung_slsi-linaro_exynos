@@ -58,9 +58,6 @@ typedef enum
     SENSOR_NAME_S5K4H5YC_FF      = 34,
     SENSOR_NAME_S5K2L7           = 35,
     SENSOR_NAME_SAK2L3           = 36,
-    SENSOR_NAME_S5K3P8SP         = 44,
-    SENSOR_NAME_S5K2P7SX         = 45,
-    SENSOR_NAME_S5KRPB           = 46,
     SENSOR_NAME_S5K4EC           = 57,
 
     /* 101~200: SONY sensors */
@@ -94,7 +91,7 @@ typedef enum
     SENSOR_NAME_SR130PC20        = 304,
 
     SENSOR_NAME_S5K5E6           = 305, // IRIS Camera Sensor
-    SENSOR_NAME_S5K5F1           = 306, // IRIS Camera Sensor
+    SENSOR_NAME_S5K5F1           = 306, // STAR IRIS Sensor
 
     SENSOR_NAME_VIRTUAL_ZEBU     = 901,
     SENSOR_NAME_END,
@@ -124,25 +121,6 @@ enum HW_CONNECTION_MODE {
     HW_CONNECTION_MODE_M2M_BUFFER_HIDING	= 2,
     /* Unused connection mode               = 3 */
     HW_CONNECTION_MODE_VIRTUAL_OTF          = 4,
-};
-
-enum HW_CHAIN_TYPE {
-    HW_CHAIN_TYPE_NONE,
-    HW_CHAIN_TYPE_SINGLE_CHAIN,     /* it has 3aa(1) and isp(1) */
-    HW_CHAIN_TYPE_SEMI_DUAL_CHAIN,  /* it has 3aa(2) and isp(1) */
-    HW_CHAIN_TYPE_DUAL_CHAIN,       /* it has 3aa(2) and isp(2) */
-};
-
-enum FRAME_FACTORY_TYPE {
-    FRAME_FACTORY_TYPE_REPROCESSING = 0,
-    FRAME_FACTORY_TYPE_JPEG_REPROCESSING,
-    FRAME_FACTORY_TYPE_CAPTURE_PREVIEW,
-#ifdef USE_DUAL_CAMERA
-    FRAME_FACTORY_TYPE_PREVIEW_DUAL,
-    FRAME_FACTORY_TYPE_REPROCESSING_DUAL,
-#endif
-    FRAME_FACTORY_TYPE_VISION,
-    FRAME_FACTORY_TYPE_MAX,
 };
 
 #endif /* EXYNOS_CAMERA_COMMON_CONFIG_H */

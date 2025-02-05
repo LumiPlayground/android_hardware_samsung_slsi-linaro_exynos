@@ -60,7 +60,7 @@ private:
 
 private:
     bool                    m_flagHWFCEnabled;
-    bool                    m_flagODCEnabled;
+    bool                    m_flagTPU1Enabled;
 };
 
 }; /* namespace android */

@@ -36,17 +36,17 @@ status_t ExynosCameraPlugInConverterFakeFusion::m_deinit(void)
     return NO_ERROR;
 }
 
-status_t ExynosCameraPlugInConverterFakeFusion::m_create(Map_t *map)
+status_t ExynosCameraPlugInConverterFakeFusion::m_create(__unused Map_t *map)
 {
     return NO_ERROR;
 }
 
-status_t ExynosCameraPlugInConverterFakeFusion::m_setup(Map_t *map)
+status_t ExynosCameraPlugInConverterFakeFusion::m_setup(__unused Map_t *map)
 {
     return NO_ERROR;
 }
 
-status_t ExynosCameraPlugInConverterFakeFusion::m_make(Map_t *map)
+status_t ExynosCameraPlugInConverterFakeFusion::m_make(__unused Map_t *map)
 {
     return NO_ERROR;
 }

@@ -68,13 +68,6 @@ public:
 };
 #endif
 
-struct ExynosCamera3SensorS5K3P3Base : public ExynosCamera3SensorInfoBase {
-private:
-
-public:
-    ExynosCamera3SensorS5K3P3Base();
-};
-
 struct ExynosCamera3SensorS5K2P2_12MBase : public ExynosCamera3SensorInfoBase {
 private:
 
@@ -115,6 +108,11 @@ private:
 
 public:
     ExynosCamera3SensorSR261Base();
+};
+
+struct ExynosCamera3SensorSR259Base : public ExynosCamera3SensorInfoBase {
+public:
+    ExynosCamera3SensorSR259Base();
 };
 
 struct ExynosCamera3SensorS5K3H7Base : public ExynosCamera3SensorInfoBase {
@@ -222,6 +220,13 @@ private:
 
 public:
     ExynosCamera3SensorIMX260_2L1Base(int sensorId);
+};
+
+struct ExynosCamera3SensorS5K3P3Base : public ExynosCamera3SensorInfoBase {
+private:
+
+public:
+    ExynosCamera3SensorS5K3P3Base(int sensorId);
 };
 
 struct ExynosCamera3SensorOV5670Base : public ExynosCamera3SensorInfoBase {

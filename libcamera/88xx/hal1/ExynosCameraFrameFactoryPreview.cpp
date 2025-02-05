@@ -93,6 +93,7 @@ status_t ExynosCameraFrameFactoryPreview::create(__unused bool active)
     CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
             m_pipes[PIPE_MCSC]->getPipeName(), PIPE_MCSC);
 
+#ifdef USE_GSC_FOR_PREVIEW
     /* GSC_PREVIEW pipe initialize */
     ret = m_pipes[PIPE_GSC]->create();
     if (ret != NO_ERROR) {
@@ -102,6 +103,7 @@ status_t ExynosCameraFrameFactoryPreview::create(__unused bool active)
     }
     CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
             m_pipes[PIPE_GSC]->getPipeName(), PIPE_GSC);
+#endif
 
 #ifdef BOARD_CAMERA_USES_DUAL_CAMERA
     /* FUSION pipe initialize */
@@ -154,6 +156,12 @@ status_t ExynosCameraFrameFactoryPreview::create(__unused bool active)
     bool useFWSuspendResume = true;
 
     if (m_parameters->getDualMode() == false
+#ifdef SAMSUNG_QUICKSHOT
+        && m_parameters->getQuickShot() == 0
+#endif
+#ifdef USE_LIVE_BROADCAST
+        && m_parameters->getPLBMode() == false
+#endif
     ) {
         ret = m_pipes[PIPE_3AA]->setControl(V4L2_CID_IS_CAMERA_TYPE, (int)useFWSuspendResume);
         if (ret != NO_ERROR) {
@@ -264,6 +272,7 @@ status_t ExynosCameraFrameFactoryPreview::postcreate(void)
     CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
             m_pipes[PIPE_MCSC]->getPipeName(), PIPE_MCSC);
 
+#ifdef USE_GSC_FOR_PREVIEW
     /* GSC_PREVIEW pipe initialize */
     ret = m_pipes[PIPE_GSC]->create();
     if (ret != NO_ERROR) {
@@ -273,6 +282,7 @@ status_t ExynosCameraFrameFactoryPreview::postcreate(void)
     }
     CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
             m_pipes[PIPE_GSC]->getPipeName(), PIPE_GSC);
+#endif
 
 #ifdef BOARD_CAMERA_USES_DUAL_CAMERA
     /* FUSION pipe initialize */
@@ -317,6 +327,44 @@ status_t ExynosCameraFrameFactoryPreview::postcreate(void)
                 m_pipes[PIPE_JPEG]->getPipeName(), PIPE_JPEG);
     }
 
+#ifdef SAMSUNG_TN_FEATURE
+    /* ISP Suspend/Resume
+       For improving the camera entrance time,
+       The TWZ environment information must be delivered to F/W
+    */
+    int cameraType = IS_COLD_BOOT;
+    if (m_parameters->getSamsungCamera() && m_cameraId == CAMERA_ID_BACK)
+        cameraType = IS_WARM_BOOT;
+
+    ALOGD("INFO(%s):getDualMode(%d), getQuickShot(%d)",
+        __FUNCTION__,
+        m_parameters->getDualMode(),
+        m_parameters->getQuickShot());
+
+    if (m_parameters->getDualMode() == false
+#ifdef SAMSUNG_QUICKSHOT
+        && m_parameters->getQuickShot() == 0
+#endif
+#ifdef USE_LIVE_BROADCAST
+        && m_parameters->getPLBMode() == false
+#endif
+    ) {
+        ret = m_pipes[PIPE_3AA]->setControl(V4L2_CID_IS_CAMERA_TYPE, cameraType);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):PIPE_%d V4L2_CID_IS_CAMERA_TYPE fail, ret(%d)", __FUNCTION__, __LINE__, PIPE_3AA, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+    } else {
+        ret = m_pipes[INDEX(PIPE_3AA)]->setControl(V4L2_CID_IS_CAMERA_TYPE, IS_COLD_BOOT);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):PIPE_%d V4L2_CID_IS_CAMERA_TYPE fail, ret(%d)", __FUNCTION__, __LINE__, PIPE_3AA, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+    }
+#endif
+
     /* EOS */
     ret = m_pipes[PIPE_3AA]->setControl(V4L2_CID_IS_END_OF_STREAM, 1);
     if (ret != NO_ERROR) {
@@ -334,9 +382,286 @@ status_t ExynosCameraFrameFactoryPreview::fastenAeStable(int32_t numFrames, Exyn
 {
     CLOGI("INFO(%s[%d]): Start", __FUNCTION__, __LINE__);
 
+    status_t ret = NO_ERROR;
+    status_t totalRet = NO_ERROR;
+
+    ExynosCameraFrame *newFrame = NULL;
+    ExynosCameraFrameEntity *newEntity = NULL;
+    ExynosCameraList<ExynosCameraFrame *> instantQ;
+
+    int hwSensorW = 0, hwSensorH = 0;
+    int bcropX = 0, bcropY = 0, bcropW = 0, bcropH = 0;
+    int hwPreviewW = 0, hwPreviewH = 0;
+    uint32_t minFrameRate, maxFrameRate, sensorFrameRate = 0;
+    struct v4l2_streamparm streamParam;
+
+    if (numFrames == 0) {
+        CLOGW("WRN(%s[%d]):umFrames is %d, we skip fastenAeStable", __FUNCTION__, __LINE__, numFrames);
+        return NO_ERROR;
+    }
+
+    /* 1. Initialize pipes */
+    m_parameters->getFastenAeStableSensorSize(&hwSensorW, &hwSensorH);
+    m_parameters->getFastenAeStableBcropSize(&bcropW, &bcropH);
+    m_parameters->getFastenAeStableBdsSize(&hwPreviewW, &hwPreviewH);
+
+    bcropX = ALIGN_UP(((hwSensorW - bcropW) >> 1), 2);
+    bcropY = ALIGN_UP(((hwSensorH - bcropH) >> 1), 2);
+
+    if (m_parameters->getCameraId() == CAMERA_ID_FRONT) {
+        sensorFrameRate  = FASTEN_AE_FPS_FRONT;
+    } else {
+        sensorFrameRate  = FASTEN_AE_FPS;
+    }
+
+    /* setDeviceInfo does changing path */
+    ret = m_setupConfig(true);
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):m_setupConfig(%d) fail", __FUNCTION__, __LINE__);
+        return ret;
+    }
+
+    ret = m_initFlitePipe(hwSensorW, hwSensorH, sensorFrameRate);
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):m_initFlitePipes() fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+
+    ret = m_initPipesFastenAeStable(numFrames, hwSensorW, hwSensorH);
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):m_initPipesFastenAeStable() fail, ret(%d)",
+            __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+
+    for (int i = 0; i < numFrames; i++) {
+        /* 2. Generate instant frames */
+        newFrame = m_frameMgr->createFrame(m_parameters, i);
+
+        ret = m_initFrameMetadata(newFrame);
+        if (ret != NO_ERROR)
+            CLOGE("(%s[%d]): frame(%d) metadata initialize fail", __FUNCTION__, __LINE__, i);
+
+        newEntity = new ExynosCameraFrameEntity(PIPE_3AA, ENTITY_TYPE_INPUT_ONLY, ENTITY_BUFFER_FIXED);
+        newFrame->addSiblingEntity(NULL, newEntity);
+        newFrame->setNumRequestPipe(1);
+
+        newEntity->setSrcBuf(buffers[i]);
+
+        /* 3. Set metadata for instant on */
+        camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buffers[i].addr[1]);
+
+        if (shot_ext != NULL) {
+            int aeRegionX = (hwSensorW) / 2;
+            int aeRegionY = (hwSensorH) / 2;
+
+            newFrame->getMetaData(shot_ext);
+            m_parameters->duplicateCtrlMetadata((void *)shot_ext);
+            m_activityControl->activityBeforeExecFunc(PIPE_3AA, (void *)&buffers[i]);
+
+            setMetaCtlAeTargetFpsRange(shot_ext, sensorFrameRate, sensorFrameRate);
+            setMetaCtlSensorFrameDuration(shot_ext, (uint64_t)((1000 * 1000 * 1000) / (uint64_t)sensorFrameRate));
+
+            /* set afMode into INFINITY */
+            shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_CANCEL;
+            shot_ext->shot.ctl.aa.vendor_afmode_option &= (0 << AA_AFMODE_OPTION_BIT_MACRO);
+
+            setMetaCtlAeRegion(shot_ext, aeRegionX, aeRegionY, aeRegionX, aeRegionY, 0);
+
+            /* Set 3AS size */
+            enum NODE_TYPE nodeType = getNodeType(PIPE_3AA);
+            int nodeNum = m_deviceInfo[PIPE_3AA].nodeNum[nodeType];
+            if (nodeNum <= 0) {
+                CLOGE("ERR(%s[%d]): invalid nodeNum(%d). so fail", __FUNCTION__, __LINE__, nodeNum);
+                ret = INVALID_OPERATION;
+                goto cleanup;
+            }
+
+            setMetaNodeLeaderVideoID(shot_ext, nodeNum - FIMC_IS_VIDEO_BAS_NUM);
+            setMetaNodeLeaderRequest(shot_ext, false);
+            setMetaNodeLeaderInputSize(shot_ext, bcropX, bcropY, bcropW, bcropH);
+
+            /* Set 3AP size */
+            nodeType = getNodeType(PIPE_3AP);
+            nodeNum = m_deviceInfo[PIPE_3AA].nodeNum[nodeType];
+            if (nodeNum <= 0) {
+                CLOGE("ERR(%s[%d]): invalid nodeNum(%d). so fail", __FUNCTION__, __LINE__, nodeNum);
+                ret = INVALID_OPERATION;
+                goto cleanup;
+            }
+
+            int perframePosition = 0;
+            setMetaNodeCaptureVideoID(shot_ext, perframePosition, nodeNum - FIMC_IS_VIDEO_BAS_NUM);
+            setMetaNodeCaptureRequest(shot_ext, perframePosition, false);
+            setMetaNodeCaptureOutputSize(shot_ext, perframePosition, 0, 0, hwPreviewW, hwPreviewH);
+
+            /* Set ISPC/ISPP size (optional) */
+            if (m_flag3aaIspOTF == true) {
+                /* Case of ISP-MCSC OTF or ISP-TPU-MCSC OTF */
+                if (m_flagIspMcscOTF == true
+                    || (m_flagIspTpuOTF == true && m_flagTpuMcscOTF == true))
+                    nodeType = getNodeType(PIPE_MCSC0);
+                /* Case of ISP-TPU M2M */
+                else if (m_parameters->getTpuEnabledMode() == true && m_flagIspTpuOTF == false)
+                    nodeType = getNodeType(PIPE_ISPP);
+                /* Case of ISP-MCSC M2M */
+                else
+                    nodeType = getNodeType(PIPE_ISPC);
+
+                nodeNum = m_deviceInfo[PIPE_3AA].nodeNum[nodeType];
+                if (nodeNum <= 0) {
+                    CLOGE("ERR(%s[%d]): invalid nodeNum(%d). so fail", __FUNCTION__, __LINE__, nodeNum);
+                    ret = INVALID_OPERATION;
+                    goto cleanup;
+                }
+
+                perframePosition = 1; /* 3AP:0, ISPC/ISPP:1 */
+                setMetaNodeCaptureVideoID(shot_ext, perframePosition, nodeNum - FIMC_IS_VIDEO_BAS_NUM);
+                setMetaNodeCaptureRequest(shot_ext, perframePosition, false);
+                setMetaNodeCaptureOutputSize(shot_ext, perframePosition, 0, 0, hwPreviewW, hwPreviewH);
+            }
+        }
+
+        /* 4. Push instance frames to pipe */
+        ret = pushFrameToPipe(&newFrame, PIPE_3AA);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]): pushFrameToPipeFail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            goto cleanup;
+        }
+        CLOGD("DEBUG(%s[%d]): Instant shot - FD(%d, %d)", __FUNCTION__, __LINE__, buffers[i].fd[0], buffers[i].fd[1]);
+
+        instantQ.pushProcessQ(&newFrame);
+    }
+
+    /* 5. Pipe instant on */
+    ret = m_pipes[PIPE_FLITE]->instantOn(0);
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]): FLITE On fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        goto cleanup;
+    }
+
+    if (m_flagIspMcscOTF == false && m_flagTpuMcscOTF == false) {
+        ret = m_pipes[PIPE_MCSC]->start();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):MCSC start fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            goto cleanup;
+        }
+    }
+
+    if (m_parameters->getTpuEnabledMode() == true && m_flagIspTpuOTF == false) {
+        ret = m_pipes[PIPE_TPU]->start();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):TPU start fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            goto cleanup;
+        }
+    }
+
+    if (m_flag3aaIspOTF == false) {
+        ret = m_pipes[INDEX(PIPE_ISP)]->start();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):ISP start fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            goto cleanup;
+        }
+    }
+
+    ret = m_pipes[PIPE_3AA]->instantOn(numFrames);
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):3AA instantOn fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        goto cleanup;
+    }
+
+    /* 6. SetControl to sensor instant on */
+    ret = m_pipes[PIPE_FLITE]->setControl(V4L2_CID_IS_S_STREAM, (1 | numFrames << SENSOR_INSTANT_SHIFT));
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):instantOn fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        goto cleanup;
+    }
+
+cleanup:
+    totalRet |= ret;
+
+    /* 7. Pipe instant off */
+    ret = m_pipes[PIPE_FLITE]->instantOff();
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]): FLITE Off fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+    }
+
+    ret = m_pipes[PIPE_3AA]->forceDone(V4L2_CID_IS_FORCE_DONE, 0x1000);
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):3AA force done fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+    }
+
+    ret = m_pipes[PIPE_3AA]->instantOff();
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):3AA instantOff fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+    }
+
+    if (m_flag3aaIspOTF == false) {
+        ret = m_pipes[INDEX(PIPE_ISP)]->stop();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):ISP stop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        }
+    }
+
+    if (m_parameters->getTpuEnabledMode() == true && m_flagIspTpuOTF == false) {
+        ret = m_pipes[PIPE_TPU]->stop();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):TPU stop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        }
+    }
+
+    if (m_flagIspMcscOTF == false && m_flagTpuMcscOTF == false) {
+        ret = m_pipes[PIPE_MCSC]->stop();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):MCSC stop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        }
+    }
+
+    /* 8. Rollback framerate after fastenfeenable done */
+    /* setParam for Frame rate : must after setInput on Flite */
+    memset(&streamParam, 0x0, sizeof(v4l2_streamparm));
+
+    m_parameters->getPreviewFpsRange(&minFrameRate, &maxFrameRate);
+    if (m_parameters->getScalableSensorMode() == true)
+        sensorFrameRate = 24;
+    else
+        sensorFrameRate = maxFrameRate;
+
+    streamParam.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    streamParam.parm.capture.timeperframe.numerator   = 1;
+    streamParam.parm.capture.timeperframe.denominator = sensorFrameRate;
+    CLOGI("INFO(%s[%d]:set framerate (denominator=%d)", __FUNCTION__, __LINE__, sensorFrameRate);
+    ret = setParam(&streamParam, PIPE_FLITE);
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):FLITE setParam fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return INVALID_OPERATION;
+    }
+
+    /* 9. Clean up all frames */
+    for (int i = 0; i < numFrames; i++) {
+        newFrame = NULL;
+        if (instantQ.getSizeOfProcessQ() == 0)
+            break;
+
+        ret = instantQ.popProcessQ(&newFrame);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]): pop instantQ fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            continue;
+        }
+
+        if (newFrame == NULL) {
+            CLOGE("ERR(%s[%d]): newFrame is NULL,", __FUNCTION__, __LINE__);
+            continue;
+        }
+
+        newFrame->decRef();
+        m_frameMgr->deleteFrame(newFrame);
+    }
+
     CLOGI("INFO(%s[%d]):Done", __FUNCTION__, __LINE__);
 
-    return NO_ERROR;
+    ret |= totalRet;
+    return ret;
 }
 
 status_t ExynosCameraFrameFactoryPreview::initPipes(void)
@@ -567,6 +892,7 @@ status_t ExynosCameraFrameFactoryPreview::stopPipes(void)
         }
     }
 
+#ifdef USE_GSC_FOR_PREVIEW
     if (m_pipes[PIPE_GSC]->isThreadRunning() == true) {
         ret = m_pipes[PIPE_GSC]->stopThread();
         if (ret != NO_ERROR) {
@@ -575,6 +901,7 @@ status_t ExynosCameraFrameFactoryPreview::stopPipes(void)
             return INVALID_OPERATION;
         }
     }
+#endif
 
 #ifdef BOARD_CAMERA_USES_DUAL_CAMERA
     if (m_pipes[INDEX(PIPE_FUSION)] != NULL &&
@@ -670,10 +997,12 @@ status_t ExynosCameraFrameFactoryPreview::stopPipes(void)
         }
     }
 
+#ifdef USE_GSC_FOR_PREVIEW
     ret = stopThreadAndWait(PIPE_GSC);
     if (ret != NO_ERROR) {
         CLOGE("ERR(%s[%d]):PIPE_GSC stopThreadAndWait fail, ret(%d)", __FUNCTION__, __LINE__, ret);
     }
+#endif
 
 #ifdef BOARD_CAMERA_USES_DUAL_CAMERA
     if (m_pipes[INDEX(PIPE_FUSION)] != NULL) {
@@ -815,15 +1144,6 @@ ExynosCameraFrame *ExynosCameraFrameFactoryPreview::createNewFrame(void)
         requestEntityCount++;
     }
 
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    if (m_parameters->getVendorMode(SFLIBRARY_MGR::FLAWLESS)) {
-        pipeId = PIPE_VENDOR_3PARTY_LIB;
-        newEntity[pipeId] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
-        frame->addSiblingEntity(NULL, newEntity[pipeId]);
-        requestEntityCount++;
-    }
-#endif
-
     /* set GSC pipe to linkageList */
     pipeId = PIPE_GSC;
     newEntity[pipeId] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
@@ -899,6 +1219,12 @@ status_t ExynosCameraFrameFactoryPreview::m_setupConfig(bool isFastAE)
     pipeId = PIPE_FLITE;
     m_nodeNums[pipeId][CAPTURE_NODE_1] = m_getFliteNodenum();
     m_sensorIds[pipeId][CAPTURE_NODE_1] = m_getSensorId(m_nodeNums[pipeId][CAPTURE_NODE_1], m_flagReprocessing);
+#ifdef SUPPORT_DEPTH_MAP
+    if (m_parameters->getUseDepthMap()) {
+        m_nodeNums[pipeId][CAPTURE_NODE_2] = m_getDepthVcNodeNum();
+        m_sensorIds[pipeId][CAPTURE_NODE_2] = m_getSensorId(m_nodeNums[pipeId][CAPTURE_NODE_2], m_flagReprocessing);
+    }
+#endif
 
     /* 3AA ~ MCSC */
     ret = m_setDeviceInfo(isFastAE);
@@ -1052,10 +1378,10 @@ status_t ExynosCameraFrameFactoryPreview::m_setDeviceInfo(bool isFastAE)
         nodeMcsc = FIMC_IS_VIDEO_M0S_NUM;
         nodeMcscp0 = FIMC_IS_VIDEO_M0P_NUM;
         nodeMcscp1 = FIMC_IS_VIDEO_M1P_NUM;
+        nodeMcscp2 = FIMC_IS_VIDEO_M2P_NUM;
     }
 
     nodeTpu = FIMC_IS_VIDEO_TPU_NUM;
-    nodeMcscp2 = FIMC_IS_VIDEO_M2P_NUM;
 
     if (m_cameraId == CAMERA_ID_BACK || m_parameters->getDualMode() == false) {
 #ifdef USE_FLITE_3AA_BUFFER_HIDING_MODE
@@ -1199,6 +1525,7 @@ status_t ExynosCameraFrameFactoryPreview::m_setDeviceInfo(bool isFastAE)
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_PREVIEW", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC)], true, flagStreamLeader, m_flagReprocessing);
 
+#ifdef USE_MCSC1_FOR_PREVIEWCALLBACK
     /* MCSC1 */
     nodeType = getNodeType(PIPE_MCSC1);
     m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC1;
@@ -1206,6 +1533,7 @@ status_t ExynosCameraFrameFactoryPreview::m_setDeviceInfo(bool isFastAE)
     m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_PREVIEW_CALLBACK", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC)], true, flagStreamLeader, m_flagReprocessing);
+#endif
 
     if (m_cameraId == CAMERA_ID_BACK || m_parameters->getDualMode() == false) {
         /* MCSC2 */
@@ -1237,6 +1565,7 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipes(void)
     int maxPreviewW = 0, maxPreviewH = 0, hwPreviewW = 0, hwPreviewH = 0;
     int maxPictureW = 0, maxPictureH = 0, hwPictureW = 0, hwPictureH = 0;
     int videoH = 0, videoW = 0;
+    int previewW = 0, previewH = 0;
     int bayerFormat = m_parameters->getBayerFormat(PIPE_3AA);
     int hwPreviewFormat = m_parameters->getHwPreviewFormat();
     int previewFormat = m_parameters->getPreviewFormat();
@@ -1269,6 +1598,7 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipes(void)
     m_parameters->getPreviewBdsSize(&bdsSize, false);
 
     m_parameters->getHwVideoSize(&videoW, &videoH);
+    m_parameters->getPreviewSize(&previewW, &previewH);
     /* When high speed recording mode, hw sensor size is fixed.
      * So, maxPreview size cannot exceed hw sensor size
      */
@@ -1277,9 +1607,14 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipes(void)
         maxPreviewH = hwSensorH;
     }
 
-    CLOGI("INFO(%s[%d]): MaxSensorSize(%dx%d), HWSensorSize(%dx%d)", __FUNCTION__, __LINE__, maxSensorW, maxSensorH, hwSensorW, hwSensorH);
-    CLOGI("INFO(%s[%d]): MaxPreviewSize(%dx%d), HwPreviewSize(%dx%d)", __FUNCTION__, __LINE__, maxPreviewW, maxPreviewH, hwPreviewW, hwPreviewH);
+    CLOGI("INFO(%s[%d]): MaxSensorSize(%dx%d), HWSensorSize(%dx%d)",
+        __FUNCTION__, __LINE__, maxSensorW, maxSensorH, hwSensorW, hwSensorH);
+    CLOGI("INFO(%s[%d]): MaxPreviewSize(%dx%d), HwPreviewSize(%dx%d)",
+        __FUNCTION__, __LINE__, maxPreviewW, maxPreviewH, hwPreviewW, hwPreviewH);
     CLOGI("INFO(%s[%d]): HWPictureSize(%dx%d)", __FUNCTION__, __LINE__, hwPictureW, hwPictureH);
+    CLOGI("INFO(%s[%d]): PreviewSize(%dx%d)", __FUNCTION__, __LINE__, previewW, previewH);
+    CLOGI("INFO(%s[%d]): PreviewFormat(%d), HwPreviewFormat(%d), VideoFormat(%d)",
+        __FUNCTION__, __LINE__, previewFormat, hwPreviewFormat, videoFormat);
 
 
     /*
@@ -1606,14 +1941,23 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipes(void)
     /* set v4l2 buffer size */
     stride = m_parameters->getHwPreviewStride();
     CLOGV("INFO(%s[%d]):stride=%d", __FUNCTION__, __LINE__, stride);
-    tempRect.fullW = stride;
-    tempRect.fullH = hwPreviewH;
+    if (m_parameters->getHighResolutionCallbackMode() == true) {
+        tempRect.fullW = stride;
+        tempRect.fullH = hwPreviewH;
+    } else {
+        tempRect.fullW = previewW;
+        tempRect.fullH = previewH;
+    }
     tempRect.colorFormat = previewFormat;
 
     /* set v4l2 video node bytes per plane */
 #ifdef USE_BUFFER_WITH_STRIDE
     /* to use stride for preview buffer, set the bytesPerPlane */
-    pipeInfo[nodeType].bytesPerPlane[0] = hwPreviewW;
+    if (m_parameters->getHighResolutionCallbackMode() == true) {
+        pipeInfo[nodeType].bytesPerPlane[0] = hwPreviewW;
+    } else {
+        pipeInfo[nodeType].bytesPerPlane[0] = previewW;
+    }
 #endif
 
     /* set v4l2 video node buffer count */
@@ -1849,6 +2193,7 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipesFastenAeStable(int32_t numF
 
 status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrame *frame)
 {
+    size_control_info_t sizeControlInfo;
     camera2_node_group node_group_info_3aa;
     camera2_node_group node_group_info_isp;
     camera2_node_group node_group_info_tpu;
@@ -1915,18 +2260,32 @@ status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrame 
     node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC0)] - FIMC_IS_VIDEO_BAS_NUM;
     perframePosition++;
 
+#ifdef USE_MCSC1_FOR_PREVIEWCALLBACK
     node_group_info_temp->capture[perframePosition].request = m_requestMCSC1;
     node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC1)] - FIMC_IS_VIDEO_BAS_NUM;
     perframePosition++;
+#endif
 
     if (m_cameraId == CAMERA_ID_BACK || m_parameters->getDualMode() == false) {
         node_group_info_temp->capture[perframePosition].request = m_requestMCSC2;
         node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC2)] - FIMC_IS_VIDEO_BAS_NUM;
     }
 
+    m_parameters->getPreviewBayerCropSize(&sizeControlInfo.bnsSize,
+                                          &sizeControlInfo.bayerCropSize);
+    m_parameters->getPreviewBdsSize(&sizeControlInfo.bdsSize);
+    m_parameters->getPreviewYuvCropSize(&sizeControlInfo.yuvCropSize);
+    m_parameters->getHwPreviewSize(&sizeControlInfo.hwPreviewSize.w,
+                                   &sizeControlInfo.hwPreviewSize.h);
+    m_parameters->getPreviewSize(&sizeControlInfo.previewSize.w,
+                                 &sizeControlInfo.previewSize.h);
+    m_parameters->getHwVideoSize(&sizeControlInfo.hwVideoSize.w,
+                                 &sizeControlInfo.hwVideoSize.h);
+
     updateNodeGroupInfo(
             PIPE_3AA,
             m_parameters,
+            sizeControlInfo,
             &node_group_info_3aa);
     frame->storeNodeGroupInfo(&node_group_info_3aa, PERFRAME_INFO_3AA, zoom);
 
@@ -1934,6 +2293,7 @@ status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrame 
         updateNodeGroupInfo(
                 PIPE_ISP,
                 m_parameters,
+                sizeControlInfo,
                 &node_group_info_isp);
         frame->storeNodeGroupInfo(&node_group_info_isp, PERFRAME_INFO_ISP, zoom);
     }
@@ -1942,6 +2302,7 @@ status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrame 
         updateNodeGroupInfo(
                 PIPE_TPU,
                 m_parameters,
+                sizeControlInfo,
                 &node_group_info_tpu);
         frame->storeNodeGroupInfo(&node_group_info_tpu, PERFRAME_INFO_TPU, zoom);
     }
@@ -1950,6 +2311,7 @@ status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrame 
         updateNodeGroupInfo(
                 PIPE_MCSC,
                 m_parameters,
+                sizeControlInfo,
                 &node_group_info_mcsc);
         frame->storeNodeGroupInfo(&node_group_info_mcsc, PERFRAME_INFO_MCSC, zoom);
     }

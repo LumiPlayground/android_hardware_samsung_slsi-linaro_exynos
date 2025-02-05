@@ -1,20 +1,5 @@
 /*
- * Video for Linux Two header file for samsung
- *
- * Copyright 2017, Samsung Electronics Co. LTD
- *
- * This header file contains several v4l2 APIs to be proposed to v4l2
- * community and until bein accepted, will be used restrictly in Samsung's
- * camera interface driver FIMC.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- */
-
-/*
- * Copyright 2017, Samsung Electronics Co. LTD
+ * Copyright (C) 2020 Samsung Electronics Co. Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +8,7 @@
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed toggle an "AS IS" BASIS,
+ * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
@@ -220,6 +205,10 @@ enum scenario_mode {
 #define V4L2_CID_IS_S_SENSOR_SIZE        (V4L2_CID_FIMC_IS_BASE + 69)
 #define V4L2_CID_IS_FDAE                 (V4L2_CID_FIMC_IS_BASE + 73)
 #define V4L2_CID_IS_FACTORY_APERTURE_CONTROL		(V4L2_CID_FIMC_IS_BASE + 74)
+#define V4L2_CID_IS_S_TUNING_CONFIG      (V4L2_CID_FIMC_IS_BASE + 75)
+
+#define V4L2_CID_SENSOR_GET_ANALOG_GAIN  (V4L2_CID_SENSOR_BASE + 108)
+#define V4L2_CID_SENSOR_GET_DIGITAL_GAIN (V4L2_CID_SENSOR_BASE + 109)
 
 /* for FRS */
 #define V4L2_CID_SENSOR_SET_FRS_CONTROL  (V4L2_CID_SENSOR_BASE + 120)
@@ -229,11 +218,15 @@ enum v4l2_cis_frs_command {
     FRS_SSM_STOP,
     FRS_SSM_MODE_AUTO_MANUAL_CUE,
     FRS_SSM_MODE_ONLY_MANUAL_CUE,
+    FRS_SSM_MODE_FACTORY_TEST,
     FRS_AEB_FACTORY_STAGE2,
     FRS_CMD_MAX,
 };
 #define V4L2_CID_SENSOR_SET_SSM_ROI      (V4L2_CID_SENSOR_BASE + 121)
 #define V4L2_CID_IS_GET_DUAL_CAL        (V4L2_CID_SENSOR_BASE + 122)
+
+#define V4L2_CID_SENSOR_SET_SSM_THRESHOLD      (V4L2_CID_SENSOR_BASE + 123)
+#define V4L2_CID_SENSOR_GET_SSM_THRESHOLD      (V4L2_CID_SENSOR_BASE + 124)
 
 enum is_fw_boot_mode {
     IS_COLD_BOOT = 0,  /* FrontCamera, 3rd-Party Camera */

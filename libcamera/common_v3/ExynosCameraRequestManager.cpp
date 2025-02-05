@@ -1649,7 +1649,7 @@ status_t ExynosCamera3Request::m_popResultsByType(EXYNOS_REQUEST_RESULT::TYPE re
 
 ExynosCameraRequestManager::ExynosCameraRequestManager(int cameraId, ExynosCameraParameters *param)
 {
-    CLOGD("DEBUG(%s[%d])Create-ID(%d)", __FUNCTION__, __LINE__, cameraId);
+    CLOGD("reate-ID(%d)", cameraId);
 
     m_cameraId = cameraId;
     m_parameters = param;
@@ -1677,7 +1677,7 @@ ExynosCameraRequestManager::ExynosCameraRequestManager(int cameraId, ExynosCamer
 
 ExynosCameraRequestManager::~ExynosCameraRequestManager()
 {
-    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+    CLOGD("");
 
     memset(&m_dummyShot, 0x00, sizeof(struct camera2_shot_ext));
     memset(&m_currShot, 0x00, sizeof(struct camera2_shot_ext));
@@ -2196,7 +2196,7 @@ ExynosCameraRequestSP_sprt_t ExynosCameraRequestManager::registerServiceRequest(
             break;
         }
 
-        if (m_parameters->isReprocessingCapture() == false) {
+        if (m_parameters->isReprocessing() == false) {
             needDummyStream = false;
         }
 
@@ -2363,8 +2363,8 @@ status_t ExynosCameraRequestManager::flush()
         count++;
         if (m_serviceRequests[0].size() == 0 && m_runningRequests[0].size() == 0)
             break;
-        ALOGD("DEBUG(%s[%d]):m_serviceRequest size(%d) m_runningRequest size(%d) count(%d)",
-                __FUNCTION__, __LINE__, m_serviceRequests[0].size(), m_runningRequests[0].size(), count);
+
+        ALOGV("DEBUG(%s[%d]):m_serviceRequest size(%d) m_runningRequest size(%d)", __FUNCTION__, __LINE__, m_serviceRequests[0].size(), m_runningRequests[0].size());
 
         usleep(50000);
 
@@ -3111,7 +3111,8 @@ bool ExynosCameraRequestManager::m_rawCallbackThreadFunc0(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3131,7 +3132,8 @@ bool ExynosCameraRequestManager::m_rawCallbackThreadFunc1(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3151,7 +3153,8 @@ bool ExynosCameraRequestManager::m_rawCallbackThreadFunc2(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3171,7 +3174,8 @@ bool ExynosCameraRequestManager::m_rawCallbackThreadFunc3(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3191,7 +3195,8 @@ bool ExynosCameraRequestManager::m_rawCallbackThreadFunc4(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3211,7 +3216,8 @@ bool ExynosCameraRequestManager::m_zslOutputCallbackThreadFunc0(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3231,7 +3237,8 @@ bool ExynosCameraRequestManager::m_zslOutputCallbackThreadFunc1(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3251,7 +3258,8 @@ bool ExynosCameraRequestManager::m_zslOutputCallbackThreadFunc2(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3271,7 +3279,8 @@ bool ExynosCameraRequestManager::m_zslOutputCallbackThreadFunc3(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3291,7 +3300,8 @@ bool ExynosCameraRequestManager::m_zslOutputCallbackThreadFunc4(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3311,7 +3321,8 @@ bool ExynosCameraRequestManager::m_zslInputCallbackThreadFunc0(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3331,7 +3342,8 @@ bool ExynosCameraRequestManager::m_zslInputCallbackThreadFunc1(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3351,7 +3363,8 @@ bool ExynosCameraRequestManager::m_zslInputCallbackThreadFunc2(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3371,7 +3384,8 @@ bool ExynosCameraRequestManager::m_zslInputCallbackThreadFunc3(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3391,7 +3405,8 @@ bool ExynosCameraRequestManager::m_zslInputCallbackThreadFunc4(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3411,7 +3426,8 @@ bool ExynosCameraRequestManager::m_previewCallbackThreadFunc0(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3431,7 +3447,8 @@ bool ExynosCameraRequestManager::m_previewCallbackThreadFunc1(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3451,7 +3468,8 @@ bool ExynosCameraRequestManager::m_previewCallbackThreadFunc2(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3471,7 +3489,8 @@ bool ExynosCameraRequestManager::m_previewCallbackThreadFunc3(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3491,7 +3510,8 @@ bool ExynosCameraRequestManager::m_previewCallbackThreadFunc4(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3511,7 +3531,8 @@ bool ExynosCameraRequestManager::m_jpegCallbackThreadFunc0(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3531,7 +3552,8 @@ bool ExynosCameraRequestManager::m_jpegCallbackThreadFunc1(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3551,7 +3573,8 @@ bool ExynosCameraRequestManager::m_jpegCallbackThreadFunc2(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3571,7 +3594,8 @@ bool ExynosCameraRequestManager::m_jpegCallbackThreadFunc3(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3591,7 +3615,8 @@ bool ExynosCameraRequestManager::m_jpegCallbackThreadFunc4(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3611,7 +3636,8 @@ bool ExynosCameraRequestManager::m_videoCallbackThreadFunc0(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3631,7 +3657,8 @@ bool ExynosCameraRequestManager::m_videoCallbackThreadFunc1(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3651,7 +3678,8 @@ bool ExynosCameraRequestManager::m_videoCallbackThreadFunc2(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3671,7 +3699,8 @@ bool ExynosCameraRequestManager::m_videoCallbackThreadFunc3(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3691,7 +3720,8 @@ bool ExynosCameraRequestManager::m_videoCallbackThreadFunc4(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3711,7 +3741,8 @@ bool ExynosCameraRequestManager::m_yuvCallbackThreadFunc0(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3731,7 +3762,8 @@ bool ExynosCameraRequestManager::m_yuvCallbackThreadFunc1(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3751,7 +3783,8 @@ bool ExynosCameraRequestManager::m_yuvCallbackThreadFunc2(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3771,7 +3804,8 @@ bool ExynosCameraRequestManager::m_yuvCallbackThreadFunc3(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -3791,7 +3825,8 @@ bool ExynosCameraRequestManager::m_yuvCallbackThreadFunc4(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
-            CLOGV("WARN(%s):wait timeout", __FUNCTION__);
+            /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -4193,7 +4228,7 @@ bool ExynosCameraRequestManager::m_partial3AACallbackThreadFunc(void)
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
             /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
-            CLOGV("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -4291,7 +4326,7 @@ bool ExynosCameraRequestManager::m_requestDeleteThreadFunc(void)
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
             /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
-            CLOGV("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -4360,7 +4395,7 @@ bool ExynosCameraRequestManager::m_metaCallbackThreadFunc(void)
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
             /* CLOGW("WARN(%s):wait timeout", __FUNCTION__); */
-            CLOGV("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
+            CLOGE("ERR(%s):fail, ret(%d)", __FUNCTION__, ret);
         } else {
             CLOGE("ERR(%s):wait and pop fail, ret(%d)", __FUNCTION__, ret);
             /* TODO: doing exception handling */
@@ -4456,8 +4491,7 @@ status_t ExynosCameraRequestManager::waitforRequestflush()
         if (m_serviceRequests[0].size() == 0 && m_runningRequests[0].size() == 0)
             break;
 
-        ALOGV("DEBUG(%s[%d]):m_serviceRequest size(%d) m_runningRequest size(%d) count(%d)",
-                __FUNCTION__, __LINE__, m_serviceRequests[0].size(), m_runningRequests[0].size(), count);
+        ALOGV("DEBUG(%s[%d]):m_serviceRequest size(%d) m_runningRequest size(%d)", __FUNCTION__, __LINE__, m_serviceRequests[0].size(), m_runningRequests[0].size());
 
         usleep(50000);
 

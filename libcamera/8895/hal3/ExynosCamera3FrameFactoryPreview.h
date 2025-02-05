@@ -15,8 +15,8 @@
 ** limitations under the License.
 */
 
-#ifndef EXYNOS_CAMERA_3_FRAME_FACTORY_PREVIEW_H
-#define EXYNOS_CAMERA_3_FRAME_FACTORY_PREVIEW_H
+#ifndef EXYNOS_CAMERA_FRAME_FACTORY_PREVIEW_H
+#define EXYNOS_CAMERA_FRAME_FACTORY_PREVIEW_H
 
 #include "ExynosCamera3FrameFactory.h"
 

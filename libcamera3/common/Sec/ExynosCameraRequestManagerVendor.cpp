@@ -149,7 +149,7 @@ ExynosCameraRequestSP_sprt_t ExynosCameraRequestManager::registerToServiceList(c
         } else if (yuvPortId >= 0) {
             request->setDsInputPortId(yuvPortId);
         } else if (jpegPortId >= 0) {
-            request->setDsInputPortId(previewPortId);
+            request->setDsInputPortId(jpegPortId);
         } else {
             request->setDsInputPortId(yuvStallPortId);
         }
@@ -166,7 +166,7 @@ ExynosCameraRequestSP_sprt_t ExynosCameraRequestManager::registerToServiceList(c
         CLOGD("restartStream flag checked, request[R%d]", request->getKey());
     }
 
-    if (m_resultCallbackThread->isRunning() == false) {
+    if (m_getFlushFlag() == false && m_resultCallbackThread->isRunning() == false) {
         m_resultCallbackThread->run();
     }
 
@@ -182,7 +182,7 @@ void ExynosCameraRequest::m_updateMetaDataU8(uint32_t tag, CameraMetadata &resul
         resultMeta.update(tag, entry.data.u8, entry.count);
 
         for (size_t i = 0; i < entry.count; i++) {
-            CLOGV2("%s[%d/%d] is (%d)", get_camera_metadata_tag_name(tag), i, entry.count, entry.data.u8[i]);
+            CLOGV2("%s[%zu/%zu] is (%d)", get_camera_metadata_tag_name(tag), i, entry.count, entry.data.u8[i]);
         }
     }
 }
@@ -196,7 +196,7 @@ void ExynosCameraRequest::m_updateMetaDataI32(uint32_t tag, CameraMetadata &resu
         resultMeta.update(tag, entry.data.i32, entry.count);
 
         for (size_t i = 0; i < entry.count; i++) {
-            CLOGV2("%s[%d/%d] is (%d)", get_camera_metadata_tag_name(tag), i, entry.count, entry.data.i32[i]);
+            CLOGV2("%s[%zu/%zu] is (%d)", get_camera_metadata_tag_name(tag), i, entry.count, entry.data.i32[i]);
         }
     }
 }
@@ -209,6 +209,20 @@ void ExynosCameraRequest::get3AAResultMetaVendor(CameraMetadata &minimal_resultM
     m_updateMetaDataI32(ANDROID_CONTROL_AF_REGIONS, minimal_resultMeta);
     m_updateMetaDataI32(ANDROID_CONTROL_AE_REGIONS, minimal_resultMeta);
     m_updateMetaDataI32(ANDROID_CONTROL_AWB_REGIONS, minimal_resultMeta);
+#ifdef SAMSUNG_CONTROL_METERING
+    m_updateMetaDataI32(SAMSUNG_ANDROID_CONTROL_TOUCH_AE_STATE, minimal_resultMeta);
+#endif
+#ifdef SAMSUNG_TN_FEATURE
+    m_updateMetaDataI32(SAMSUNG_ANDROID_LENS_INFO_CURRENTINFO, minimal_resultMeta);
+    m_updateMetaDataI32(SAMSUNG_ANDROID_CONTROL_DOF_SINGLE_DATA, minimal_resultMeta);
+    m_updateMetaDataI32(SAMSUNG_ANDROID_CONTROL_DOF_MULTI_INFO, minimal_resultMeta);
+    m_updateMetaDataI32(SAMSUNG_ANDROID_CONTROL_DOF_MULTI_DATA, minimal_resultMeta);
+#endif
+
+#ifdef SAMSUNG_OT
+     m_updateMetaDataI32(SAMSUNG_ANDROID_CONTROL_OBJECT_TRACKING_STATE, minimal_resultMeta);
+#endif
+
     return;
 }
 }; /* namespace android */

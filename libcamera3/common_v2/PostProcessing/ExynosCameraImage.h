@@ -42,27 +42,35 @@ struct ExynosCameraImage {
 
     int                 multiShotCount;
     uint64_t            streamTimeStamp;
+    int                 bufferDondeIndex;
 
     int                 rotation; // 0, 90, 180, 270
     bool                flipH;
     bool                flipV;
+    uint32_t            bvOffset;
+
 
     ExynosCameraImage() {
-        multiShotCount  = 0;
-        streamTimeStamp = 0;
-        rotation        = 0;
-        flipH           = false;
-        flipV           = false;
+        multiShotCount   = 0;
+        streamTimeStamp  = 0;
+        bufferDondeIndex = -1;
+        rotation         = 0;
+        flipH            = false;
+        flipV            = false;
+        bvOffset         = 0;
     }
 
     ExynosCameraImage& operator =(const ExynosCameraImage &other) {
-        rect            = other.rect;
-        buf             = other.buf;
-
-        multiShotCount  = other.multiShotCount;
-        rotation        = other.rotation;
-        flipH           = other.flipH;
-        flipV           = other.flipV;
+        rect             = other.rect;
+        buf              = other.buf;
+        
+        multiShotCount   = other.multiShotCount;
+        streamTimeStamp  = other.streamTimeStamp;
+        bufferDondeIndex = other.bufferDondeIndex;
+        rotation         = other.rotation;
+        flipH            = other.flipH;
+        flipV            = other.flipV;
+        bvOffset         = other.bvOffset;
 
         return *this;
     }
@@ -70,14 +78,16 @@ struct ExynosCameraImage {
     bool operator ==(const ExynosCameraImage &other) const {
         bool ret = true;
 
-        if (rect            != other.rect ||
-            buf             != other.buf ||
-
-            multiShotCount  != other.multiShotCount ||
-            streamTimeStamp != other.streamTimeStamp ||
-            rotation        != other.rotation ||
-            flipH           != other.flipH ||
-            flipV           != other.flipV) {
+        if (rect             != other.rect ||
+            buf              != other.buf ||
+        
+            multiShotCount   != other.multiShotCount ||
+            streamTimeStamp  != other.streamTimeStamp ||
+            bufferDondeIndex != other.bufferDondeIndex ||
+            rotation         != other.rotation ||
+            bvOffset         != other.bvOffset ||
+            flipH            != other.flipH ||
+            flipV            != other.flipV) {
             ret = false;
         }
 

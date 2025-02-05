@@ -33,22 +33,17 @@ namespace android {
 
 using namespace std;
 
-typedef list<buffer_manager_tag_t> buffer_manager_tag_list_t;
-typedef buffer_manager_tag_list_t::iterator buffer_manager_tag_list_iter_t;
-
 class ExynosCameraBufferSupplier : public ExynosCameraObject {
 public:
     ExynosCameraBufferSupplier(int cameraId);
     virtual ~ExynosCameraBufferSupplier();
 
     status_t createBufferManager(const char *name, void *allocator,
-                                 const buffer_manager_tag_t tag, void *stream = NULL);
-    status_t getBufferTags(const buffer_manager_type_t bufferType, buffer_manager_tag_list_t *tagList);
+                                 const buffer_manager_tag_t tag, void *stream = NULL, int actualFormat = -1);
     status_t resetBuffers(void);
     status_t resetBuffers(const buffer_manager_tag_t tag);
     void deinit(void);
     void deinit(const buffer_manager_tag_t tag);
-    void deinit(buffer_manager_tag_list_t *tagList);
 
     status_t setInfo(const buffer_manager_tag_t tag, const buffer_manager_configuration_t info);
     status_t alloc(const buffer_manager_tag_t tag);
@@ -63,8 +58,6 @@ private:
 
     void m_deinit(void);
     ExynosCameraBufferManager* m_getBufferManager(const buffer_manager_tag_t tag);
-    ExynosCameraBufferManager* m_eraseBufferList(const buffer_manager_tag_t tag);
-    status_t m_getBufferTags(const buffer_manager_type_t tag, buffer_manager_tag_list_t *tagList);
 
 private:
     typedef pair<buffer_manager_tag_t, ExynosCameraBufferManager *> buffer_manager_map_item_t;

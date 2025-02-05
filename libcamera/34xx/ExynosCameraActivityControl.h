@@ -86,6 +86,9 @@ public:
     void            cancelFlash(void);
     /* Sets HDR mode */
     void            setHdrMode(bool hdrMode);
+#ifdef OIS_CAPTURE
+    void            setOISCaptureMode(bool oisMode);
+#endif
     int             getHdrFcount(int index);
 
     /* Sets FPS Value */

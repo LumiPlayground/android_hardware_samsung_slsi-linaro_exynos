@@ -47,6 +47,12 @@ public:
     virtual ~ExynosCameraFrameFactoryPreview();
 
     virtual status_t        create(bool active = true);
+#ifdef SAMSUNG_COMPANION
+    virtual status_t        precreate(void);
+    virtual status_t        postcreate(void);
+#endif
+
+    virtual status_t        fastenAeStable(int32_t numFrames, ExynosCameraBuffer *buffers);
 
     virtual ExynosCameraFrame *createNewFrame(void);
 
@@ -67,6 +73,11 @@ protected:
 
     /* pipe setting */
     virtual status_t        m_initPipes(void) = 0;
+
+    /* pipe setting for fastAE */
+    virtual status_t        m_initPipesFastenAeStable(int32_t numFrames,
+                                                      int hwSensorW, int hwSensorH,
+                                                      int hwPreviewW, int hwPreviewH) = 0;
 
 private:
     void                    m_init(void);

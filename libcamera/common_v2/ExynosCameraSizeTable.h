@@ -121,14 +121,13 @@ enum SIZE_LUT_INDEX {
 #include "ExynosCameraSizeTableIMX260_2L1_WQHD.h"
 #include "ExynosCameraSizeTableIMX219.h"
 
-#include "ExynosCameraSizeTableIMX386.h"
 /*Siliconfile Sensor */
 #include "ExynosCameraSizeTableSR261.h"
+#include "ExynosCameraSizeTableSR259.h"
 #include "ExynosCameraSizeTableSR544.h"
 
 /*OV Sensor */
 #include "ExynosCameraSizeTableOV5670.h"
-#include "ExynosCameraSizeTableOV5695.h"
 
 }; /* namespace android */
 #endif

@@ -31,6 +31,10 @@
 #include "videodev2_exynos_media.h"
 #include "ExynosCameraBuffer.h"
 
+#ifdef SAMSUNG_SENSOR_LISTENER
+#include "sensor_listener_wrapper.h"
+#endif
+
 //#define USE_INTERNAL_ALLOC_DEBUG
 #ifdef USE_INTERNAL_ALLOC_DEBUG
 //#define ALLOC_INFO_DUMP
@@ -149,10 +153,6 @@ void setMetaCtlDisparityMode(struct camera2_shot_ext *shot_ext, enum camera2_dis
 void setMetaCtlWbLevel(struct camera2_shot_ext *shot_ext, int32_t wbLevel);
 void getMetaCtlWbLevel(struct camera2_shot_ext *shot_ext, int32_t *wbLevel);
 
-void setMetaCtlStatsRoi(struct camera2_shot_ext *shot_ext, int32_t x, int32_t y, int32_t w, int32_t h);
-void setMetaCtlMasterCamera(struct camera2_shot_ext *shot_ext, enum aa_cameraMode cameraMode, enum aa_sensorPlace masterCamera);
-void getMetaCtlMasterCamera(struct camera2_shot_ext *shot_ext, enum aa_cameraMode *cameraMode, enum aa_sensorPlace *masterCamera);
-
 #ifdef USE_FW_ZOOMRATIO
 void setMetaCtlZoom(struct camera2_shot_ext *shot_ext, float data);
 void getMetaCtlZoom(struct camera2_shot_ext *shot_ext, float *data);
@@ -266,10 +266,13 @@ status_t readFromFile(char *filename, char *dstBuf, uint32_t size);
 
 /* TODO: This functions need to be commonized */
 status_t getYuvPlaneSize(int format, unsigned int *size,
-                         unsigned int width, unsigned int height);
+                         unsigned int width, unsigned int height,
+                         camera_pixel_size pixelSize = CAMERA_PIXEL_SIZE_8BIT);
 status_t getV4l2FormatInfo(unsigned int v4l2_pixel_format,
-                         unsigned int *bpp, unsigned int *planes);
-int getYuvPlaneCount(unsigned int v4l2_pixel_format);
+                         unsigned int *bpp, unsigned int *planes,
+                         camera_pixel_size pixelSize = CAMERA_PIXEL_SIZE_8BIT);
+int getYuvPlaneCount(unsigned int v4l2_pixel_format,
+                        camera_pixel_size pixelSize = CAMERA_PIXEL_SIZE_8BIT);
 int displayExynosBuffer( ExynosCameraBuffer *buffer);
 
 int checkBit(unsigned int *target, int index);
@@ -307,6 +310,9 @@ int  getDepthVcNodeNum(int cameraId);
 int calibratePosition(int w, int new_w, int pos);
 
 status_t updateYsumBuffer(struct ysum_data *ysumdata, ExynosCameraBuffer *dstBuf);
+#ifdef SAMSUNG_HDR10_RECORDING
+status_t updateHDRBuffer(ExynosCameraBuffer *dstBuf);
+#endif /* SAMSUNG_HDR10_RECORDING */
 void getV4l2Name(char* colorName, size_t length, int colorFormat);
 
 template <typename THREAD, typename THREADQ>
@@ -348,7 +354,9 @@ void stopThreadAndInputQ(THREAD thread, int qCnt, THREADQ inputQ, ...)
 
 void setPreviewProperty(bool on);
 
+#ifdef CAMERA_GED_FEATURE
 bool isFastenAeStableSupported(int cameraId);
+#endif
 
 }; /* namespace android */
 

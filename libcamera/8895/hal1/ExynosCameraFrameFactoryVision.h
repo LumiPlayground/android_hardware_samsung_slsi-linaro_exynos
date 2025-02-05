@@ -60,6 +60,7 @@ protected:
 
 private:
     void                    m_init(void);
+    int                     m_getSensorId(__unused unsigned int nodeNum, bool enableSecure);
 };
 
 }; /* namespace android */

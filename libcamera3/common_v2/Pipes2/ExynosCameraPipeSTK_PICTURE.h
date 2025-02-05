@@ -74,7 +74,7 @@ typedef struct STKDynamicMeta {
     int     out_offset_B;
 } STK_params;
 
-#define STK_LIBRARY_PATH "/system/lib/libstainkiller.so"
+#define STK_LIBRARY_PATH "/vendor/lib/libstainkiller.so"
 
 namespace android {
 

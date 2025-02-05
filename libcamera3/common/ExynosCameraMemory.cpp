@@ -16,6 +16,7 @@
 
 #define LOG_TAG "ExynosCameraMemoryAllocator"
 #include "ExynosCameraMemory.h"
+#include <hardware/exynos/dmabuf_container.h>
 
 namespace android {
 
@@ -29,7 +30,7 @@ ExynosCameraIonAllocator::ExynosCameraIonAllocator()
 
 ExynosCameraIonAllocator::~ExynosCameraIonAllocator()
 {
-    ion_close(m_ionClient);
+    exynos_ion_close(m_ionClient);
 }
 
 status_t ExynosCameraIonAllocator::init(bool isCached)
@@ -37,17 +38,17 @@ status_t ExynosCameraIonAllocator::init(bool isCached)
     status_t ret = NO_ERROR;
 
     if (m_ionClient < 0) {
-        m_ionClient = ion_open();
+        m_ionClient = exynos_ion_open();
 
         if (m_ionClient < 0) {
-            ALOGE("ERR(%s):ion_open(%d) failed", __FUNCTION__, m_ionClient);
+            ALOGE("ERR(%s):exynos_ion_open(%d) failed", __FUNCTION__, m_ionClient);
             ret = BAD_VALUE;
             goto func_exit;
         }
     }
 
     m_ionAlign    = 0;
-    m_ionHeapMask = ION_HEAP_SYSTEM_MASK;
+    m_ionHeapMask = EXYNOS_ION_HEAP_SYSTEM_MASK;
     m_ionFlags    = (isCached == true ?
         (ION_FLAG_CACHED | ION_FLAG_CACHED_NEEDS_SYNC ) : 0);
 
@@ -78,10 +79,9 @@ status_t ExynosCameraIonAllocator::alloc(
         goto func_exit;
     }
 
-    ret = ion_alloc_fd(m_ionClient, size, m_ionAlign, m_ionHeapMask, m_ionFlags, &ionFd);
-
-    if (ret < 0) {
-        ALOGE("ERR(%s):ion_alloc_fd(fd=%d) failed(%s)", __FUNCTION__, ionFd, strerror(errno));
+    ionFd = exynos_ion_alloc(m_ionClient, size, m_ionHeapMask, m_ionFlags);
+    if (ionFd < 0) {
+        ALOGE("ERR(%s):exynos_ion_alloc(fd=%d) failed(%s)", __FUNCTION__, ionFd, strerror(errno));
         ionFd = -1;
         ret = INVALID_OPERATION;
         goto func_exit;
@@ -125,10 +125,9 @@ status_t ExynosCameraIonAllocator::alloc(
         goto func_exit;
     }
 
-    ret  = ion_alloc_fd(m_ionClient, size, m_ionAlign, mask, flags, &ionFd);
-
-    if (ret < 0) {
-        ALOGE("ERR(%s):ion_alloc_fd(fd=%d) failed(%s)", __FUNCTION__, ionFd, strerror(errno));
+    ionFd = exynos_ion_alloc(m_ionClient, size, mask, flags);
+    if (ionFd < 0) {
+        ALOGE("ERR(%s):exynos_ion_alloc(fd=%d) failed(%s)", __FUNCTION__, ionFd, strerror(errno));
         ionFd = -1;
         ret = INVALID_OPERATION;
         goto func_exit;
@@ -180,7 +179,7 @@ status_t ExynosCameraIonAllocator::free(
 
 func_close_exit:
 
-    ion_close(ionFd);
+    exynos_ion_close(ionFd);
 
     ionFd   = -1;
     ionAddr = NULL;
@@ -237,8 +236,13 @@ void ExynosCameraIonAllocator::setIonFlags(int flags)
     m_ionFlags |= flags;
 }
 
-status_t ExynosCameraIonAllocator::createBufferContainer(int *fd, int batchSize, int *containerFd)
+status_t ExynosCameraIonAllocator::createBufferContainer(__unused int *fd, __unused int batchSize, __unused int *containerFd)
 {
+#if 1 /* HACK: caused by the inability to use libion_exynos. */
+    ALOGE("ERR(%s[%d]):do not support bufferContainer.", __FUNCTION__, __LINE__);
+
+    return BAD_VALUE;
+#else
     int bufferContainerFd = -1;
 
     if (fd == NULL || batchSize < 1 || containerFd == NULL) {
@@ -263,11 +267,14 @@ status_t ExynosCameraIonAllocator::createBufferContainer(int *fd, int batchSize,
     *containerFd = bufferContainerFd;
 
     return NO_ERROR;
+#endif
 }
 
-ExynosCameraStreamAllocator::ExynosCameraStreamAllocator()
+ExynosCameraStreamAllocator::ExynosCameraStreamAllocator(int actualFormat)
 {
     m_allocator = NULL;
+    m_actualFormat = actualFormat;
+
     m_grallocMapper = new GrallocWrapper::Mapper();
 }
 
@@ -301,7 +308,6 @@ int ExynosCameraStreamAllocator::lock(
     void  *grallocAddr[3] = {NULL};
     const private_handle_t *priv_handle = NULL;
     int   grallocFd[3] = {0};
-    android_ycbcr ycbcr;
     ExynosCameraDurationTimer   lockbufferTimer;
     GrallocWrapper::Error error = GrallocWrapper::Error::NONE;
     GrallocWrapper::YCbCrLayout ycbcrLayout;
@@ -328,12 +334,21 @@ int ExynosCameraStreamAllocator::lock(
 
     rect.left = 0;
     rect.top = 0;
-    rect.width  = m_allocator->width;
-    rect.height = m_allocator->height;
+    switch (m_actualFormat) {
+    case HAL_PIXEL_FORMAT_BLOB:
+        //GRALLOC Spec:
+        rect.width  = m_allocator->width * m_allocator->height;
+        rect.height = 1;
+        break;
+    default:
+        rect.width  = m_allocator->width;
+        rect.height = m_allocator->height;
+        break;
+    }
     usage  = m_allocator->usage;
     format = m_allocator->format;
 
-    switch (format) {
+    switch (m_actualFormat) {
     case HAL_PIXEL_FORMAT_EXYNOS_ARGB_8888:
     case HAL_PIXEL_FORMAT_RGBA_8888:
     case HAL_PIXEL_FORMAT_RGBX_8888:
@@ -357,12 +372,25 @@ int ExynosCameraStreamAllocator::lock(
         }
     default:
         lockbufferTimer.start();
-        error = m_grallocMapper->lock(
-                **bufHandle,
-                usage,
-                rect,
-                -1, /* acquireFence */
-                &ycbcrLayout);
+        /* HACK: YSUM solution for 64bit usage is not supported */
+#ifdef USE_YSUM_RECORDING
+        if (usage & GRALLOC1_CONSUMER_USAGE_VIDEO_ENCODER) {
+            error = m_grallocMapper->lock(
+                    **bufHandle,
+                    (uint64_t)usage | GRALLOC1_CONSUMER_USAGE_VIDEO_PRIVATE_DATA,
+                    rect,
+                    -1, /* acquireFence */
+                    &ycbcrLayout);
+        } else
+#endif
+        {
+            error = m_grallocMapper->lock(
+                    **bufHandle,
+                    usage,
+                    rect,
+                    -1, /* acquireFence */
+                    &ycbcrLayout);
+        }
         lockbufferTimer.stop();
         break;
     }
@@ -372,8 +400,8 @@ int ExynosCameraStreamAllocator::lock(
             __FUNCTION__, __LINE__, lockbufferTimer.durationUsecs());
 #else
     if (lockbufferTimer.durationMsecs() > GRALLOC_WARNING_DURATION_MSEC)
-        ALOGW("WRN(%s[%d]):grallocHAL->lock() duration(%lld msec)",
-                __FUNCTION__, __LINE__, lockbufferTimer.durationMsecs());
+        ALOGW("WRN(%s[%d]):grallocHAL->lock() duration(%llu msec)",
+                __FUNCTION__, __LINE__, (unsigned long long)lockbufferTimer.durationMsecs());
 #endif
 
     if (error != GrallocWrapper::Error::NONE) {
@@ -384,20 +412,81 @@ int ExynosCameraStreamAllocator::lock(
 
     priv_handle = private_handle_t::dynamicCast(**bufHandle);
 
-    switch (planeCount) {
-    case 3:
+    switch (m_actualFormat) {
+    case HAL_PIXEL_FORMAT_EXYNOS_YV12_M:
+        grallocFd[2] = priv_handle->fd2;
+        grallocAddr[2] = ycbcrLayout.cb;
+        grallocFd[1] = priv_handle->fd1;
+        grallocAddr[1] = ycbcrLayout.cr;
+        grallocFd[0] = priv_handle->fd;
+        grallocAddr[0] = ycbcrLayout.y;
+        break;
+    case HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M_FULL:
+#ifdef USE_YSUM_RECORDING
+        if ( /*(usage & GRALLOC1_CONSUMER_USAGE_VIDEO_PRIVATE_DATA) &&
+              * : YSUM solution for 64bit usage is not supported */
+                (usage & GRALLOC1_CONSUMER_USAGE_VIDEO_ENCODER) &&
+                (m_actualFormat == HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M) &&
+                (planeCount == 3)) {
+            /* Use VideoMeta data */
+            grallocFd[2] = priv_handle->fd2;
+            grallocAddr[2] = ycbcrLayout.cb;
+        }
+#endif
+        grallocFd[1] = priv_handle->fd1;
+        grallocAddr[1] = ycbcrLayout.cr;
+        grallocFd[0] = priv_handle->fd;
+        grallocAddr[0] = ycbcrLayout.y;
+        break;
+    case HAL_PIXEL_FORMAT_YCbCr_420_888:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P_M:
         grallocFd[2] = priv_handle->fd2;
         grallocAddr[2] = ycbcrLayout.cr;
-    case 2:
         grallocFd[1] = priv_handle->fd1;
         grallocAddr[1] = ycbcrLayout.cb;
-    case 1:
+        grallocFd[0] = priv_handle->fd;
+        grallocAddr[0] = ycbcrLayout.y;
+        break;
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M_PRIV:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M_S10B:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SPN_S10B:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M_TILED:
+        grallocFd[1] = priv_handle->fd1;
+        grallocAddr[1] = ycbcrLayout.cb;
+        grallocFd[0] = priv_handle->fd;
+        grallocAddr[0] = ycbcrLayout.y;
+        break;
+    case HAL_PIXEL_FORMAT_EXYNOS_ARGB_8888:
+    case HAL_PIXEL_FORMAT_RGBA_8888:
+    case HAL_PIXEL_FORMAT_RGBX_8888:
+    case HAL_PIXEL_FORMAT_BGRA_8888:
+    case HAL_PIXEL_FORMAT_RGB_888:
+    case HAL_PIXEL_FORMAT_RGB_565:
+    case HAL_PIXEL_FORMAT_RAW16:
+    case HAL_PIXEL_FORMAT_RAW_OPAQUE:
+    case HAL_PIXEL_FORMAT_BLOB:
+    case HAL_PIXEL_FORMAT_Y8:
+    case HAL_PIXEL_FORMAT_Y16:
+    case HAL_PIXEL_FORMAT_YCbCr_422_I:
+    case HAL_PIXEL_FORMAT_YV12:
+    case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+    case HAL_PIXEL_FORMAT_YCbCr_422_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_P:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCrCb_422_I:
+    case HAL_PIXEL_FORMAT_EXYNOS_CbYCrY_422_I:
+    case HAL_PIXEL_FORMAT_EXYNOS_CrYCbY_422_I:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCrCb_422_SP:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SPN_TILED:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SPN:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_PN:
+    default:
         grallocFd[0] = priv_handle->fd;
         if (grallocAddr[0] == NULL) {
             grallocAddr[0] = ycbcrLayout.y;
         }
-        break;
-    default:
         break;
     }
 

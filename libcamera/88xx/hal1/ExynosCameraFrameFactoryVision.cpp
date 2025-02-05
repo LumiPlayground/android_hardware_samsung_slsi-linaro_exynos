@@ -156,14 +156,20 @@ status_t ExynosCameraFrameFactoryVision::initPipes(void)
     memset(pipeInfo, 0, (sizeof(camera_pipe_info_t) * 3));
 
     /* FLITE pipe */
-#if 0
+#ifdef SAMSUNG_TN_FEATURE
+    if (m_cameraId == CAMERA_ID_SECURE) {
+        tempRect.fullW = SECURE_CAMERA_WIDTH;
+        tempRect.fullH = SECURE_CAMERA_HEIGHT;
+        tempRect.colorFormat = V4L2_PIX_FMT_SBGGR8;
+    } else {
+        tempRect.fullW = VISION_WIDTH;
+        tempRect.fullH = VISION_HEIGHT;
+        tempRect.colorFormat = V4L2_PIX_FMT_SGRBG8;
+    }
+#else
     tempRect.fullW = maxSensorW + 16;
     tempRect.fullH = maxSensorH + 10;
     tempRect.colorFormat = bayerFormat;
-#else
-    tempRect.fullW = VISION_WIDTH;
-    tempRect.fullH = VISION_HEIGHT;
-    tempRect.colorFormat = V4L2_PIX_FMT_SGRBG8;
 #endif
 
     pipeInfo[0].rectInfo = tempRect;
@@ -301,17 +307,55 @@ status_t ExynosCameraFrameFactoryVision::m_setupConfig(void)
     int32_t *nodeNums = NULL;
     int32_t *controlId = NULL;
     int32_t *prevNode = NULL;
-    bool enableVision = true;
+    bool enableSecure = false;
 
+    if (m_cameraId == CAMERA_ID_SECURE)
+        enableSecure = true;
+    
     nodeNums = m_nodeNums[INDEX(PIPE_FLITE)];
     nodeNums[OUTPUT_NODE] = -1;
-    nodeNums[CAPTURE_NODE_1] = FRONT_CAMERA_FLITE_NUM;
+#ifdef SAMSUNG_TN_FEATURE
+    if (m_cameraId == CAMERA_ID_SECURE) {
+        nodeNums[CAPTURE_NODE_1] = SECURE_CAMERA_FLITE_NUM;
+    } else {
+        nodeNums[CAPTURE_NODE_1] = VISION_CAMERA_FLITE_NUM;
+    }
+#else
+        nodeNums[CAPTURE_NODE_1] = FRONT_CAMERA_FLITE_NUM;
+#endif
     nodeNums[CAPTURE_NODE_2] = -1;
     controlId = m_sensorIds[INDEX(PIPE_FLITE)];
-    controlId[CAPTURE_NODE_1] = m_getSensorId(nodeNums[CAPTURE_NODE_1], enableVision);
+    controlId[CAPTURE_NODE_1] = m_getSensorId(nodeNums[CAPTURE_NODE_1], enableSecure);
     prevNode = nodeNums;
 
     return NO_ERROR;
 }
 
+#ifdef SAMSUNG_TN_FEATURE
+int ExynosCameraFrameFactoryVision::m_getSensorId(__unused unsigned int nodeNum, bool enableSecure)
+{
+    unsigned int scenarioBit = 0;
+    unsigned int nodeNumBit = 0;
+    unsigned int sensorIdBit = 0;
+    unsigned int sensorId = getSensorId(m_cameraId);
+
+    if (enableSecure == true)
+        scenarioBit = (SENSOR_SCENARIO_SECURE << SCENARIO_SHIFT);
+    else
+        scenarioBit = (SENSOR_SCENARIO_VISION << SCENARIO_SHIFT);
+    /*
+     * hack
+     * nodeNum - FIMC_IS_VIDEO_BAS_NUM is proper.
+     * but, historically, FIMC_IS_VIDEO_SS0_NUM - FIMC_IS_VIDEO_SS0_NUM is worked properly
+     */
+    //nodeNumBit = ((nodeNum - FIMC_IS_VIDEO_BAS_NUM) << SSX_VINDEX_SHIFT);
+    nodeNumBit = ((FIMC_IS_VIDEO_SS0_NUM - FIMC_IS_VIDEO_SS0_NUM) << SSX_VINDEX_SHIFT);
+
+    sensorIdBit = (sensorId << 0);
+
+    return (scenarioBit) |
+           (nodeNumBit) |
+           (sensorIdBit);
+}
+#endif
 }; /* namespace android */

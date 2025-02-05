@@ -41,7 +41,7 @@ ExynosCameraBufferManager *ExynosCameraBufferManager::createBufferManager(buffer
         return (ExynosCameraBufferManager *)new InternalExynosCameraBufferManager();
         break;
     case BUFFER_MANAGER_SERVICE_GRALLOC_TYPE:
-        return (ExynosCameraBufferManager *)new ServiceExynosCameraBufferManager();
+        return (ExynosCameraBufferManager *)new ServiceExynosCameraBufferManager(-1);
         break;
     case BUFFER_MANAGER_INVALID_TYPE:
         CLOGE2("Unknown bufferManager type(%d)", (int)type);
@@ -397,7 +397,6 @@ status_t ExynosCameraBufferManager::setInfo(buffer_manager_configuration_t info)
         m_buffer[bufIndex].planeCount = info.planeCount;
         m_buffer[bufIndex].type       = info.type;
         m_buffer[bufIndex].batchSize  = info.batchSize;
-        m_buffer[bufIndex].bufMgrNm   = m_name; /* for debug */
     }
 
     m_allowedMaxBufCount    = info.allowedMaxBufCount + info.startBufIndex;
@@ -659,8 +658,6 @@ status_t ExynosCameraBufferManager::getStatus(
 
 status_t ExynosCameraBufferManager::getIndexByFd(int fd, int *index)
 {
-    status_t ret = NO_ERROR;
-
     if (fd < 0) {
         CLOGE("Invalid FD %d", fd);
         return BAD_VALUE;
@@ -758,7 +755,7 @@ status_t ExynosCameraBufferManager::m_defaultAlloc(int bIndex, int eIndex, bool 
     if (isMetaPlane == true) {
         mapNeeded = true;
     } else {
-#if defined(DEBUG_RAWDUMP) || defined(DEBUG_DUMP_IMAGE) || defined(YUV_DUMP)
+#ifdef DEBUG_RAWDUMP
         mapNeeded = true;
 #else
         mapNeeded = m_flagNeedMmap;
@@ -1247,8 +1244,8 @@ void ExynosCameraBufferManager::printBufferQState()
 }
 
 void ExynosCameraBufferManager::printBufferInfo(
-        const char *funcName,
-        const int lineNum,
+        __unused const char *funcName,
+        __unused const int lineNum,
         int bufIndex,
         int planeIndex)
 {
@@ -1625,8 +1622,6 @@ status_t InternalExynosCameraBufferManager::increase(int increaseCount)
              increaseCount);
     }
 
-func_exit:
-
     return ret;
 }
 
@@ -1801,11 +1796,11 @@ status_t ExynosCameraFence::wait(int time)
     return ret;
 }
 
-ServiceExynosCameraBufferManager::ServiceExynosCameraBufferManager()
+ServiceExynosCameraBufferManager::ServiceExynosCameraBufferManager(int actualFormat)
 {
     ExynosCameraBufferManager::init();
 
-    m_allocator = new ExynosCameraStreamAllocator();
+    m_allocator = new ExynosCameraStreamAllocator(actualFormat);
 
     CLOGD("");
     for (int bufIndex = 0; bufIndex < VIDEO_MAX_FRAME; bufIndex++) {
@@ -2200,7 +2195,7 @@ status_t ServiceExynosCameraBufferManager::m_getBufferInfoFromHandle(buffer_hand
     if (handle->version != sizeof(native_handle_t)) {
         android_printAssert(NULL, LOG_TAG,
                             "ASSERT(%s):native_handle_t size mismatch. local %d != framework %d",
-                            __FUNCTION__, sizeof(native_handle_t), handle->version);
+                            __FUNCTION__, (int)sizeof(native_handle_t), handle->version);
 
         return BAD_VALUE;
     }

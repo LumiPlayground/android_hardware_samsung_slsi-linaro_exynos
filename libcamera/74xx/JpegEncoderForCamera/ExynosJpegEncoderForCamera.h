@@ -27,6 +27,10 @@
 #include <sys/mman.h>
 #include <ion/ion.h>
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecAppMarker.h"
+#endif
+
 #define CSC_HW_NUM_FOR_JPEG     (PICTURE_GSC_NODE_NUM)
 
 #define JPEG_THUMBNAIL_QUALITY 38

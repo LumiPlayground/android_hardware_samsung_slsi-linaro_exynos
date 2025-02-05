@@ -79,6 +79,30 @@ status_t ExynosCameraFrameReprocessingFactory::create(__unused bool active)
     CLOGV("%s(%d) created",
             m_pipes[INDEX(PIPE_MCSC_REPROCESSING)]->getPipeName(), PIPE_MCSC_REPROCESSING);
 
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        /* SYNC_REPROCESSING pipe initialize */
+        ret = m_pipes[INDEX(PIPE_SYNC_REPROCESSING)]->create();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):SYNC_REPROCESSING create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+        CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
+                m_pipes[INDEX(PIPE_SYNC_REPROCESSING)]->getPipeName(), PIPE_SYNC_REPROCESSING);
+
+        /* FUSION_REPROCESSING pipe initialize */
+        ret = m_pipes[INDEX(PIPE_FUSION_REPROCESSING)]->create();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):FUSION_REPROCESSING create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+        CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
+                m_pipes[INDEX(PIPE_FUSION_REPROCESSING)]->getPipeName(), PIPE_FUSION_REPROCESSING);
+    }
+#endif
+
     if (m_parameters->needGSCForCapture(m_cameraId) == true) {
         /* GSC_REPROCESSING pipe initialize */
         ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->create();
@@ -122,11 +146,8 @@ status_t ExynosCameraFrameReprocessingFactory::create(__unused bool active)
         return INVALID_OPERATION;
     }
 
-
-    if (m_flagODCEnabled == true) {
-#if defined(CAMERA_HAS_OWN_GDC) && (CAMERA_HAS_OWN_GDC == true)
-        // nop
-#else
+    /* TPU1 */
+    if (m_flagTPU1Enabled == true) {
         /* TPU1 pipe initialize */
         ret = m_pipes[INDEX(PIPE_TPU1)]->create();
         if (ret != NO_ERROR) {
@@ -155,7 +176,6 @@ status_t ExynosCameraFrameReprocessingFactory::create(__unused bool active)
             /* TODO: exception handling */
             return INVALID_OPERATION;
         }
-#endif // CAMERA_HAS_OWN_GDC
     }
 
     m_setCreate(true);
@@ -311,7 +331,7 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
         bayerFormat = m_parameters->getBayerFormat(PIPE_ISP_REPROCESSING);
 
         /* set v4l2 buffer size */
-        if (m_supportPureBayerReprocessing == true) {
+        if (m_parameters->getUsePureBayerReprocessing() == true) {
             tempRect.fullW = hwPictureW;
             tempRect.fullH = hwPictureH;
         } else {
@@ -404,6 +424,12 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
     perFramePos = PERFRAME_REPROCESSING_MCSC1_POS;
 
     /* set v4l2 buffer size */
+#ifdef SAMSUNG_LENS_DC
+    if (!m_parameters->getSamsungCamera() && m_parameters->getLensDCMode()) {
+        tempRect.fullW = maxPictureW;
+        tempRect.fullH = maxPictureH;
+    } else
+#endif
     {
         tempRect.fullW = pictureW;
         tempRect.fullH = pictureH;
@@ -526,10 +552,8 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
     }
 
     /* setup pipe info to TPU1 pipe */
-    if (m_flagODCEnabled) {
-#if defined(CAMERA_HAS_OWN_GDC) && (CAMERA_HAS_OWN_GDC == true)
-        // nop
-#else
+    if (m_flagTPU1Enabled) {
+
         /* TPU1 */
         pipeId = PIPE_TPU1;
         nodeType = getNodeType(PIPE_TPU1);
@@ -575,7 +599,6 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
         /* clear pipeInfo for next setupPipe */
         for (int i = 0; i < MAX_NODE; i++)
             pipeInfo[i] = nullPipeInfo;
-#endif // CAMERA_HAS_OWN_GDC
     }
 
     return NO_ERROR;
@@ -604,18 +627,30 @@ status_t ExynosCameraFrameReprocessingFactory::startPipes(void)
     status_t ret = NO_ERROR;
     CLOGV("");
 
-    if (m_flagODCEnabled) {
-#if defined(CAMERA_HAS_OWN_GDC) && (CAMERA_HAS_OWN_GDC == true)
-        // nop
-#else
-        /* TPU1 Reprocessing */
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        ret = m_pipes[INDEX(PIPE_FUSION_REPROCESSING)]->start();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):PIPE_FUSION_REPROCESSING start fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+
+        ret = m_pipes[INDEX(PIPE_SYNC_REPROCESSING)]->start();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):PIPE_SYNC_REPROCESSING start fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        }
+    }
+#endif
+
+    /* TPU1 Reprocessing */
+    if (m_flagTPU1Enabled) {
         ret = m_pipes[INDEX(PIPE_TPU1)]->start();
         if (ret != NO_ERROR) {
             CLOGE("TPU1 start fail, ret(%d)", ret);
             /* TODO: exception handling */
             return INVALID_OPERATION;
         }
-#endif
     }
 
     /* MCSC Reprocessing */
@@ -656,6 +691,7 @@ status_t ExynosCameraFrameReprocessingFactory::startPipes(void)
 status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
 {
     status_t ret = NO_ERROR;
+    status_t funcRet = NO_ERROR;
     CLOGV("");
 
     /* 3AA Reprocessing Thread stop */
@@ -664,7 +700,7 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("3AA stopThread fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
@@ -674,7 +710,7 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("ISP stopThread fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
@@ -684,7 +720,7 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("MCSC stopThread fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
@@ -695,9 +731,33 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("GSC stopThread fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
+
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        if (m_pipes[INDEX(PIPE_SYNC_REPROCESSING)] != NULL &&
+                m_pipes[INDEX(PIPE_SYNC_REPROCESSING)]->isThreadRunning() == true) {
+            ret = m_pipes[INDEX(PIPE_SYNC_REPROCESSING)]->stopThread();
+            if (ret != NO_ERROR) {
+                CLOGE("SYNC_REPROCESSING stopThread fail, ret(%d)", ret);
+                /* TODO: exception handling */
+                funcRet |= ret;
+            }
+        }
+
+        if (m_pipes[INDEX(PIPE_FUSION_REPROCESSING)] != NULL &&
+                m_pipes[INDEX(PIPE_FUSION_REPROCESSING)]->isThreadRunning() == true) {
+            ret = stopThread(INDEX(PIPE_FUSION_REPROCESSING));
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):PIPE_FUSION_REPROCESSING stopThread fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+                /* TODO: exception handling */
+                funcRet |= ret;
+            }
+        }
+    }
+#endif
 
     /* 3AA Reprocessing stop */
     if (m_supportPureBayerReprocessing == true) {
@@ -705,7 +765,7 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("3AA stop fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
@@ -715,7 +775,7 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("ISP stop fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
@@ -725,9 +785,31 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("MCSC stop fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
+
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        if (m_pipes[INDEX(PIPE_SYNC_REPROCESSING)] != NULL) {
+            ret = m_pipes[INDEX(PIPE_SYNC_REPROCESSING)]->stop();
+            if (ret != NO_ERROR) {
+                CLOGE("SYNC_REPROCESSING stop fail, ret(%d)", ret);
+                /* TODO: exception handling */
+                funcRet |= ret;
+            }
+        }
+
+        if (m_pipes[INDEX(PIPE_FUSION_REPROCESSING)] != NULL) {
+            ret = m_pipes[INDEX(PIPE_FUSION_REPROCESSING)]->stop();
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]): m_pipes[INDEX(PIPE_FUSION_REPROCESSING)]->stop() fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+                /* TODO: exception handling */
+                funcRet |= ret;
+            }
+        }
+    }
+#endif
 
     /* GSC Reprocessing stop */
     if (m_parameters->needGSCForCapture(m_cameraId) == true) {
@@ -735,7 +817,7 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("GSC stop fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
@@ -744,7 +826,7 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
     if (ret != NO_ERROR) {
         CLOGE("GSC3 stop fail, ret(%d)", ret);
         /* TODO: exception handling */
-        return INVALID_OPERATION;
+        funcRet |= ret;
     }
 
     if (m_flagHWFCEnabled == false || (m_flagHWFCEnabled && m_parameters->isHWFCOnDemand())) {
@@ -753,27 +835,23 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("JPEG stop fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
-    if (m_flagODCEnabled == true) {
-#if defined(CAMERA_HAS_OWN_GDC) && (CAMERA_HAS_OWN_GDC == true)
-        // nop
-#else
-        /* TPU1 stop */
+    /* TPU1 stop */
+    if (m_flagTPU1Enabled == true) {
         ret = m_pipes[INDEX(PIPE_TPU1)]->stop();
         if (ret != NO_ERROR) {
             CLOGE("TPU1 stop fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
-#endif // CAMERA_HAS_OWN_GDC
     }
 
     CLOGI("Stopping Reprocessing [3AA>MCSC] Success!");
 
-    return NO_ERROR;
+    return funcRet;
 }
 
 status_t ExynosCameraFrameReprocessingFactory::startInitialThreads(void)
@@ -797,13 +875,20 @@ status_t ExynosCameraFrameReprocessingFactory::setStopFlag(void)
     ret = m_pipes[INDEX(PIPE_ISP_REPROCESSING)]->setStopFlag();
     ret = m_pipes[INDEX(PIPE_MCSC_REPROCESSING)]->setStopFlag();
 
-    if (m_flagODCEnabled) {
-#if defined(CAMERA_HAS_OWN_GDC) && (CAMERA_HAS_OWN_GDC == true)
-        // nop
-#else
-        ret = m_pipes[INDEX(PIPE_TPU1)]->setStopFlag();
-#endif // CAMERA_HAS_OWN_GDC
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        if (m_pipes[INDEX(PIPE_SYNC_REPROCESSING)] != NULL &&
+                m_pipes[INDEX(PIPE_SYNC_REPROCESSING)]->flagStart() == true)
+            ret = m_pipes[INDEX(PIPE_SYNC_REPROCESSING)]->setStopFlag();
+
+        if (m_pipes[INDEX(PIPE_FUSION_REPROCESSING)] != NULL &&
+                m_pipes[INDEX(PIPE_FUSION_REPROCESSING)]->flagStart() == true)
+            ret = m_pipes[INDEX(PIPE_FUSION_REPROCESSING)]->setStopFlag();
     }
+#endif
+
+    if (m_flagTPU1Enabled)
+        ret = m_pipes[INDEX(PIPE_TPU1)]->setStopFlag();
 
     return NO_ERROR;
 }
@@ -819,6 +904,10 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameReprocessingFactory::createNewFrame(
     int parentPipeId = PIPE_3AA_REPROCESSING;
     int curShotMode = 0;
     int curSeriesShotMode = 0;
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    int masterCameraId = -1;
+    int slaveCameraId = -1;
+#endif
 
     if (m_parameters != NULL) {
         curShotMode = m_parameters->getShotMode();
@@ -858,6 +947,24 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameReprocessingFactory::createNewFrame(
         requestEntityCount++;
     }
 
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        getDualCameraId(&masterCameraId, &slaveCameraId);
+
+        newEntity[INDEX(PIPE_SYNC_REPROCESSING)] = new ExynosCameraFrameEntity(PIPE_SYNC_REPROCESSING, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
+        frame->addSiblingEntity(NULL, newEntity[INDEX(PIPE_SYNC_REPROCESSING)]);
+        requestEntityCount++;
+
+        /* slave frame's life cycle is util sync pipe */
+        if (m_cameraId == slaveCameraId)
+            goto SKIP_SLAVE_CAMERA;
+
+        newEntity[INDEX(PIPE_FUSION_REPROCESSING)] = new ExynosCameraFrameEntity(PIPE_FUSION_REPROCESSING, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
+        frame->addSiblingEntity(NULL, newEntity[INDEX(PIPE_FUSION_REPROCESSING)]);
+        requestEntityCount++;
+    }
+#endif
+
     /* set GSC pipe to linkageList */
     pipeId = PIPE_GSC_REPROCESSING;
     newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
@@ -870,6 +977,9 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameReprocessingFactory::createNewFrame(
     newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
     frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
     if (m_parameters->getIsThumbnailCallbackOn() == true
+#ifdef SAMSUNG_MAGICSHOT
+        || curShotMode == SHOT_MODE_MAGIC
+#endif
        )
         requestEntityCount++;
 
@@ -893,10 +1003,7 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameReprocessingFactory::createNewFrame(
     frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
 #endif
 
-    if (m_flagODCEnabled) {
-#if defined(CAMERA_HAS_OWN_GDC) && (CAMERA_HAS_OWN_GDC == true)
-        // nop
-#else
+    if (m_flagTPU1Enabled) {
         pipeId = PIPE_TPU1;
         newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
         frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
@@ -905,8 +1012,11 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameReprocessingFactory::createNewFrame(
         pipeId = PIPE_GSC_REPROCESSING4;
         newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
         frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
-#endif // CAMERA_HAS_OWN_GDC
     }
+
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+SKIP_SLAVE_CAMERA:
+#endif
 
     ret = m_initPipelines(frame);
     if (ret != NO_ERROR) {
@@ -935,25 +1045,20 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
     enum NODE_TYPE nodeType = INVALID_NODE;
     bool flagStreamLeader = false;
 
-    m_initDeviceInfo(INDEX(PIPE_3AA_REPROCESSING));
-    m_initDeviceInfo(INDEX(PIPE_ISP_REPROCESSING));
-    m_initDeviceInfo(INDEX(PIPE_MCSC_REPROCESSING));
-
     m_flagFlite3aaOTF = m_parameters->isFlite3aaOtf();
     m_flag3aaIspOTF = m_parameters->isReprocessing3aaIspOTF();
     m_flagIspTpuOTF = m_parameters->isReprocessingIspTpuOtf();
     m_flagIspMcscOTF = m_parameters->isReprocessingIspMcscOtf();
     m_flagTpuMcscOTF = m_parameters->isReprocessingTpuMcscOtf();
 #ifdef USE_ODC_CAPTURE
-    m_flagODCEnabled = m_parameters->getODCCaptureMode();
+    m_flagTPU1Enabled = m_parameters->getODCCaptureMode();
 #endif
 
-    m_numOfHwChains = m_parameters->getNumOfHwChains();
-    m_supportReprocessing = m_parameters->isReprocessingCapture();
-    if (m_parameters->getReprocessingMode() == PROCESSING_MODE_REPROCESSING_PURE_BAYER)
-        m_supportPureBayerReprocessing = true;
-    else
-        m_supportPureBayerReprocessing = false;
+    m_supportReprocessing = m_parameters->isReprocessing();
+    m_supportSingleChain = m_parameters->isSingleChain();
+    m_supportPureBayerReprocessing = m_parameters->getUsePureBayerReprocessing();
+
+
 
     m_request3AP = !(m_flag3aaIspOTF);
     if (m_flagIspTpuOTF == false && m_flagIspMcscOTF == false)
@@ -966,11 +1071,12 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
         m_requestThumbnail = true;
     }
 
-    switch (m_numOfHwChains) {
-    case 1:
-        node3aa = FIMC_IS_VIDEO_30S_NUM;
-        node3ac = FIMC_IS_VIDEO_30C_NUM;
-        node3ap = FIMC_IS_VIDEO_30P_NUM;
+    if (m_supportSingleChain == true) {
+        if (m_supportPureBayerReprocessing == true) {
+            node3aa = FIMC_IS_VIDEO_30S_NUM;
+            node3ac = FIMC_IS_VIDEO_30C_NUM;
+            node3ap = FIMC_IS_VIDEO_30P_NUM;
+        }
         nodeIsp = FIMC_IS_VIDEO_I0S_NUM;
         nodeIspc = FIMC_IS_VIDEO_I0C_NUM;
         nodeIspp = FIMC_IS_VIDEO_I0P_NUM;
@@ -978,20 +1084,20 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
         nodeMcscp1 = FIMC_IS_VIDEO_M0P_NUM;
         nodeMcscp3 = FIMC_IS_VIDEO_M1P_NUM;
         nodeMcscp4 = FIMC_IS_VIDEO_M2P_NUM;
-        break;
-    case 2:
-        if ((m_cameraId == CAMERA_ID_FRONT || m_cameraId == CAMERA_ID_BACK_1)
-            && m_parameters->getDualMode() == false
-           ) {
-            node3aa = FIMC_IS_VIDEO_31S_NUM;
-            node3ac = FIMC_IS_VIDEO_31C_NUM;
-            node3ap = FIMC_IS_VIDEO_31P_NUM;
-        } else {
-            node3aa = FIMC_IS_VIDEO_30S_NUM;
-            node3ac = FIMC_IS_VIDEO_30C_NUM;
-            node3ap = FIMC_IS_VIDEO_30P_NUM;
+    } else {
+        if (m_supportPureBayerReprocessing == true) {
+            if (((m_cameraId == CAMERA_ID_FRONT || m_cameraId == CAMERA_ID_BACK_1) &&
+                (m_parameters->getDualMode() == true)) ||
+                (m_parameters->getUseCompanion() == false)) {
+                node3aa = FIMC_IS_VIDEO_31S_NUM;
+                node3ac = FIMC_IS_VIDEO_31C_NUM;
+                node3ap = FIMC_IS_VIDEO_31P_NUM;
+            } else {
+                node3aa = FIMC_IS_VIDEO_30S_NUM;
+                node3ac = FIMC_IS_VIDEO_30C_NUM;
+                node3ap = FIMC_IS_VIDEO_30P_NUM;
+            }
         }
-
         nodeIsp = FIMC_IS_VIDEO_I1S_NUM;
         nodeIspc = FIMC_IS_VIDEO_I1C_NUM;
         nodeIspp = FIMC_IS_VIDEO_I1P_NUM;
@@ -999,12 +1105,14 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
         nodeMcscp1 = FIMC_IS_VIDEO_M1P_NUM;
         nodeMcscp3 = FIMC_IS_VIDEO_M3P_NUM;
         nodeMcscp4 = FIMC_IS_VIDEO_M4P_NUM;
-        break;
-    default:
-        CLOGE("Unsupported HW chain count(%d)!", m_numOfHwChains);
-        return BAD_VALUE;
-        break;
     }
+
+    if (m_supportPureBayerReprocessing == true) {
+        m_initDeviceInfo(INDEX(PIPE_3AA_REPROCESSING));
+    }
+    m_initDeviceInfo(INDEX(PIPE_ISP_REPROCESSING));
+    m_initDeviceInfo(INDEX(PIPE_MCSC_REPROCESSING));
+
 
     /*
      * 3AA for Reprocessing
@@ -1015,6 +1123,14 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
     /* 3AS */
     bool flagUseCompanion = false;
     bool flagQuickSwitchFlag = false;
+
+#ifdef SAMSUNG_COMPANION
+    flagUseCompanion = m_parameters->getUseCompanion();
+#endif
+
+#ifdef SAMSUNG_QUICK_SWITCH
+    flagQuickSwitchFlag = m_parameters->getQuickSwitchFlag();
+#endif
 
     if (m_supportPureBayerReprocessing == true) {
         /*
@@ -1173,11 +1289,16 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
     /* JPEG for Reprocessing */
     m_nodeNums[INDEX(PIPE_JPEG_REPROCESSING)][OUTPUT_NODE] = -1;
 
-    if (m_flagODCEnabled) {
-#if defined(CAMERA_HAS_OWN_GDC) && (CAMERA_HAS_OWN_GDC == true)
-        // nop
-#else
-        /* TPU1 */
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    m_nodeNums[INDEX(PIPE_SYNC_REPROCESSING)][OUTPUT_NODE] = -1;
+
+    m_nodeNums[INDEX(PIPE_FUSION_REPROCESSING)][OUTPUT_NODE] = 0;
+    m_nodeNums[INDEX(PIPE_FUSION_REPROCESSING)][CAPTURE_NODE_1] = -1;
+    m_nodeNums[INDEX(PIPE_FUSION_REPROCESSING)][CAPTURE_NODE_2] = -1;
+#endif
+
+    /* TPU1 */
+    if (m_flagTPU1Enabled) {
         pipeId = PIPE_TPU1;
         nodeType = getNodeType(PIPE_TPU1);
         m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_TPU1;
@@ -1195,7 +1316,6 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
 
         /* GSC4 for Reprocessing */
         m_nodeNums[INDEX(PIPE_GSC_REPROCESSING4)][OUTPUT_NODE] = PICTURE_GSC_NODE_NUM;
-#endif
     }
 
     return NO_ERROR;
@@ -1227,6 +1347,33 @@ status_t ExynosCameraFrameReprocessingFactory::m_constructReprocessingPipes(void
     m_pipes[INDEX(pipeId)]->setPipeName("PIPE_MCSC_REPROCESSING");
     m_pipes[INDEX(pipeId)]->setPipeId(pipeId);
 
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        /* Sync */
+        ExynosCameraPipeSync *syncPipe = new ExynosCameraPipeSync(m_cameraId, m_parameters, false, m_nodeNums[INDEX(PIPE_SYNC_REPROCESSING)]);
+        m_pipes[INDEX(PIPE_SYNC_REPROCESSING)] = (ExynosCameraPipe*)syncPipe;
+        m_pipes[INDEX(PIPE_SYNC_REPROCESSING)]->setPipeId(PIPE_SYNC_REPROCESSING);
+        m_pipes[INDEX(PIPE_SYNC_REPROCESSING)]->setPipeName("PIPE_SYNC_REPROCESSING");
+
+        /* Fusion */
+        ExynosCameraPipeFusion *fusionPipe = new ExynosCameraPipeFusion(m_cameraId, m_parameters, false, m_nodeNums[INDEX(PIPE_FUSION_REPROCESSING)]);
+        m_pipes[INDEX(PIPE_FUSION_REPROCESSING)] = (ExynosCameraPipe*)fusionPipe;
+        m_pipes[INDEX(PIPE_FUSION_REPROCESSING)]->setPipeId(PIPE_FUSION_REPROCESSING);
+        m_pipes[INDEX(PIPE_FUSION_REPROCESSING)]->setPipeName("PIPE_FUSION_REPROCESSING");
+
+        /* set the dual selector or fusionWrapper */
+        ExynosCameraDualCaptureFrameSelector *dualSelector = ExynosCameraSingleton<ExynosCameraDualCaptureFrameSelector>::getInstance();
+#ifdef USE_CP_FUSION_REPROCESSING_LIB
+        ExynosCameraFusionWrapper *fusionWrapper = ExynosCameraSingleton<ExynosCameraFusionCaptureWrapperCP>::getInstance();
+#else
+        ExynosCameraFusionWrapper *fusionWrapper = ExynosCameraSingleton<ExynosCameraFusionCaptureWrapper>::getInstance();
+#endif
+        syncPipe->setDualSelector(dualSelector);
+        fusionPipe->setDualSelector(dualSelector);
+        fusionPipe->setFusionWrapper(fusionWrapper);
+    }
+#endif
+
     /* GSC for Reprocessing */
     pipeId = PIPE_GSC_REPROCESSING;
     m_pipes[INDEX(pipeId)] = (ExynosCameraPipe*)new ExynosCameraPipeGSC(m_cameraId, m_parameters, m_flagReprocessing, m_nodeNums[INDEX(pipeId)]);
@@ -1247,10 +1394,7 @@ status_t ExynosCameraFrameReprocessingFactory::m_constructReprocessingPipes(void
         m_pipes[INDEX(pipeId)]->setPipeId(pipeId);
     }
 
-    if (m_flagODCEnabled == true) {
-#if defined(CAMERA_HAS_OWN_GDC) && (CAMERA_HAS_OWN_GDC == true)
-        // nop
-#else
+    if (m_flagTPU1Enabled == true) {
         /* TPU1 for Reprocessing */
         pipeId = PIPE_TPU1;
         m_pipes[INDEX(pipeId)] = (ExynosCameraPipe*)new ExynosCameraMCPipe(m_cameraId, m_parameters, m_flagReprocessing, &m_deviceInfo[INDEX(pipeId)]);
@@ -1262,7 +1406,6 @@ status_t ExynosCameraFrameReprocessingFactory::m_constructReprocessingPipes(void
         m_pipes[INDEX(pipeId)] = (ExynosCameraPipe*)new ExynosCameraPipeGSC(m_cameraId, m_parameters, m_flagReprocessing, m_nodeNums[INDEX(pipeId)]);
         m_pipes[INDEX(pipeId)]->setPipeName("PIPE_GSC_REPROCESSING4");
         m_pipes[INDEX(pipeId)]->setPipeId(pipeId);
-#endif // CAMERA_HAS_OWN_GDC
     }
 
     CLOGI("pipe ids for Reprocessing");
@@ -1299,42 +1442,62 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
     uint32_t requestJPEG = m_requestJPEG;
     uint32_t requestThumbnail = m_requestThumbnail;
 
+#ifdef SR_CAPTURE
+    if(m_parameters->getSROn()) {
+        zoom = ZOOM_LEVEL_0;
+    }
+#endif
     if (refFrame == NULL) {
         zoom = m_parameters->getZoomLevel();
     } else {
         zoom = refFrame->getReprocessingZoom();
-        int output_node_index = OUTPUT_NODE_1;
-        struct camera2_node_group node_group;
-        struct camera2_shot_ext shot;
-
-        /* Node Group Setting */
-        for (int i = 0; i < PERFRAME_NODE_GROUP_MAX; i++) {
-            refFrame->getNodeGroupInfo(&node_group, i);
-            frame->storeNodeGroupInfo(&node_group, i, output_node_index);
-        }
-
-        /* Meta Setting */
-        refFrame->getMetaData(&shot);
-        setMetaBypassDrc(&shot, m_bypassDRC);
-        setMetaBypassDnr(&shot, m_bypassDNR);
-        setMetaBypassDis(&shot, m_bypassDIS);
-        setMetaBypassFd(&shot, m_bypassFD);
-        frame->setMetaData(&shot, output_node_index);
-
-        /* Zoom Setting */
-        frame->setZoom(zoom, output_node_index);
-
-        /* SyncType Setting */
-        frame->setSyncType(refFrame->getReprocessingSyncType());
-
-        /* FrameType Setting */
         frame->setFrameType((frame_type_t)refFrame->getReprocessingFrameType());
+        frame->setZoom(refFrame->getReprocessingZoom());
+        frame->setSyncType(refFrame->getReprocessingSyncType());
+        if (frame->getFrameType() == FRAME_TYPE_INTERNAL) {
+            struct camera2_shot_ext shot_ext;
+            refFrame->getMetaData(&shot_ext);
+            frame->setMetaData(&shot_ext);
+        }
     }
 
     memset(&node_group_info_3aa, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_isp, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_mcsc, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_tpu1, 0x0, sizeof(camera2_node_group));
+
+#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        /* for internal frame */
+        if (frame->getFrameType() == FRAME_TYPE_INTERNAL) {
+            /*
+             * Clear all capture node's request.
+             * But don't touch MCSC3, Jpeg, Thumbnail for capture in master camera.
+             */
+            request3AP = 0;
+            request3AC = 0;
+            requestISPC = 0;
+            requestISPP = 0;
+            requestMCSC1 = 0;
+            requestMCSC3 = 0;
+            /* requestMCSC4 = 0; */
+            /* requestJPEG = 0; */
+            /* requestThumbnail = 0; */
+
+            frame->setRequest(PIPE_3AP_REPROCESSING, request3AP);
+            frame->setRequest(PIPE_3AP_REPROCESSING, request3AC);
+            frame->setRequest(PIPE_ISPC_REPROCESSING, requestISPC);
+            frame->setRequest(PIPE_ISPP_REPROCESSING, requestISPP);
+            frame->setRequest(PIPE_MCSC1_REPROCESSING, requestMCSC1);
+            /* frame->setRequest(PIPE_MCSC3_REPROCESSING, requestMCSC3); */
+            frame->setRequest(PIPE_MCSC4_REPROCESSING, requestMCSC4);
+            /* frame->setRequest(PIPE_HWFC_JPEG_SRC_REPROCESSING, requestJPEG); */
+            /* frame->setRequest(PIPE_HWFC_JPEG_DST_REPROCESSING, requestJPEG); */
+            /* frame->setRequest(PIPE_HWFC_THUMB_SRC_REPROCESSING, requestThumbnail); */
+            /* frame->setRequest(PIPE_HWFC_THUMB_DST_REPROCESSING, requestThumbnail); */
+        }
+    }
+#endif
 
     /* 3AA for Reprocessing */
     if (m_supportPureBayerReprocessing == true) {
@@ -1403,7 +1566,7 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
         CLOGE("Perframe capture node index out of bound, requestMCSC4 index(%d) CAPTURE_NODE_MAX(%d)", perframePosition, CAPTURE_NODE_MAX);
     }
 
-    if (m_supportPureBayerReprocessing == true) {
+    if (m_parameters->getUsePureBayerReprocessing() == true) {
         m_parameters->getPictureBayerCropSize(&sizeControlInfo.bnsSize,
                                               &sizeControlInfo.bayerCropSize);
         m_parameters->getPictureBdsSize(&sizeControlInfo.bdsSize);
@@ -1447,10 +1610,7 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
             frame->storeNodeGroupInfo(&node_group_info_isp, PERFRAME_INFO_DIRTY_REPROCESSING_ISP);
     }
 
-    if (m_flagODCEnabled) {
-#if defined(CAMERA_HAS_OWN_GDC) && (CAMERA_HAS_OWN_GDC == true)
-        // nop
-#else
+    if (m_flagTPU1Enabled) {
         pipeId = INDEX(PIPE_TPU1);
         perframePosition = 0;
         node_group_info_temp = &node_group_info_tpu1;
@@ -1464,7 +1624,6 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
                 sizeControlInfo,
                 &node_group_info_tpu1);
         frame->storeNodeGroupInfo(&node_group_info_tpu1, PERFRAME_INFO_REPROCESSING_TPU);
-#endif // CAMERA_HAS_OWN_GDC
     }
 
     return NO_ERROR;
@@ -1475,7 +1634,7 @@ void ExynosCameraFrameReprocessingFactory::m_init(void)
     m_flagReprocessing = true;
     m_flagHWFCEnabled = m_parameters->isUseHWFC();
 
-    m_flagODCEnabled = false;
+    m_flagTPU1Enabled = false;
 }
 
 }; /* namespace android */

@@ -61,8 +61,6 @@ status_t ExynosCameraSWPipe::start(void)
 {
     CLOGD("");
 
-    m_flagTryStop = false;
-
     return NO_ERROR;
 }
 
@@ -71,15 +69,11 @@ status_t ExynosCameraSWPipe::stop(void)
     CLOGD("");
     int ret = 0;
 
-    m_flagTryStop = true;
-
     m_mainThread->requestExitAndWait();
 
     CLOGD("thead exited");
 
     m_inputFrameQ->release();
-
-    m_flagTryStop = false;
 
     return NO_ERROR;
 }

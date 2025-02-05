@@ -750,6 +750,10 @@ ExynosCameraFrame * ExynosCamera3FrameReprocessingFactory::createNewFrame(uint32
     pipeId = PIPE_GSC_REPROCESSING2;
     newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
     frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
+#ifdef SAMSUNG_MAGICSHOT
+    if (curShotMode == SHOT_MODE_MAGIC)
+        requestEntityCount++;
+#endif
 
     /* set JPEG pipe to linkageList */
     pipeId = PIPE_JPEG_REPROCESSING;
@@ -1062,6 +1066,12 @@ status_t ExynosCamera3FrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCamera
     int zoom = m_parameters->getZoomLevel();
     int pipeId = -1;
     uint32_t perframePosition = 0;
+
+#ifdef SR_CAPTURE
+    if(m_parameters->getSROn()) {
+        zoom = ZOOM_LEVEL_0;
+    }
+#endif
 
     memset(&node_group_info_3aa, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_isp, 0x0, sizeof(camera2_node_group));

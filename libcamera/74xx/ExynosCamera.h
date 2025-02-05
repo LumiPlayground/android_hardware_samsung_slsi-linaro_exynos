@@ -22,6 +22,17 @@
 
 #include "ExynosCameraDefine.h"
 
+#ifdef SAMSUNG_TN_FEATURE
+#include "SecCameraParameters.h"
+#endif
+#ifdef SAMSUNG_UNIPLUGIN
+#include "uni_plugin_wrapper.h"
+#endif
+
+#ifdef SAMSUNG_SENSOR_LISTENER
+#include "sensor_listener_wrapper.h"
+#endif
+
 namespace android {
 
 class ExynosCamera {
@@ -67,10 +78,17 @@ public:
     bool        startFaceDetection(void);
     bool        stopFaceDetection(void);
 
+#ifdef SAMSUNG_DOF
+    bool        startCurrentSet(void);
+    bool        stopCurrentSet(void);
+#endif
+
     bool        m_startFaceDetection(bool toggle);
     int         m_calibratePosition(int w, int new_w, int pos);
     status_t    m_doFdCallbackFunc(ExynosCameraFrame *frame);
-
+#ifdef SR_CAPTURE
+    status_t    m_doSRCallbackFunc(ExynosCameraFrame *frame);
+#endif
     void        release();
 
     status_t    dump(int fd) const;
@@ -201,8 +219,6 @@ private:
                     ExynosCameraBuffer recordingBuf,
                     nsecs_t timeStamp);
     status_t    m_syncPrviewWithCSC(int32_t pipeId, int32_t gscPipe, ExynosCameraFrame *frame);
-    status_t    m_getAvailableRecordingCallbackHeapIndex(int *index);
-    status_t    m_releaseRecordingCallbackHeap(struct VideoNativeHandleMetadata *addr);
     status_t    m_releaseRecordingBuffer(int bufIndex);
 
     status_t    m_fastenAeStable(void);
@@ -225,8 +241,18 @@ private:
     status_t    m_setupFrameFactory(void);
     status_t    m_initFrameFactory(void);
     status_t    m_deinitFrameFactory(void);
+#ifdef ONE_SECOND_BURST_CAPTURE
+    void        m_clearOneSecondBurst(bool isJpegCallbackThread);
+#endif
     void        m_checkEntranceLux(struct camera2_shot_ext *meta_shot_ext);
     status_t    m_copyMetaFrameToFrame(ExynosCameraFrame *srcframe, ExynosCameraFrame *dstframe, bool useDm, bool useUdm);
+
+#ifdef SAMSUNG_DEBLUR
+    void        setUseDeblurCaptureOn(bool enable);
+    bool        getUseDeblurCaptureOn(void);
+    bool        m_deblurCaptureThreadFunc(void);
+    bool        m_detectDeblurCaptureThreadFunc(void);
+#endif
 
 public:
 
@@ -249,6 +275,9 @@ public:
     bool                            m_pictureEnabled;
     bool                            m_recordingEnabled;
     bool                            m_zslPictureEnabled;
+#ifdef OIS_CAPTURE
+    bool                            m_OISCaptureShutterEnabled;
+#endif
     bool                            m_use_companion;
     bool                            m_checkFirstFrameLux;
     ExynosCameraActivityControl     *m_exynosCameraActivityControl;
@@ -283,6 +312,23 @@ private:
 
     sp<mainCameraThread>            m_mainThread;
     bool                            m_mainThreadFunc(void);
+
+#ifdef SAMSUNG_COMPANION
+    sp<mainCameraThread>            m_companionThread;
+    bool                            m_companionThreadFunc(void);
+    int                             m_getSensorId(int m_cameraId);
+    ExynosCameraNode                *m_companionNode;
+#endif
+#ifdef SAMSUNG_EEPROM
+    sp<mainCameraThread>            m_eepromThread;
+    bool                            m_eepromThreadFunc(void);
+#endif
+#ifdef SAMSUNG_HLV
+    status_t                        m_ProgramAndProcessHLV(ExynosCameraBuffer *FrameBuffer);
+#endif
+#ifdef SAMSUNG_JQ
+    int                             m_processJpegQtable(ExynosCameraBuffer* buffer);
+#endif
 
     frame_queue_t                   *m_previewQ;
     frame_queue_t                   *m_previewCallbackGscFrameDoneQ;
@@ -323,6 +369,9 @@ private:
     ExynosCameraBufferManager       *m_sccBufferMgr;
     ExynosCameraBufferManager       *m_scpBufferMgr;
     ExynosCameraBufferManager       *m_zoomScalerBufferMgr;
+#ifdef SAMSUNG_DNG
+    ExynosCameraBufferManager       *m_fliteBufferMgr;
+#endif
 
     uint32_t                        m_fliteFrameCount;
     uint32_t                        m_3aa_ispFrameCount;
@@ -345,8 +394,6 @@ private:
 
     ExynosCameraBufferManager       *m_recordingBufferMgr;
     camera_memory_t                 *m_recordingCallbackHeap;
-    bool                            m_recordingCallbackHeapAvailable[MAX_BUFFERS];
-    mutable Mutex                   m_recordingCallbackHeapAvailableLock;
 
     bool                            m_recordingBufAvailable[MAX_BUFFERS];
     nsecs_t                         m_recordingTimeStamp[MAX_BUFFERS];
@@ -390,12 +437,18 @@ private:
 
     ExynosCameraBufferManager       *m_postPictureGscBufferMgr;
 
+#ifdef SAMSUNG_LBP
+    ExynosCameraBufferManager       *m_lbpBufferMgr;
+#endif
     ExynosCameraBufferManager       *m_jpegBufferMgr;
 
     ExynosCameraCounter             m_takePictureCounter;
     ExynosCameraCounter             m_reprocessingCounter;
     ExynosCameraCounter             m_pictureCounter;
     ExynosCameraCounter             m_jpegCounter;
+#ifdef ONE_SECOND_BURST_CAPTURE
+    ExynosCameraCounter             m_jpegCallbackCounter;
+#endif
 
     /* Reprocessing Q */
     frame_queue_t                   *dstIspReprocessingQ;
@@ -404,6 +457,27 @@ private:
 
     frame_queue_t                   *dstPostPictureGscQ;
 
+#ifdef RAWDUMP_CAPTURE
+    frame_queue_t                   *m_RawCaptureDumpQ;
+    sp<mainCameraThread>            m_RawCaptureDumpThread;
+    bool                            m_RawCaptureDumpThreadFunc(void);
+#endif
+
+#ifdef SAMSUNG_DNG
+    dng_capture_queue_t             *m_dngCaptureQ;
+    sp<mainCameraThread>            m_DNGCaptureThread;
+    bool                            m_searchDNGFrame;
+    unsigned int                    getDNGFcount();
+    bool                            m_DNGCaptureThreadFunc(void);
+    SecCameraDngCreator             m_dngCreator;
+    unsigned int                    m_dngFrameNumber;
+    char                            m_dngTime[20];
+    char                            m_dngSavePath[CAMERA_FILE_PATH_SIZE];
+    camera_memory_t*                m_getDngCallbackHeap(ExynosCameraBuffer *dngBuf);
+    unsigned int                    m_dngFrameNumberForManualExposure;
+    bool                            m_longExposureEnds;
+    unsigned int                    m_dngLongExposureRemainCount;
+#endif
     unsigned int                    m_longExposureRemainCount;
     bool                            m_longExposurePreview;
     bool                            m_stopLongExposure;
@@ -415,12 +489,36 @@ private:
     postview_callback_queue_t       *m_postviewCallbackQ;
     thumbnail_callback_queue_t      *m_thumbnailCallbackQ;
 
+#ifdef SAMSUNG_LBP
+    lbp_queue_t                     *m_LBPbufferQ;
+    lbp_buffer_t                    m_LBPbuffer[4];
+#endif
+#ifdef SAMSUNG_BD
+    bd_queue_t                      *m_BDbufferQ;
+    UTstr                           m_BDbuffer[MAX_BD_BUFF_NUM];
+    int                             m_BDbufferIndex;
+#endif
+
     bool                            m_flagStartFaceDetection;
     bool                            m_flagLLSStart;
     bool                            m_flagLightCondition;
+#ifdef SAMSUNG_CAMERA_EXTRA_INFO
+    bool                            m_flagFlashCallback;
+    bool                            m_flagHdrCallback;
+#endif
     camera_face_t                   m_faces[NUM_OF_DETECTED_FACES];
     camera_frame_metadata_t         m_frameMetadata;
     camera_memory_t                 *m_fdCallbackHeap;
+
+#ifdef SR_CAPTURE
+    camera_face_t                   m_faces_sr[NUM_OF_DETECTED_FACES];
+    camera_memory_t                 *m_srCallbackHeap;
+    struct camera2_dm               m_srShotMeta;
+    camera_frame_metadata_t         m_sr_frameMetadata;
+    bool                            m_isCopySrMdeta;
+    int                             m_sr_cropped_width;
+    int                             m_sr_cropped_height;
+#endif
 
     bool                            m_faceDetected;
     int                             m_fdThreshold;
@@ -461,8 +559,19 @@ private:
     sp<mainCameraThread>            m_jpegSaveThread[JPEG_SAVE_THREAD_MAX_COUNT];
     bool                            m_jpegSaveThreadFunc(void);
 
+#ifdef SAMSUNG_MAGICSHOT
+    int                             m_magicshotMaxCount;
+#endif
     sp<mainCameraThread>            m_postPictureGscThread;
     bool                            m_postPictureGscThreadFunc(void);
+
+#ifdef SAMSUNG_LBP
+    sp<mainCameraThread>            m_LBPThread;
+    bool                            m_LBPThreadFunc(void);
+#endif
+#ifdef SAMSUNG_LLS_DEBLUR
+    bool                            m_LDCaptureThreadFunc(void);
+#endif
 
     jpeg_callback_queue_t          *m_jpegSaveQ[JPEG_SAVE_THREAD_MAX_COUNT];
 
@@ -480,11 +589,27 @@ private:
     int                             m_burstShutterLocation;
 #endif
 
+#ifdef ONE_SECOND_BURST_CAPTURE
+    ExynosCameraDurationTimer       TakepictureDurationTimer;
+    uint64_t                        TakepictureDurationTime[ONE_SECOND_BURST_CAPTURE_CHECK_COUNT];
+    bool                            m_one_second_burst_capture;
+    bool                            m_one_second_burst_first_after_open;
+    camera_memory_t                 *m_one_second_jpegCallbackHeap;
+    camera_memory_t                 *m_one_second_postviewCallbackHeap;
+#endif
+
     bool                            m_stopBurstShot;
     bool                            m_burst[JPEG_SAVE_THREAD_MAX_COUNT];
     bool                            m_running[JPEG_SAVE_THREAD_MAX_COUNT];
 
     bool                            m_isZSLCaptureOn;
+
+#ifdef SAMSUNG_INF_BURST
+    char                            m_burstTime[20];
+#endif
+#ifdef LLS_CAPTURE
+    int                             m_needLLS_history[LLS_HISTORY_COUNT];
+#endif
 
     frame_queue_t                   *m_ThumbnailPostCallbackQ;
     ExynosCameraBufferManager       *m_thumbnailGscBufferMgr;
@@ -525,6 +650,12 @@ private:
     /* shutter callback */
     sp<mainCameraThread>            m_shutterCallbackThread;
     bool                            m_shutterCallbackThreadFunc(void);
+#ifdef SAMSUNG_DOF
+    void                            m_clearDOFmeta(void);
+#endif
+#ifdef SAMSUNG_OT
+    void                            m_clearOTmeta(void);
+#endif
 
     int                             m_previewBufferCount;
     struct ExynosConfigInfo         *m_exynosconfig;
@@ -548,9 +679,95 @@ private:
     sp<mainCameraThread>           m_zoomPreviwWithCscThread;
     bool                           m_zoomPreviwWithCscThreadFunc(void);
 
+#ifdef SAMSUNG_LLV
+#ifdef SAMSUNG_LLV_TUNING
+    int                            m_LLVpowerLevel;
+    status_t                       m_checkLLVtuning(void);
+#endif
+    int                            m_LLVstatus;
+    void                           *m_LLVpluginHandle;
+#endif
+#ifdef SAMSUNG_OT
+    void                           *m_OTpluginHandle;
+    UniPluginFocusData_t            m_OTfocusData;
+    UniPluginFocusData_t            m_OTpredictedData;
+    int                             m_OTstart;
+    int                             m_OTstatus;
+    bool                            m_OTisTouchAreaGet;
+    Mutex                           m_OT_mutex;
+    mutable Condition               m_OT_condition;
+    bool                            m_OTisWait;
+#endif
+#ifdef SAMSUNG_HLV
+    void                            *m_HLV;
+    int                             m_HLVprocessStep;
+#endif
+#ifdef SAMSUNG_LBP
+    int                            m_LBPindex;
+    int                            m_LBPCount;
+    void*                          m_LBPpluginHandle;
+    bool                           m_isLBPlux;
+    bool                           m_isLBPon;
+#endif
+#ifdef SAMSUNG_JQ
+    unsigned char                  m_qtable[128];
+    bool                           m_isJpegQtableOn;
+    void                           *m_JQpluginHandle;
+#endif
+#ifdef SAMSUNG_BD
+    void                           *m_BDpluginHandle;
+    int                             m_BDstatus;
+#endif
+#ifdef SAMSUNG_OIS_VDIS
+    UNI_PLUGIN_OIS_MODE             m_OISvdisMode;
+#endif
+#ifdef SAMSUNG_DEBLUR
+    void                           *m_DeblurpluginHandle;
+    void                           *m_ImgScreenerpluginHandle;
+#endif
+#ifdef SAMSUNG_LLS_DEBLUR
+    void                           *m_LLSpluginHandle;
+#endif
+#ifdef SAMSUNG_DOF
+    int                             m_lensmoveCount;
+    int                             m_AFstatus;
+    bool                            m_currentSetStart;
+    bool                            m_flagMetaDataSet;
+#endif
+#ifdef SAMSUNG_SENSOR_LISTENER
+    sp<mainCameraThread>            m_sensorListenerThread;
+    bool                            m_sensorListenerThreadFunc(void);
+#ifdef SAMSUNG_HRM
+    void*                           m_uv_rayHandle;
+    SensorListenerEvent_t           m_uv_rayListenerData;
+#endif
+#ifdef SAMSUNG_LIGHT_IR
+    void*                           m_light_irHandle;
+    SensorListenerEvent_t           m_light_irListenerData;
+#endif
+#ifdef SAMSUNG_GYRO
+    void*                           m_gyroHandle;
+    SensorListenerEvent_t           m_gyroListenerData;
+#endif
+#endif
+
 #ifdef FIRST_PREVIEW_TIME_CHECK
     ExynosCameraDurationTimer       m_firstPreviewTimer;
     bool                            m_flagFirstPreviewTimerOn;
+#endif
+#ifdef SAMSUNG_QUICKSHOT
+    bool                            m_quickShotStart;
+#endif
+#ifdef CAMERA_FAST_ENTRANCE_V1
+    bool                            m_isFirstParametersSet;
+    bool                            m_fastEntrance;
+    int                             m_fastenAeThreadResult;
+    sp<mainCameraThread>            m_fastenAeThread;
+    bool                            m_fastenAeThreadFunc(void);
+    status_t                        m_waitFastenAeThreadEnd(void);
+#endif
+#ifdef USE_CAMERA_PREVIEW_FRAME_SCHEDULER
+    sp<SecCameraPreviewFrameScheduler> m_previewFrameScheduler;
 #endif
 
     mutable Mutex                   m_metaCopyLock;
@@ -558,6 +775,23 @@ private:
     struct camera2_shot_ext         *m_fdmeta_shot;
     struct camera2_shot_ext         *m_meta_shot;
 
+#ifdef SAMSUNG_DEBLUR
+    bool                            m_useDeblurCaptureOn;
+    int                             m_deblurCaptureCount;
+    ExynosCameraFrame               *m_deblur_firstFrame;
+    ExynosCameraFrame               *m_deblur_secondFrame;
+    sp<mainCameraThread>            m_detectDeblurCaptureThread;
+    sp<mainCameraThread>            m_deblurCaptureThread;
+    deblur_capture_queue_t          *m_detectDeblurCaptureQ;
+    frame_queue_t                   *m_deblurCaptureQ;
+#endif
+
+#ifdef SAMSUNG_LLS_DEBLUR
+    sp<mainCameraThread>            m_LDCaptureThread;
+    frame_queue_t                   *m_LDCaptureQ;
+    int                             m_LDCaptureCount;
+    int                             m_LDBufIndex[MAX_LD_CAPTURE_COUNT];
+#endif
     int                             mIonClient;
 };
 

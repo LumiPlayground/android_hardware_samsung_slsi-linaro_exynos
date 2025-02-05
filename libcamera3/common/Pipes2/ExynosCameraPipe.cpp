@@ -86,7 +86,7 @@ status_t ExynosCameraPipe::precreate(int32_t *sensorIds)
     return create(sensorIds);
 }
 
-status_t ExynosCameraPipe::postcreate(int32_t *sensorIds)
+status_t ExynosCameraPipe::postcreate(__unused int32_t *sensorIds)
 {
     CLOGD("");
     return NO_ERROR;
@@ -386,7 +386,7 @@ status_t ExynosCameraPipe::sensorStream(bool on)
     return ret;
 }
 
-status_t ExynosCameraPipe::sensorStandby(bool on)
+status_t ExynosCameraPipe::sensorStandby(__unused bool on)
 {
     CLOGE("Don't use parent class function");
     return INVALID_OPERATION;
@@ -1196,7 +1196,19 @@ status_t ExynosCameraPipe::m_setInput(ExynosCameraNode *nodes[], int32_t *nodeNu
                     ((sensorIds[i] & INPUT_STREAM_MASK) >>  INPUT_STREAM_SHIFT),
                     ((sensorIds[i] & INPUT_MODULE_MASK) >>  INPUT_MODULE_SHIFT));
 
+#ifdef SAMSUNG_QUICK_SWITCH
+            if (nodeNums[CAPTURE_NODE] == FIMC_IS_VIDEO_SS4_NUM || nodeNums[CAPTURE_NODE] == FIMC_IS_VIDEO_SS5_NUM) {
+                if (m_parameters->getQuickSwitchCmd() == QUICK_SWITCH_CMD_IDLE_TO_STBY) {
+                    ret = nodes[i]->setInput(sensorIds[i] | (SENSOR_SCENARIO_STANDBY << SCENARIO_SHIFT));
+                } else {
+                    /* Skip the setInput for this node in the switching case */
+                }
+            } else {
+                ret = nodes[i]->setInput(sensorIds[i]);
+            }
+#else
             ret = nodes[i]->setInput(sensorIds[i]);
+#endif
             if (ret < 0) {
                 CLOGE(" nodeNums[%d] : %d, setInput(sensorIds : %d fail, ret(%d)",
                          i, nodeNums[i], sensorIds[i],
@@ -1351,7 +1363,15 @@ status_t ExynosCameraPipe::m_setNodeInfo(ExynosCameraNode *node, camera_pipe_inf
                             (enum v4l2_memory)pipeInfos->bufInfo.memory);
 
         if (flagValidSetFormatInfo == true) {
-#if defined(DEBUG_RAWDUMP)
+#ifdef SAMSUNG_DNG
+            if (m_parameters->getDNGCaptureModeOn() && getPipeId() == PIPE_FLITE) {
+                CLOGV(" DNG flite node->setFormat() getPipeId()(%d)",getPipeId());
+                if (node->setFormat() != NO_ERROR) {
+                    CLOGE(" node->setFormat() fail");
+                    return INVALID_OPERATION;
+                }
+            } else
+#elif defined(DEBUG_RAWDUMP)
             if (m_parameters->checkBayerDumpEnable() && flagBayer == true) {
                 //bytesPerLine[0] = (maxW + 16) * 2;
                 if (node->setFormat() != NO_ERROR) {
@@ -1493,8 +1513,6 @@ status_t ExynosCameraPipe::m_checkNodeGroupInfo(char *name, camera2_node *oldNod
         return INVALID_OPERATION;
     }
 
-    bool flagCropRegionChanged = false;
-
     for (int i = 0; i < 4; i++) {
         if (oldNode->input.cropRegion[i] != newNode->input.cropRegion[i] ||
             oldNode->output.cropRegion[i] != newNode->output.cropRegion[i]) {
@@ -1529,8 +1547,6 @@ status_t ExynosCameraPipe::m_checkNodeGroupInfo(int index, camera2_node *oldNode
         CLOGE(" oldNode(%p) == NULL || newNode(%p) == NULL", oldNode, newNode);
         return INVALID_OPERATION;
     }
-
-    bool flagCropRegionChanged = false;
 
     for (int i = 0; i < 4; i++) {
         if (oldNode->input.cropRegion[i] != newNode->input.cropRegion[i] ||

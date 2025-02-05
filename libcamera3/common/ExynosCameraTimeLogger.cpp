@@ -41,59 +41,30 @@ ExynosCameraTimeLogger::ExynosCameraTimeLogger()
 {
     strncpy(m_name, "TimeLogger", (EXYNOS_CAMERA_NAME_STR_SIZE - 1));
 
-    m_typeStr[LOGGER_TYPE_BASE]                                     = MAKE_STRING(INIT);
-    m_typeStr[LOGGER_TYPE_INTERVAL]                                 = MAKE_STRING(INTERVAL);
-    m_typeStr[LOGGER_TYPE_DURATION]                                 = MAKE_STRING(DURATION);
-    m_typeStr[LOGGER_TYPE_CUMULATIVE_CNT]                           = MAKE_STRING(CUMULATIVE_CNT);
-    m_typeStr[LOGGER_TYPE_USER_DATA]                                = MAKE_STRING(USER_DATA);
+    m_typeStr[LOGGER_TYPE_BASE]     = MAKE_STRING(INIT);
+    m_typeStr[LOGGER_TYPE_INTERVAL] = MAKE_STRING(INTERVAL);
+    m_typeStr[LOGGER_TYPE_DURATION] = MAKE_STRING(DURATION);
+    m_typeStr[LOGGER_TYPE_CUMULATIVE_CNT] = MAKE_STRING(CUMULATIVE_CNT);
+    m_typeStr[LOGGER_TYPE_USER_DATA] = MAKE_STRING(USER_DATA);
 
-    m_categoryStr[LOGGER_CATEGORY_BASE]                             = MAKE_STRING(INIT);
-    m_categoryStr[LOGGER_CATEGORY_QBUF]                             = MAKE_STRING(QBUF);
-    m_categoryStr[LOGGER_CATEGORY_DQBUF]                            = MAKE_STRING(DQBUF);
-
-    m_categoryStr[LOGGER_CATEGORY_POINT0]                           = MAKE_STRING(POINT0);
-    m_categoryStr[LOGGER_CATEGORY_POINT1]                           = MAKE_STRING(POINT1);
-    m_categoryStr[LOGGER_CATEGORY_POINT2]                           = MAKE_STRING(POINT2);
-    m_categoryStr[LOGGER_CATEGORY_POINT3]                           = MAKE_STRING(POINT3);
-    m_categoryStr[LOGGER_CATEGORY_POINT4]                           = MAKE_STRING(POINT4);
-    m_categoryStr[LOGGER_CATEGORY_POINT5]                           = MAKE_STRING(POINT5);
-    m_categoryStr[LOGGER_CATEGORY_POINT6]                           = MAKE_STRING(POINT6);
-    m_categoryStr[LOGGER_CATEGORY_POINT7]                           = MAKE_STRING(POINT7);
-    m_categoryStr[LOGGER_CATEGORY_POINT8]                           = MAKE_STRING(POINT8);
-    m_categoryStr[LOGGER_CATEGORY_POINT9]                           = MAKE_STRING(POINT9);
-
-    m_categoryStr[LOGGER_CATEGORY_OPEN_START]                       = MAKE_STRING(OPEN_START);
-    m_categoryStr[LOGGER_CATEGORY_OPEN_END]                         = MAKE_STRING(OPEN_END);
-    m_categoryStr[LOGGER_CATEGORY_INITIALIZE_START]                 = MAKE_STRING(INITIALIZE_START);
-    m_categoryStr[LOGGER_CATEGORY_INITIALIZE_END]                   = MAKE_STRING(INITIALIZE_END);
-    m_categoryStr[LOGGER_CATEGORY_FIRST_SET_PARAMETERS_START]       = MAKE_STRING(FIRST_SET_PARAMETERS_START);
-    m_categoryStr[LOGGER_CATEGORY_READ_ROM_THREAD_JOIN_START]       = MAKE_STRING(READ_ROM_THREAD_JOIN_START);
-    m_categoryStr[LOGGER_CATEGORY_READ_ROM_THREAD_JOIN_END]         = MAKE_STRING(READ_ROM_THREAD_JOIN_END);
-    m_categoryStr[LOGGER_CATEGORY_FIRST_SET_PARAMETERS_END]         = MAKE_STRING(FIRST_SET_PARAMETERS_END);
-    m_categoryStr[LOGGER_CATEGORY_CONFIGURE_STREAM_START]           = MAKE_STRING(CONFIGURE_STREAM_START);
-    m_categoryStr[LOGGER_CATEGORY_FASTEN_AE_THREAD_JOIN_START]      = MAKE_STRING(FASTEN_AE_THREAD_JOIN_START);
-    m_categoryStr[LOGGER_CATEGORY_FASTEN_AE_THREAD_JOIN_END]        = MAKE_STRING(FASTEN_AE_THREAD_JOIN_END);
-    m_categoryStr[LOGGER_CATEGORY_STREAM_BUFFER_ALLOC_START]        = MAKE_STRING(STREAM_BUFFER_ALLOC_START);
-    m_categoryStr[LOGGER_CATEGORY_STREAM_BUFFER_ALLOC_END]          = MAKE_STRING(STREAM_BUFFER_ALLOC_END);
-    m_categoryStr[LOGGER_CATEGORY_FACTORY_CREATE_THREAD_JOIN_START] = MAKE_STRING(FACTORY_CREATE_THREAD_JOIN_START);
-    m_categoryStr[LOGGER_CATEGORY_FACTORY_CREATE_THREAD_JOIN_END]   = MAKE_STRING(FACTORY_CREATE_THREAD_JOIN_END);
-    m_categoryStr[LOGGER_CATEGORY_CONFIGURE_STREAM_END]             = MAKE_STRING(CONFIGURE_STREAM_END);
-    m_categoryStr[LOGGER_CATEGORY_PROCESS_CAPTURE_REQUEST_START]    = MAKE_STRING(PROCESS_CAPTURE_REQUEST_START);
-    m_categoryStr[LOGGER_CATEGORY_SET_BUFFER_THREAD_JOIN_START]     = MAKE_STRING(SET_BUFFER_THREAD_JOIN_START);
-    m_categoryStr[LOGGER_CATEGORY_SET_BUFFER_THREAD_JOIN_END]       = MAKE_STRING(SET_BUFFER_THREAD_JOIN_END);
-    m_categoryStr[LOGGER_CATEGORY_FACTORY_START_THREAD_START]       = MAKE_STRING(FACTORY_START_THREAD_START);
-    m_categoryStr[LOGGER_CATEGORY_FACTORY_INIT_PIPES_START]         = MAKE_STRING(FACTORY_INIT_PIPES_START);
-    m_categoryStr[LOGGER_CATEGORY_FACTORY_INIT_PIPES_END]           = MAKE_STRING(FACTORY_INIT_PIPES_END);
-    m_categoryStr[LOGGER_CATEGORY_FACTORY_START_START]              = MAKE_STRING(FACTORY_START_START);
-    m_categoryStr[LOGGER_CATEGORY_HFD_CREATE_START]                 = MAKE_STRING(HFD_CREATE_START);
-    m_categoryStr[LOGGER_CATEGORY_HFD_CREATE_END]                   = MAKE_STRING(HFD_CREATE_END);
-    m_categoryStr[LOGGER_CATEGORY_FACTORY_START_END]                = MAKE_STRING(FACTORY_START_END);
-    m_categoryStr[LOGGER_CATEGORY_SLAVE_FACTORY_INIT_PIPES_START]   = MAKE_STRING(SLAVE_FACTORY_INIT_PIPES_START);
-    m_categoryStr[LOGGER_CATEGORY_SLAVE_FACTORY_INIT_PIPES_END]     = MAKE_STRING(SLAVE_FACTORY_INIT_PIPES_END);
-    m_categoryStr[LOGGER_CATEGORY_SLAVE_FACTORY_START_START]        = MAKE_STRING(SLAVE_FACTORY_START_START);
-    m_categoryStr[LOGGER_CATEGORY_SLAVE_FACTORY_START_END]          = MAKE_STRING(SLAVE_FACTORY_START_END);
-    m_categoryStr[LOGGER_CATEGORY_PREVIEW_STREAM_THREAD]            = MAKE_STRING(PREVIEW_STREAM_THREAD);
-    m_categoryStr[LOGGER_CATEGORY_RESULT_CALLBACK]                  = MAKE_STRING(RESULT_CALLBACK);
+    m_categoryStr[LOGGER_CATEGORY_BASE]             = MAKE_STRING(INIT);
+    m_categoryStr[LOGGER_CATEGORY_QBUF]             = MAKE_STRING(QBUF);
+    m_categoryStr[LOGGER_CATEGORY_DQBUF]            = MAKE_STRING(DQBUF);
+    m_categoryStr[LOGGER_CATEGORY_RECORDING_CALLBACK]  = MAKE_STRING(RECORDING_CALLBACK);
+    m_categoryStr[LOGGER_CATEGORY_RECORDING_RELEASE_FRAME] = MAKE_STRING(RECORDING_RELEASE_FRAME);
+    m_categoryStr[LOGGER_CATEGORY_PREVIEW_TRIGGER]  = MAKE_STRING(PREVIEW_TRIGGER);
+    m_categoryStr[LOGGER_CATEGORY_PREVIEW_SERVICE_ENQUEUE] = MAKE_STRING(PREVIEW_SERVICE_ENQUEUE);
+    m_categoryStr[LOGGER_CATEGORY_PREVIEW_CALLBACK] = MAKE_STRING(PREVIEW_CALLBACK);
+    m_categoryStr[LOGGER_CATEGORY_POINT0]           = MAKE_STRING(POINT0);
+    m_categoryStr[LOGGER_CATEGORY_POINT1]           = MAKE_STRING(POINT1);
+    m_categoryStr[LOGGER_CATEGORY_POINT2]           = MAKE_STRING(POINT2);
+    m_categoryStr[LOGGER_CATEGORY_POINT3]           = MAKE_STRING(POINT3);
+    m_categoryStr[LOGGER_CATEGORY_POINT4]           = MAKE_STRING(POINT4);
+    m_categoryStr[LOGGER_CATEGORY_POINT5]           = MAKE_STRING(POINT5);
+    m_categoryStr[LOGGER_CATEGORY_POINT6]           = MAKE_STRING(POINT6);
+    m_categoryStr[LOGGER_CATEGORY_POINT7]           = MAKE_STRING(POINT7);
+    m_categoryStr[LOGGER_CATEGORY_POINT8]           = MAKE_STRING(POINT8);
+    m_categoryStr[LOGGER_CATEGORY_POINT9]           = MAKE_STRING(POINT9);
 
     for (int i = 0; i < CAMERA_ID_MAX; i++) {
         m_buffer[i] = NULL;
@@ -137,7 +108,7 @@ status_t ExynosCameraTimeLogger::update(int cameraId, uint64_t key, uint32_t pip
     timeLogger_t *buffer;
     int bufferIndex;
 
-    if (m_stopFlag[cameraId] == true || checkCondition(category) == false)
+    if (m_stopFlag[cameraId])
         return ret;
 
     if (m_buffer[cameraId] == NULL) {
@@ -195,7 +166,7 @@ status_t ExynosCameraTimeLogger::update(int cameraId, uint64_t key, uint32_t pip
     return ret;
 
 p_logger:
-    bufferIndex = (android_atomic_inc(&m_bufferIndex[cameraId])) % TIME_LOGGER_SIZE;
+    bufferIndex = (android_atomic_inc(&m_bufferIndex[cameraId]) - 1) % TIME_LOGGER_SIZE;
     buffer = &m_buffer[cameraId][bufferIndex];
 
     /* save the time(us) or count */
@@ -243,12 +214,8 @@ status_t ExynosCameraTimeLogger::save(int cameraId)
     char filePath[128];
     timeLogger_t *buffer;
 
-    if (m_stopFlag[cameraId] == true) {
+    if (m_stopFlag[cameraId])
         return ret;
-    } else if (m_bufferIndex[cameraId] == 0) {
-        TIME_LOGGER_LOGD(cameraId, "No data to save");
-        return ret;
-    }
 
     m_stopFlag[cameraId] = true;
 
@@ -295,18 +262,4 @@ status_t ExynosCameraTimeLogger::save(int cameraId)
     m_buffer[cameraId] = NULL;
 
     return ret;
-}
-
-bool ExynosCameraTimeLogger::checkCondition(LOGGER_CATEGORY category)
-{
-    if (category > LOGGER_CATEGORY_LAUNCHING_TIME_START
-        && category < LOGGER_CATEGORY_LAUNCHING_TIME_END) {
-#ifdef TIME_LOGGER_LAUNCH_ENABLE
-        return true;
-#else
-        return false;
-#endif
-    }
-
-    return false;
 }

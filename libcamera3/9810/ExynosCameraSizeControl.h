@@ -35,8 +35,7 @@ namespace android {
 void updateNodeGroupInfo(
         int pipeId,
         ExynosCameraParameters *params,
-        camera2_node_group *node_group_info,
-        enum FRAME_FACTORY_TYPE factoryType = FRAME_FACTORY_TYPE_MAX);
+        camera2_node_group *node_group_info);
 
 /* Helper function */
 void setLeaderSizeToNodeGroupInfo(

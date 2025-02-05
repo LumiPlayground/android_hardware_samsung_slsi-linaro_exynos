@@ -294,6 +294,22 @@ ExynosCamera3SensorInfoBase::ExynosCamera3SensorInfoBase() : ExynosSensorInfoBas
     leds = NULL;
     ledsLength = 0;
 
+    /* Samsung Vendor Feature */
+#ifdef SAMSUNG_CONTROL_METERING
+    vendorMeteringModes = NULL;
+    vendorMeteringModesLength = 0;
+#endif
+#ifdef SAMSUNG_COMPANION
+    vendorHdrRange[MIN] = 0;
+    vendorHdrRange[MAX] = 0;
+
+    vendorPafAvailable = 0;
+#endif
+#ifdef SAMSUNG_OIS
+    vendorOISModes = NULL;
+    vendorOISModesLength = 0;
+#endif
+
     /* Android Info Static Metadata */
     supportedHwLevel = ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY;
 
@@ -657,6 +673,22 @@ ExynosCamera3SensorS5K2P2Base::ExynosCamera3SensorS5K2P2Base() : ExynosCamera3Se
     /* Android LED Static Metadata */
     leds = AVAILABLE_LEDS;
     ledsLength = ARRAY_LENGTH(AVAILABLE_LEDS);
+
+    /* Samsung Vendor Feature */
+#ifdef SAMSUNG_CONTROL_METERING
+    vendorMeteringModes = AVAILABLE_VENDOR_METERING_MODES;
+    vendorMeteringModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_METERING_MODES);
+#endif
+#ifdef SAMSUNG_COMPANION
+    vendorHdrRange[MIN] = 0;
+    vendorHdrRange[MAX] = 1;
+
+    vendorPafAvailable = 1;
+#endif
+#ifdef SAMSUNG_OIS
+    vendorOISModes = AVAILABLE_VENDOR_OIS_MODES;
+    vendorOISModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_OIS_MODES);
+#endif
 
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL; //0
@@ -3521,6 +3553,22 @@ ExynosCamera3SensorIMX240Base::ExynosCamera3SensorIMX240Base() : ExynosCamera3Se
     leds = AVAILABLE_LEDS;
     ledsLength = ARRAY_LENGTH(AVAILABLE_LEDS);
 
+    /* Samsung Vendor Feature */
+#ifdef SAMSUNG_CONTROL_METERING
+    vendorMeteringModes = AVAILABLE_VENDOR_METERING_MODES;
+    vendorMeteringModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_METERING_MODES);
+#endif
+#ifdef SAMSUNG_COMPANION
+    vendorHdrRange[MIN] = 0;
+    vendorHdrRange[MAX] = 1;
+
+    vendorPafAvailable = 1;
+#endif
+#ifdef SAMSUNG_OIS
+    vendorOISModes = AVAILABLE_VENDOR_OIS_MODES;
+    vendorOISModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_OIS_MODES);
+#endif
+
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL; //0
     /* END of Camera HAL 3.2 Static Metadatas */
@@ -3897,6 +3945,22 @@ ExynosCamera3SensorIMX240_2P2Base::ExynosCamera3SensorIMX240_2P2Base() : ExynosC
     /* Android LED Static Metadata */
     leds = AVAILABLE_LEDS;
     ledsLength = ARRAY_LENGTH(AVAILABLE_LEDS);
+
+    /* Samsung Vendor Feature */
+#ifdef SAMSUNG_CONTROL_METERING
+    vendorMeteringModes = AVAILABLE_VENDOR_METERING_MODES;
+    vendorMeteringModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_METERING_MODES);
+#endif
+#ifdef SAMSUNG_COMPANION
+    vendorHdrRange[MIN] = 0;
+    vendorHdrRange[MAX] = 1;
+
+    vendorPafAvailable = 1;
+#endif
+#ifdef SAMSUNG_OIS
+    vendorOISModes = AVAILABLE_VENDOR_OIS_MODES;
+    vendorOISModesLength = ARRAY_LENGTH(AVAILABLE_VENDOR_OIS_MODES);
+#endif
 
     /* Android Sync Static Metadata */
     maxLatency = ANDROID_SYNC_MAX_LATENCY_PER_FRAME_CONTROL; //0

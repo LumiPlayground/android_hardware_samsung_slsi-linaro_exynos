@@ -1197,6 +1197,13 @@ int64_t ExynosCameraFrame::getTimeStamp(void)
     return (int64_t)getMetaDmSensorTimeStamp(&m_metaData);
 }
 
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+int64_t ExynosCameraFrame::getTimeStampBoot(void)
+{
+    return (int64_t)getMetaUdmSensorTimeStampBoot(&m_metaData);
+}
+#endif
+
 void ExynosCameraFrame::getFpsRange(uint32_t *min, uint32_t *max)
 {
     getMetaCtlAeTargetFpsRange(&m_metaData, min, max);

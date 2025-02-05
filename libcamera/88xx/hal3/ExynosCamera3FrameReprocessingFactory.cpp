@@ -32,7 +32,7 @@ ExynosCamera3FrameReprocessingFactory::~ExynosCamera3FrameReprocessingFactory()
         CLOGE("ERR(%s[%d]):destroy fail", __FUNCTION__, __LINE__);
 }
 
-status_t ExynosCamera3FrameReprocessingFactory::create(bool active)
+status_t ExynosCamera3FrameReprocessingFactory::create(void)
 {
     CLOGI("INFO(%s[%d])", __FUNCTION__, __LINE__);
 
@@ -328,24 +328,6 @@ status_t ExynosCamera3FrameReprocessingFactory::initPipes(void)
             for (int i = 0; i < MAX_NODE; i++)
                 pipeInfo[i] = nullPipeInfo;
         }
-    } else {
-        /*
-        * 3A video node is opened for dirty bayer.
-        * So, we have to do setinput to 3A video node.
-        */
-        pipeId = PIPE_3AA_REPROCESSING;
-
-        /* setup pipe info to 3AA pipe */
-        ret = m_pipes[INDEX(pipeId)]->setupPipe(pipeInfo, m_sensorIds[INDEX(pipeId)]);
-        if (ret != NO_ERROR) {
-            CLOGE("ERR(%s[%d]):3AA setupPipe for dirty bayer reprocessing  fail, ret(%d)", __FUNCTION__, __LINE__, ret);
-            /* TODO: exception handling */
-            return INVALID_OPERATION;
-        }
-
-        /* clear pipeInfo for next setupPipe */
-        for (int i = 0; i < MAX_NODE; i++)
-            pipeInfo[i] = nullPipeInfo;
     }
 
     /*
@@ -373,7 +355,13 @@ status_t ExynosCamera3FrameReprocessingFactory::initPipes(void)
         pipeInfo[nodeType].bytesPerPlane[0] = getBayerLineSize(tempRect.fullW, bayerFormat);
 
         /* set v4l2 video node buffer count */
-        pipeInfo[nodeType].bufInfo.count = m_supportPureBayerReprocessing ? config->current->bufInfo.num_picture_buffers : config->current->bufInfo.num_bayer_buffers;
+        if(m_supportPureBayerReprocessing) {
+            pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
+        } else if (m_parameters->isSupportZSLInput()) {
+            pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
+        } else {
+            pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_bayer_buffers;
+        }
 
         /* Set output node default info */
         int ispPerframeInfoIndex = m_supportPureBayerReprocessing ? PERFRAME_INFO_PURE_REPROCESSING_ISP : PERFRAME_INFO_DIRTY_REPROCESSING_ISP;
@@ -445,6 +433,29 @@ status_t ExynosCamera3FrameReprocessingFactory::initPipes(void)
         /* Set output node default info */
         int mcscPerframeInfoIndex = m_supportPureBayerReprocessing ? PERFRAME_INFO_PURE_REPROCESSING_MCSC : PERFRAME_INFO_DIRTY_REPROCESSING_MCSC;
         SET_OUTPUT_DEVICE_BASIC_INFO(mcscPerframeInfoIndex);
+    }
+
+    if (m_supportSingleChain == true) {
+        /* MCSC2 */
+        nodeType = getNodeType(PIPE_MCSC2_REPROCESSING);
+        perFramePos = PERFRAME_REPROCESSING_MCSC2_POS;
+
+        /* set v4l2 buffer size */
+        if (m_parameters->getHighResolutionCallbackMode() == true) {
+            tempRect.fullW = pictureW;
+            tempRect.fullH = pictureH;
+        } else {
+            tempRect.fullW = hwPictureW;
+            tempRect.fullH = hwPictureH;
+        }
+        tempRect.colorFormat = pictureFormat;
+
+        /* set v4l2 video node buffer count */
+        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
+        pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW;
+
+        /* Set capture node default info */
+        SET_CAPTURE_DEVICE_BASIC_INFO();
     }
 
     /* MCSC3 */
@@ -618,6 +629,15 @@ status_t ExynosCamera3FrameReprocessingFactory::startPipes(void)
         }
     }
 
+    if (m_supportSingleChain == true) {
+        ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->start();
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):PIPE_GSC_REPROCESSING start fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+    }
+
     ret = m_transitState(FRAME_FACTORY_STATE_RUN);
     if (ret != NO_ERROR) {
         CLOGE("ERR(%s[%d]):Failed to transitState. ret %d",
@@ -652,6 +672,18 @@ status_t ExynosCamera3FrameReprocessingFactory::stopPipes(void)
             CLOGE("ERR(%s[%d]):ISP stopThread fail, ret(%d)", __FUNCTION__, __LINE__, ret);
             /* TODO: exception handling */
             return INVALID_OPERATION;
+        }
+    }
+
+    if (m_supportSingleChain == true) {
+        /* GSC Reprocessing Thread stop */
+        if (m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->isThreadRunning() == true) {
+            ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->stopThread();
+            if (ret != NO_ERROR) {
+                CLOGE("ERR(%s[%d]):PIPE_GSC_REPROCESSING stopThread fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+                /* TODO: exception handling */
+                return INVALID_OPERATION;
+            }
         }
     }
 
@@ -695,6 +727,13 @@ status_t ExynosCamera3FrameReprocessingFactory::stopPipes(void)
         }
     }
 
+    if (m_supportSingleChain == true) {
+        ret = stopThreadAndWait(PIPE_GSC_REPROCESSING);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):PIPE_GSC_REPROCESSING stopThreadAndWait fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        }
+    }
+
     ret = m_transitState(FRAME_FACTORY_STATE_CREATE);
     if (ret != NO_ERROR) {
         CLOGE("ERR(%s[%d]):Failed to transitState. ret %d",
@@ -725,6 +764,9 @@ status_t ExynosCamera3FrameReprocessingFactory::setStopFlag(void)
     ret = m_pipes[INDEX(PIPE_3AA_REPROCESSING)]->setStopFlag();
     ret = m_pipes[INDEX(PIPE_ISP_REPROCESSING)]->setStopFlag();
     ret = m_pipes[INDEX(PIPE_MCSC_REPROCESSING)]->setStopFlag();
+    if (m_supportSingleChain == true) {
+        ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->setStopFlag();
+    }
 
     return NO_ERROR;
 }
@@ -879,6 +921,15 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_OUTPUT", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[previousPipeId].nodeNum[getNodeType(PIPE_ISPP_REPROCESSING)], m_flagIspMcscOTF, flagStreamLeader, m_flagReprocessing);
 
+    if (m_supportSingleChain == true) {
+        /* MCSC2 */
+        nodeType = getNodeType(PIPE_MCSC2_REPROCESSING);
+        m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC2_REPROCESSING;
+        m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcscp2;
+        strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_CAPTURE_YUV", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+        m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
+    }
+
     /* MCSC3 */
     nodeType = getNodeType(PIPE_MCSC3_REPROCESSING);
     m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC3_REPROCESSING;
@@ -991,6 +1042,12 @@ status_t ExynosCamera3FrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCamera
     int pipeId = -1;
     uint32_t perframePosition = 0;
 
+#ifdef SR_CAPTURE
+    if(m_parameters->getSROn()) {
+        zoom = ZOOM_LEVEL_0;
+    }
+#endif
+
     memset(&node_group_info_3aa, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_isp, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_mcsc, 0x0, sizeof(camera2_node_group));
@@ -1039,6 +1096,12 @@ status_t ExynosCamera3FrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCamera
         node_group_info_temp->leader.request = 1;
     }
 
+    if(m_supportSingleChain == true) {
+        node_group_info_temp->capture[perframePosition].request = m_requestMCSC2;
+        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC2_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
+        perframePosition++;
+    }
+
     node_group_info_temp->capture[perframePosition].request = m_requestMCSC3;
     node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC3_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
     perframePosition++;
@@ -1069,7 +1132,7 @@ status_t ExynosCamera3FrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCamera
 void ExynosCamera3FrameReprocessingFactory::m_init(void)
 {
     m_flagReprocessing = true;
-    m_flagHWFCEnabled = m_parameters->isHWFCEnabled();
+    m_flagHWFCEnabled = m_parameters->isUseHWFC();
 }
 
 }; /* namespace android */

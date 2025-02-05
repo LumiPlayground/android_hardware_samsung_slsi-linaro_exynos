@@ -248,7 +248,7 @@ status_t ExynosCamera3FrameReprocessingFactory::initPipes(void)
     m_parameters->getHwPictureSize(&hwPictureW, &hwPictureH);
     m_parameters->getPictureSize(&pictureW, &pictureH);
     m_parameters->getMaxThumbnailSize(&maxThumbnailW, &maxThumbnailH);
-    m_parameters->getPreviewBayerCropSize(&bnsSize, &bayerCropSize);
+    m_parameters->getPreviewBayerCropSize(&bnsSize, &bayerCropSize); 
 
     CLOGI(" MaxPreviewSize(%dx%d), HwPreviewSize(%dx%d)", maxPreviewW, maxPreviewH, hwPreviewW, hwPreviewH);
     CLOGI(" MaxPixtureSize(%dx%d), HwPixtureSize(%dx%d)", maxPictureW, maxPictureH, hwPictureW, hwPictureH);
@@ -360,7 +360,7 @@ status_t ExynosCamera3FrameReprocessingFactory::initPipes(void)
         bayerFormat = m_parameters->getBayerFormat(PIPE_ISP_REPROCESSING);
 
         /* set v4l2 buffer size */
-        if (m_supportPureBayerReprocessing == true) {
+        if (m_parameters->getUsePureBayerReprocessing() == true) {
             tempRect.fullW = hwPictureW;
             tempRect.fullH = hwPictureH;
         } else {
@@ -454,7 +454,7 @@ status_t ExynosCamera3FrameReprocessingFactory::initPipes(void)
         SET_OUTPUT_DEVICE_BASIC_INFO(mcscPerframeInfoIndex);
     }
 
-    if (m_numOfHwChains == 1) {
+    if (m_supportSingleChain == true) {
         /* MCSC2 */
         nodeType = getNodeType(PIPE_MCSC2_REPROCESSING);
         perFramePos = PERFRAME_REPROCESSING_MCSC2_POS;
@@ -648,7 +648,7 @@ status_t ExynosCamera3FrameReprocessingFactory::startPipes(void)
         }
     }
 
-    if (m_numOfHwChains == 1) {
+    if (m_supportSingleChain == true) {
         ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->start();
         if (ret != NO_ERROR) {
             CLOGE("PIPE_GSC_REPROCESSING start fail, ret(%d)", ret);
@@ -672,6 +672,7 @@ status_t ExynosCamera3FrameReprocessingFactory::startPipes(void)
 status_t ExynosCamera3FrameReprocessingFactory::stopPipes(void)
 {
     status_t ret = NO_ERROR;
+    status_t funcRet = NO_ERROR;
     CLOGI("");
 
     /* 3AA Reprocessing Thread stop */
@@ -680,7 +681,7 @@ status_t ExynosCamera3FrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("ISP stopThread fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
@@ -690,18 +691,18 @@ status_t ExynosCamera3FrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("ISP stopThread fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
-    if (m_numOfHwChains == 1) {
+    if (m_supportSingleChain == true) {
         /* GSC Reprocessing Thread stop */
         if (m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->isThreadRunning() == true) {
             ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->stopThread();
             if (ret != NO_ERROR) {
                 CLOGE("PIPE_GSC_REPROCESSING stopThread fail, ret(%d)", ret);
                 /* TODO: exception handling */
-                return INVALID_OPERATION;
+                funcRet |= ret;
             }
         }
     }
@@ -712,7 +713,7 @@ status_t ExynosCamera3FrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("MCSC stopThread fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
@@ -722,7 +723,7 @@ status_t ExynosCamera3FrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("ISP stop fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
@@ -732,7 +733,7 @@ status_t ExynosCamera3FrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("ISP stop fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
@@ -742,11 +743,11 @@ status_t ExynosCamera3FrameReprocessingFactory::stopPipes(void)
         if (ret != NO_ERROR) {
             CLOGE("MCSC stop fail, ret(%d)", ret);
             /* TODO: exception handling */
-            return INVALID_OPERATION;
+            funcRet |= ret;
         }
     }
 
-    if (m_numOfHwChains == 1) {
+    if (m_supportSingleChain == true) {
         ret = stopThreadAndWait(PIPE_GSC_REPROCESSING);
         if (ret != NO_ERROR) {
             CLOGE("PIPE_GSC_REPROCESSING stopThreadAndWait fail, ret(%d)", ret);
@@ -757,12 +758,12 @@ status_t ExynosCamera3FrameReprocessingFactory::stopPipes(void)
     if (ret != NO_ERROR) {
         CLOGE("Failed to transitState. ret %d",
                  ret);
-        return ret;
+        funcRet |= ret;
     }
 
     CLOGI("Stopping Reprocessing [3AA>MCSC] Success!");
 
-    return NO_ERROR;
+    return funcRet;
 }
 
 status_t ExynosCamera3FrameReprocessingFactory::startInitialThreads(void)
@@ -783,8 +784,9 @@ status_t ExynosCamera3FrameReprocessingFactory::setStopFlag(void)
     ret = m_pipes[INDEX(PIPE_3AA_REPROCESSING)]->setStopFlag();
     ret = m_pipes[INDEX(PIPE_ISP_REPROCESSING)]->setStopFlag();
     ret = m_pipes[INDEX(PIPE_MCSC_REPROCESSING)]->setStopFlag();
-    if (m_numOfHwChains == 1)
+    if (m_supportSingleChain == true) {
         ret = m_pipes[INDEX(PIPE_GSC_REPROCESSING)]->setStopFlag();
+    }
 
     return NO_ERROR;
 }
@@ -807,12 +809,9 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
     m_flagIspMcscOTF = m_parameters->isReprocessingIspMcscOtf();
     m_flagTpuMcscOTF = m_parameters->isReprocessingTpuMcscOtf();
 
-    m_numOfHwChains = m_parameters->getNumOfHwChains();
-    m_supportReprocessing = m_parameters->isReprocessingCapture();
-    if (m_parameters->getReprocessingMode() == PROCESSING_MODE_REPROCESSING_PURE_BAYER)
-        m_supportPureBayerReprocessing = true;
-    else
-        m_supportPureBayerReprocessing = false;
+    m_supportReprocessing = m_parameters->isReprocessing();
+    m_supportSingleChain = m_parameters->isSingleChain();
+    m_supportPureBayerReprocessing = m_parameters->getUsePureBayerReprocessing();
 
     m_request3AP = !(m_flag3aaIspOTF);
     if (m_flagIspTpuOTF == false && m_flagIspMcscOTF == false)
@@ -824,46 +823,23 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
         m_requestThumbnail = true;
     }
 
-    switch (m_numOfHwChains) {
-    case 1:
+    if (m_cameraId == CAMERA_ID_FRONT && m_parameters->getDualMode() == false) {
+        node3aa = FIMC_IS_VIDEO_31S_NUM;
+        node3ac = FIMC_IS_VIDEO_31C_NUM;
+        node3ap = FIMC_IS_VIDEO_31P_NUM;
+    } else {
         node3aa = FIMC_IS_VIDEO_30S_NUM;
         node3ac = FIMC_IS_VIDEO_30C_NUM;
         node3ap = FIMC_IS_VIDEO_30P_NUM;
-        nodeIsp = FIMC_IS_VIDEO_I0S_NUM;
-        nodeIspc = FIMC_IS_VIDEO_I0C_NUM;
-        nodeIspp = FIMC_IS_VIDEO_I0P_NUM;
-        nodeMcsc = FIMC_IS_VIDEO_M0S_NUM;
-        nodeMcscp2 = FIMC_IS_VIDEO_M0P_NUM;
-        nodeMcscp3 = FIMC_IS_VIDEO_M1P_NUM;
-        nodeMcscp4 = FIMC_IS_VIDEO_M2P_NUM;
-        break;
-    case 2:
-        if (m_cameraId == CAMERA_ID_FRONT
-            && m_parameters->getDualMode() == false
-           ) {
-            node3aa = FIMC_IS_VIDEO_31S_NUM;
-            node3ac = FIMC_IS_VIDEO_31C_NUM;
-            node3ap = FIMC_IS_VIDEO_31P_NUM;
-        } else {
-            node3aa = FIMC_IS_VIDEO_30S_NUM;
-            node3ac = FIMC_IS_VIDEO_30C_NUM;
-            node3ap = FIMC_IS_VIDEO_30P_NUM;
-        }
-
-        nodeIsp = FIMC_IS_VIDEO_I1S_NUM;
-        nodeIspc = FIMC_IS_VIDEO_I1C_NUM;
-        nodeIspp = FIMC_IS_VIDEO_I1P_NUM;
-        nodeMcsc = FIMC_IS_VIDEO_M1S_NUM;
-        nodeMcscp2 = FIMC_IS_VIDEO_M2P_NUM;
-        nodeMcscp3 = FIMC_IS_VIDEO_M3P_NUM;
-        nodeMcscp4 = FIMC_IS_VIDEO_M4P_NUM;
-        break;
-    default:
-        CLOGE("Unsupported HW chain count(%d)!", m_numOfHwChains);
-        return BAD_VALUE;
-        break;
     }
 
+    nodeIsp = FIMC_IS_VIDEO_I1S_NUM;
+    nodeIspc = FIMC_IS_VIDEO_I1C_NUM;
+    nodeIspp = FIMC_IS_VIDEO_I1P_NUM;
+    nodeMcsc = FIMC_IS_VIDEO_M1S_NUM;
+    nodeMcscp2 = FIMC_IS_VIDEO_M2P_NUM;
+    nodeMcscp3 = FIMC_IS_VIDEO_M3P_NUM;
+    nodeMcscp4 = FIMC_IS_VIDEO_M4P_NUM;
 
     m_initDeviceInfo(INDEX(PIPE_3AA_REPROCESSING));
     m_initDeviceInfo(INDEX(PIPE_ISP_REPROCESSING));
@@ -886,6 +862,14 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
 
     bool flagUseCompanion = false;
     bool flagQuickSwitchFlag = false;
+
+#ifdef SAMSUNG_COMPANION
+    flagUseCompanion = m_parameters->getUseCompanion();
+#endif
+
+#ifdef SAMSUNG_QUICK_SWITCH
+    flagQuickSwitchFlag = m_parameters->getQuickSwitchFlag();
+#endif
 
     /* 3AS */
     nodeType = getNodeType(PIPE_3AA_REPROCESSING);
@@ -963,7 +947,7 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_OUTPUT", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[previousPipeId].nodeNum[getNodeType(PIPE_ISPP_REPROCESSING)], m_flagIspMcscOTF, flagStreamLeader, m_flagReprocessing);
 
-    if (m_numOfHwChains == 1) {
+    if (m_supportSingleChain == true) {
         /* MCSC2 */
         nodeType = getNodeType(PIPE_MCSC2_REPROCESSING);
         m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC2_REPROCESSING;
@@ -1084,6 +1068,12 @@ status_t ExynosCamera3FrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCamera
     int pipeId = -1;
     uint32_t perframePosition = 0;
 
+#ifdef SR_CAPTURE
+    if(m_parameters->getSROn()) {
+        zoom = ZOOM_LEVEL_0;
+    }
+#endif
+
     memset(&node_group_info_3aa, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_isp, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_mcsc, 0x0, sizeof(camera2_node_group));
@@ -1132,7 +1122,7 @@ status_t ExynosCamera3FrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCamera
         node_group_info_temp->leader.request = 1;
     }
 
-    if(m_numOfHwChains == 1) {
+    if(m_supportSingleChain == true) {
         node_group_info_temp->capture[perframePosition].request = m_requestMCSC2;
         node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC2_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
         perframePosition++;

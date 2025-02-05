@@ -30,7 +30,7 @@ int ExynosCameraActivityAutofocus::t_func3ABefore(void *args)
     shot_ext = (struct camera2_shot_ext *)(buf->addr[buf->getMetaPlaneIndex()]);
 
     if (shot_ext == NULL) {
-        CLOGE("shot_ext is null");
+        CLOGE2("shot_ext is null");
         return false;
     }
 
@@ -76,7 +76,7 @@ int ExynosCameraActivityAutofocus::t_func3ABefore(void *args)
                         AUTOFOCUS_WAIT_COUNT_STEP_REQUEST < m_stepRequestCount) {
 
                     if (AUTOFOCUS_WAIT_COUNT_STEP_REQUEST < m_stepRequestCount)
-                        CLOGD("m_stepRequestCount(%d), force AUTOFOCUS_STEP_START",
+                        CLOGD2("m_stepRequestCount(%d), force AUTOFOCUS_STEP_START",
                                  m_stepRequestCount);
 
                     m_stepRequestCount = 0;
@@ -122,7 +122,27 @@ int ExynosCameraActivityAutofocus::t_func3ABefore(void *args)
                 }
             }
 
-            CLOGD("AF-Mode(HAL/FW)=(%d/%d(%d)) AF-Region(x1,y1,x2,y2,weight)=(%d, %d, %d, %d, %d)",
+#ifdef SAMSUNG_OT
+            if (m_interenalAutoFocusMode == AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE ||
+                    m_interenalAutoFocusMode == AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO) {
+                shot_ext->shot.uctl.aaUd.af_data.focusState = m_OTfocusData.FocusState;
+                shot_ext->shot.uctl.aaUd.af_data.focusROILeft = m_OTfocusData.FocusROILeft;
+                shot_ext->shot.uctl.aaUd.af_data.focusROIRight = m_OTfocusData.FocusROIRight;
+                shot_ext->shot.uctl.aaUd.af_data.focusROITop = m_OTfocusData.FocusROITop;
+                shot_ext->shot.uctl.aaUd.af_data.focusROIBottom = m_OTfocusData.FocusROIBottom;
+                shot_ext->shot.uctl.aaUd.af_data.focusWeight = m_OTfocusData.FocusWeight;
+                shot_ext->shot.uctl.aaUd.af_data.w_movement = m_OTfocusData.W_Movement;
+                shot_ext->shot.uctl.aaUd.af_data.h_movement = m_OTfocusData.H_Movement;
+                shot_ext->shot.uctl.aaUd.af_data.w_velocity = m_OTfocusData.W_Velocity;
+                shot_ext->shot.uctl.aaUd.af_data.h_velocity = m_OTfocusData.H_Velocity;
+                CLOGV2("[OBTR]Meta for AF Library, state: %d, x1: %d, x2: %d, y1: %d, y2: %d, weight: %d",
+                         m_OTfocusData.FocusState,
+                        m_OTfocusData.FocusROILeft, m_OTfocusData.FocusROIRight,
+                        m_OTfocusData.FocusROITop, m_OTfocusData.FocusROIBottom, m_OTfocusData.FocusWeight);
+            }
+#endif
+
+            CLOGD2("AF-Mode(HAL/FW)=(%d/%d(%d)) AF-Region(x1,y1,x2,y2,weight)=(%d, %d, %d, %d, %d)",
                      m_interenalAutoFocusMode, shot_ext->shot.ctl.aa.afMode, shot_ext->shot.ctl.aa.vendor_afmode_option,
                     shot_ext->shot.ctl.aa.afRegions[0],
                     shot_ext->shot.ctl.aa.afRegions[1],
@@ -143,6 +163,10 @@ int ExynosCameraActivityAutofocus::t_func3ABefore(void *args)
                 case AUTOFOCUS_MODE_CONTINUOUS_VIDEO:
                 case AUTOFOCUS_MODE_CONTINUOUS_PICTURE:
                 case AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO:
+#ifdef SAMSUNG_OT
+                case AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE:
+                case AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO:
+#endif
                     m_autofocusStep = AUTOFOCUS_STEP_SCANNING;
                     break;
                     /* these need to wait starting af */
@@ -182,10 +206,33 @@ int ExynosCameraActivityAutofocus::t_func3ABefore(void *args)
                 shot_ext->shot.ctl.aa.afRegions[4] = m_focusWeight;
             }
 
+#ifdef SAMSUNG_OT
+            if (m_interenalAutoFocusMode == AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO ||
+                    m_interenalAutoFocusMode == AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE ) {
+                shot_ext->shot.uctl.aaUd.af_data.focusState = m_OTfocusData.FocusState;
+                shot_ext->shot.uctl.aaUd.af_data.focusROILeft = m_OTfocusData.FocusROILeft;
+                shot_ext->shot.uctl.aaUd.af_data.focusROIRight = m_OTfocusData.FocusROIRight;
+                shot_ext->shot.uctl.aaUd.af_data.focusROITop = m_OTfocusData.FocusROITop;
+                shot_ext->shot.uctl.aaUd.af_data.focusROIBottom = m_OTfocusData.FocusROIBottom;
+                shot_ext->shot.uctl.aaUd.af_data.focusWeight = m_OTfocusData.FocusWeight;
+                shot_ext->shot.uctl.aaUd.af_data.w_movement = m_OTfocusData.W_Movement;
+                shot_ext->shot.uctl.aaUd.af_data.h_movement = m_OTfocusData.H_Movement;
+                shot_ext->shot.uctl.aaUd.af_data.w_velocity = m_OTfocusData.W_Velocity;
+                shot_ext->shot.uctl.aaUd.af_data.h_velocity = m_OTfocusData.H_Velocity;
+                CLOGV2("[OBTR]Library state: %d, x1: %d, x2: %d, y1: %d, y2: %d, weight: %d",
+                         m_OTfocusData.FocusState,
+                        m_OTfocusData.FocusROILeft, m_OTfocusData.FocusROIRight,
+                        m_OTfocusData.FocusROITop, m_OTfocusData.FocusROIBottom, m_OTfocusData.FocusWeight);
+            }
+#endif
             switch (m_interenalAutoFocusMode) {
                 case AUTOFOCUS_MODE_CONTINUOUS_VIDEO:
                 case AUTOFOCUS_MODE_CONTINUOUS_PICTURE:
                 case AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO:
+#ifdef SAMSUNG_OT
+                case AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE:
+                case AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO:
+#endif
                     break;
                 default:
                     if (currentState == AUTOFOCUS_STATE_SUCCEESS ||
@@ -230,7 +277,7 @@ int ExynosCameraActivityAutofocus::t_func3AAfter(void *args)
     shot_ext = (struct camera2_shot_ext *)(buf->addr[buf->getMetaPlaneIndex()]);
 
     if (shot_ext == NULL) {
-        CLOGE("shot_ext is null");
+        CLOGE2("shot_ext is null");
         return false;
     }
 
@@ -256,7 +303,7 @@ int ExynosCameraActivityAutofocus::t_func3AAfter(void *args)
 
 bool ExynosCameraActivityAutofocus::setAutofocusMode(int autoFocusMode)
 {
-    CLOGI("autoFocusMode(%d)", autoFocusMode);
+    CLOGI2("autoFocusMode(%d)", autoFocusMode);
 
     bool ret = true;
 
@@ -270,10 +317,17 @@ bool ExynosCameraActivityAutofocus::setAutofocusMode(int autoFocusMode)
     case AUTOFOCUS_MODE_CONTINUOUS_PICTURE:
     case AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO:
     case AUTOFOCUS_MODE_TOUCH:
+#ifdef SAMSUNG_OT
+    case AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE:
+    case AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO:
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+    case AUTOFOCUS_MODE_MANUAL:
+#endif
         m_autoFocusMode = autoFocusMode;
         break;
     default:
-        CLOGE("invalid focus mode(%d) fail", autoFocusMode);
+        CLOGE2("invalid focus mode(%d) fail", autoFocusMode);
         ret = false;
         break;
     }
@@ -281,9 +335,30 @@ bool ExynosCameraActivityAutofocus::setAutofocusMode(int autoFocusMode)
     return ret;
 }
 
+#ifdef SAMSUNG_OT
+bool ExynosCameraActivityAutofocus::setObjectTrackingAreas(UniPluginFocusData_t* focusData)
+{
+    if(focusData == NULL) {
+        CLOGE2(" NULL focusData is received!!");
+        return false;
+    }
+
+    memcpy(&m_OTfocusData, focusData, sizeof(UniPluginFocusData_t));
+
+    return true;
+}
+
+bool ExynosCameraActivityAutofocus::setObjectTrackingStart(bool isStart)
+{
+    m_isOTstart = isStart;
+
+    return true;
+}
+#endif
+
 bool ExynosCameraActivityAutofocus::getAutofocusResult(bool flagLockFocus, bool flagStartFaceDetection, int numOfFace)
 {
-    CLOGI("getAutofocusResult in m_autoFocusMode(%d)",
+    CLOGI2("getAutofocusResult in m_autoFocusMode(%d)",
          m_autoFocusMode);
 
     bool ret = false;
@@ -297,9 +372,17 @@ bool ExynosCameraActivityAutofocus::getAutofocusResult(bool flagLockFocus, bool 
 
     unsigned int waitTimeoutFpsValue = 0;
 
-    waitTimeoutFpsValue = 1;
+    if (m_samsungCamera) {
+        if (getFpsValue() > 0) {
+            waitTimeoutFpsValue = 30 / getFpsValue();
+        }
+        if (waitTimeoutFpsValue < 1)
+            waitTimeoutFpsValue = 1;
+    } else {
+        waitTimeoutFpsValue = 1;
+    }
 
-    CLOGI("waitTimeoutFpsValue(%d), getFpsValue(%d), flagStartFaceDetection(%d), numOfFace(%d)",
+    CLOGI2("waitTimeoutFpsValue(%d), getFpsValue(%d), flagStartFaceDetection(%d), numOfFace(%d)",
              waitTimeoutFpsValue, getFpsValue(), flagStartFaceDetection, numOfFace);
 
     for (i = 0; i < AUTOFOCUS_TOTAL_WATING_TIME * waitTimeoutFpsValue; i += AUTOFOCUS_WATING_TIME) {
@@ -311,7 +394,7 @@ bool ExynosCameraActivityAutofocus::getAutofocusResult(bool flagLockFocus, bool 
         if(flagtrigger && flagLockFocus && (m_interenalAutoFocusMode == m_autoFocusMode)) {
             m_autofocusStep = AUTOFOCUS_STEP_TRIGGER_START;
             flagtrigger = false;
-            CLOGI("m_aaAfState(%d) flagLockFocus(%d) m_interenalAutoFocusMode(%d) m_autoFocusMode(%d)",
+            CLOGI2("m_aaAfState(%d) flagLockFocus(%d) m_interenalAutoFocusMode(%d) m_autoFocusMode(%d)",
                  m_aaAfState, flagLockFocus, m_interenalAutoFocusMode, m_autoFocusMode);
         }
 
@@ -341,6 +424,10 @@ bool ExynosCameraActivityAutofocus::getAutofocusResult(bool flagLockFocus, bool 
         case AUTOFOCUS_MODE_CONTINUOUS_VIDEO:
         case AUTOFOCUS_MODE_CONTINUOUS_PICTURE:
         case AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO:
+#ifdef SAMSUNG_OT
+        case AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE:
+        case AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO:
+#endif
             if (m_autofocusStep == AUTOFOCUS_STEP_SCANNING
                 || m_autofocusStep == AUTOFOCUS_STEP_DONE
                 || m_autofocusStep == AUTOFOCUS_STEP_TRIGGER_START) {
@@ -357,10 +444,10 @@ bool ExynosCameraActivityAutofocus::getAutofocusResult(bool flagLockFocus, bool 
             switch (currentState) {
             case AUTOFOCUS_STATE_NONE:
                 if (flagScanningStarted == true)
-                    CLOGW("AF restart is detected(%d)", i / 1000);
+                    CLOGW2("AF restart is detected(%d)", i / 1000);
 
                 if (m_interenalAutoFocusMode == AUTOFOCUS_MODE_CONTINUOUS_PICTURE) {
-                    CLOGD("AF force-success on AUTOFOCUS_MODE_CONTINUOUS_PICTURE (%d)", i / 1000);
+                    CLOGD2("AF force-success on AUTOFOCUS_MODE_CONTINUOUS_PICTURE (%d)", i / 1000);
                     af_over = true;
                     ret = true;
                 }
@@ -391,7 +478,7 @@ bool ExynosCameraActivityAutofocus::getAutofocusResult(bool flagLockFocus, bool 
                 }
                 break;
              default:
-                CLOGV("Invalid afState(%d)", currentState);
+                CLOGV2("Invalid afState(%d)", currentState);
                 ret = false;
                 break;
             }
@@ -404,12 +491,12 @@ bool ExynosCameraActivityAutofocus::getAutofocusResult(bool flagLockFocus, bool 
     }
 
     if (AUTOFOCUS_TOTAL_WATING_TIME * waitTimeoutFpsValue <= i) {
-        CLOGW("AF result time out(%d) msec", i * waitTimeoutFpsValue / 1000);
+        CLOGW2("AF result time out(%d) msec", i * waitTimeoutFpsValue / 1000);
         stopAutofocus(); /* Reset Previous AF */
         m_afState = AUTOFOCUS_STATE_FAIL;
     }
 
-    CLOGI("getAutofocusResult out m_autoFocusMode(%d) m_interenalAutoFocusMode(%d) result(%d) af_over(%d)",
+    CLOGI2("getAutofocusResult out m_autoFocusMode(%d) m_interenalAutoFocusMode(%d) result(%d) af_over(%d)",
          m_autoFocusMode, m_interenalAutoFocusMode, ret, af_over);
 
     return ret;
@@ -457,7 +544,7 @@ int ExynosCameraActivityAutofocus::getCAFResult(void)
              ret = AUTOFOCUS_RESULT_FAIL;
              break;
          default:
-            CLOGE("invalid m_aaAfState");
+            CLOGE2("invalid m_aaAfState");
             ret = AUTOFOCUS_RESULT_CANCEL;
             break;
          }
@@ -478,6 +565,38 @@ int ExynosCameraActivityAutofocus::getCAFResult(void)
 
      return ret;
 }
+
+#ifdef SAMSUNG_DOF
+bool ExynosCameraActivityAutofocus::setPDAF(bool toggle)
+{
+    if(m_flagPDAF != toggle) {
+        CLOGI2("toggle(%d)", toggle);
+        m_flagPDAF = toggle;
+    }
+
+    return true;
+}
+
+bool ExynosCameraActivityAutofocus::setStartLensMove(bool toggle)
+{
+    CLOGI2("toggle(%d)", toggle);
+
+    m_flagLensMoveStart = toggle;
+    return true;
+}
+#endif
+
+#ifdef SUPPORT_MULTI_AF
+void ExynosCameraActivityAutofocus::setMultiAf(bool enable)
+{
+    m_flagMultiAf = enable;
+}
+
+bool ExynosCameraActivityAutofocus::getMultiAf(void)
+{
+    return m_flagMultiAf;
+}
+#endif
 
 ExynosCameraActivityAutofocus::AUTOFOCUS_STATE ExynosCameraActivityAutofocus::afState2AUTOFOCUS_STATE(enum aa_afstate aaAfState)
 {
@@ -516,20 +635,80 @@ void ExynosCameraActivityAutofocus::m_AUTOFOCUS_MODE2AA_AFMODE(int autoFocusMode
             shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_CONTINUOUS_VIDEO;
             shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
                 | SET_BIT(AA_AFMODE_OPTION_BIT_VIDEO);
+#ifdef SAMSUNG_OT
+            if(m_isOTstart == true)
+                shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_OBJECT_TRACKING);
+#endif
+#ifdef SUPPORT_MULTI_AF
+            if (m_flagMultiAf == true)
+                shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
             shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
         } else if (m_flagFaceDetection == true) {
+#ifdef SAMSUNG_DOF
+            if (m_flagPDAF == true) {
+                if (m_flagLensMoveStart == true) {
+                    /* OFF */
+                    shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_OFF;
+                    shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00;
+                    shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+                } else {
+                    /* PDAF_OUTFOCUSING_AUTO */
+                    shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_AUTO;
+                    shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
+                        | SET_BIT(AA_AFMODE_OPTION_BIT_OUT_FOCUSING);
+#ifdef SUPPORT_MULTI_AF
+                    if (m_flagMultiAf == true)
+                        shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
+                    shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_START;
+                }
+            } else
+#endif
             {
                 /* AUTO_FACE */
                 shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_AUTO;
                 shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
                     | SET_BIT(AA_AFMODE_OPTION_BIT_FACE);
+#ifdef SUPPORT_MULTI_AF
+                if (m_flagMultiAf == true)
+                    shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
                 shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_START;
             }
         } else {
+#ifdef SAMSUNG_DOF
+            if (m_flagPDAF == true) {
+                if (m_flagLensMoveStart == true) {
+                    /* OFF */
+                    shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_OFF;
+                    shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00;
+                    shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+                } else {
+                    /* PDAF_OUTFOCUSING_AUTO */
+                    shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_AUTO;
+                    shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
+                        | SET_BIT(AA_AFMODE_OPTION_BIT_OUT_FOCUSING);
+#ifdef SUPPORT_MULTI_AF
+                    if (m_flagMultiAf == true)
+                        shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
+                    shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_START;
+                }
+            } else
+#endif
             {
                 /* AUTO */
                 shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_AUTO;
                 shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00;
+#ifdef SAMSUNG_OT
+                if(m_isOTstart == true)
+                    shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_OBJECT_TRACKING);
+#endif
+#ifdef SUPPORT_MULTI_AF
+                if (m_flagMultiAf == true)
+                    shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
                 shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_START;
             }
         }
@@ -545,6 +724,10 @@ void ExynosCameraActivityAutofocus::m_AUTOFOCUS_MODE2AA_AFMODE(int autoFocusMode
         shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_MACRO;
         shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
             | SET_BIT(AA_AFMODE_OPTION_BIT_MACRO);
+#ifdef SUPPORT_MULTI_AF
+        if (m_flagMultiAf == true)
+            shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
         shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_START;
         break;
     case AUTOFOCUS_MODE_EDOF:
@@ -556,23 +739,75 @@ void ExynosCameraActivityAutofocus::m_AUTOFOCUS_MODE2AA_AFMODE(int autoFocusMode
         shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_CONTINUOUS_VIDEO;
         shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
             | SET_BIT(AA_AFMODE_OPTION_BIT_VIDEO);
+#ifdef SUPPORT_MULTI_AF
+        if (m_flagMultiAf == true)
+            shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
         shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
         break;
     case AUTOFOCUS_MODE_CONTINUOUS_PICTURE:
     case AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO:
         if (m_flagFaceDetection == true) {
+#ifdef SAMSUNG_DOF
+            if (m_flagPDAF == true) {
+                if (m_flagLensMoveStart == true) {
+                    /* OFF */
+                    shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_OFF;
+                    shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00;
+                    shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+                } else {
+                    /* PDAF_OUTFOCUSING_CONTINUOUS_PICTURE */
+                    shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_CONTINUOUS_PICTURE;
+                    shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
+                        | SET_BIT(AA_AFMODE_OPTION_BIT_OUT_FOCUSING);
+#ifdef SUPPORT_MULTI_AF
+                    if (m_flagMultiAf == true)
+                        shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
+                    shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+                }
+            } else
+#endif
             {
                 /* CONTINUOUS_PICTURE_FACE */
                 shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_CONTINUOUS_PICTURE;
                 shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
                     | SET_BIT(AA_AFMODE_OPTION_BIT_FACE);
+#ifdef SUPPORT_MULTI_AF
+                if (m_flagMultiAf == true)
+                    shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
                 shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
             }
         } else {
+#ifdef SAMSUNG_DOF
+            if (m_flagPDAF == true) {
+                if (m_flagLensMoveStart == true) {
+                    /* OFF */
+                    shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_OFF;
+                    shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00;
+                    shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+                } else {
+                    /* PDAF_OUTFOCUSING_CONTINUOUS_PICTURE */
+                    shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_CONTINUOUS_PICTURE;
+                    shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
+                        | SET_BIT(AA_AFMODE_OPTION_BIT_OUT_FOCUSING);
+#ifdef SUPPORT_MULTI_AF
+                    if (m_flagMultiAf == true)
+                        shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
+                    shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+                }
+            } else
+#endif
             {
                 /* CONTINUOUS_PICTURE */
                 shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_CONTINUOUS_PICTURE;
                 shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00;
+#ifdef SUPPORT_MULTI_AF
+                if (m_flagMultiAf == true)
+                    shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
                 shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
             }
         }
@@ -583,20 +818,78 @@ void ExynosCameraActivityAutofocus::m_AUTOFOCUS_MODE2AA_AFMODE(int autoFocusMode
             shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_CONTINUOUS_VIDEO;
             shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
                 | SET_BIT(AA_AFMODE_OPTION_BIT_VIDEO);
+#ifdef SUPPORT_MULTI_AF
+            if (m_flagMultiAf == true)
+                shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
             shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
         } else {
+#ifdef SAMSUNG_DOF
+            if (m_flagPDAF == true) {
+                if (m_flagLensMoveStart == true) {
+                    /* OFF */
+                    shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_OFF;
+                    shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00;
+                    shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+                } else {
+                    /* PDAF_OUTFOCUSING_AUTO */
+                    shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_AUTO;
+                    shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
+                        | SET_BIT(AA_AFMODE_OPTION_BIT_OUT_FOCUSING);
+#ifdef SUPPORT_MULTI_AF
+                    if (m_flagMultiAf == true)
+                        shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
+                    shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_START;
+                }
+            } else
+#endif
             {
                 /* AUTO */
                 shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_AUTO;
                 shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00;
+#ifdef SUPPORT_MULTI_AF
+                if (m_flagMultiAf == true)
+                    shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
                 shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_START;
             }
         }
         break;
+#ifdef SAMSUNG_OT
+    case AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO:
+        shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_CONTINUOUS_VIDEO;
+        shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
+                | SET_BIT(AA_AFMODE_OPTION_BIT_VIDEO)
+                | SET_BIT(AA_AFMODE_OPTION_BIT_OBJECT_TRACKING);
+#ifdef SUPPORT_MULTI_AF
+        if (m_flagMultiAf == true)
+            shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
+        shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+        break;
+    case AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE:
+        shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_CONTINUOUS_PICTURE;
+        shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00
+                | SET_BIT(AA_AFMODE_OPTION_BIT_OBJECT_TRACKING);
+#ifdef SUPPORT_MULTI_AF
+        if (m_flagMultiAf == true)
+            shot_ext->shot.ctl.aa.vendor_afmode_option |= SET_BIT(AA_AFMODE_OPTION_BIT_MULTI_AF);
+#endif
+        shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+        break;
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+    case AUTOFOCUS_MODE_MANUAL:
+        shot_ext->shot.ctl.aa.afMode = ::AA_AFMODE_OFF;
+        shot_ext->shot.ctl.aa.vendor_afmode_option = 0x00;
+        shot_ext->shot.ctl.aa.afTrigger = AA_AF_TRIGGER_IDLE;
+        break;
+#endif
     case AUTOFOCUS_MODE_FIXED:
         break;
     default:
-        CLOGE("invalid focus mode (%d)", autoFocusMode);
+        CLOGE2("invalid focus mode (%d)", autoFocusMode);
         break;
     }
 

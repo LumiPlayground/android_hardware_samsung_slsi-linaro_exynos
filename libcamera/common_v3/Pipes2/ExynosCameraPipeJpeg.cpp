@@ -64,12 +64,28 @@ status_t ExynosCameraPipeJpeg::m_run(void)
     ExynosCameraBuffer yuvBuf;
     ExynosCameraBuffer jpegBuf;
 
+#ifdef SAMSUNG_DNG
+    dng_thumbnail_t *dngThumbnailBuf = NULL;
+    char *thumbBufAddr = NULL;
+    unsigned int thumbBufSize = 0;
+#endif
+
     ExynosRect pictureRect;
     ExynosRect thumbnailRect;
     int jpegQuality = m_parameters->getJpegQuality();
     int thumbnailQuality = m_parameters->getThumbnailQuality();
     int jpegformat = V4L2_PIX_FMT_JPEG_422;
+#ifdef SAMSUNG_LLS_DEBLUR
+    if(m_parameters->getLDCaptureMode() > 0) {
+        jpegformat = V4L2_PIX_FMT_JPEG_420;
+    } else
+#endif
     {
+#ifdef SAMSUNG_LENS_DC
+        if(m_parameters->getLensDCEnable()) {
+            jpegformat = V4L2_PIX_FMT_JPEG_420;
+        } else
+#endif
         {
             jpegformat = (JPEG_INPUT_COLOR_FMT == V4L2_PIX_FMT_YUYV) ?  V4L2_PIX_FMT_JPEG_422 : V4L2_PIX_FMT_JPEG_420;
         }
@@ -81,19 +97,20 @@ status_t ExynosCameraPipeJpeg::m_run(void)
     m_parameters->getFixedExifInfo(&exifInfo);
 
     pictureRect.colorFormat = m_parameters->getHwPictureFormat();
-#if defined(USE_ODC_CAPTURE)
-#if defined(CAMERA_HAS_OWN_GDC) && (CAMERA_HAS_OWN_GDC == true)
-    if (m_parameters->getODCCaptureEnable() == true) {
-#if defined(GDC_COLOR_FMT)
-        pictureRect.colorFormat = GDC_COLOR_FMT;
-#else
-        pictureRect.colorFormat = V4L2_PIX_FMT_NV12M;
-#endif /* GDC_COLOR_FMT */
+#ifdef SAMSUNG_LLS_DEBLUR
+    if(m_parameters->getLDCaptureMode() > 0) {
+        pictureRect.colorFormat = V4L2_PIX_FMT_NV21;
     } else
-#endif /* CAMERA_HAS_OWN_GDC */
-#endif /* USE_ODC_CAPTURE */
+#endif
     {
-        pictureRect.colorFormat = JPEG_INPUT_COLOR_FMT;
+#ifdef SAMSUNG_LENS_DC
+        if(m_parameters->getLensDCEnable()) {
+            pictureRect.colorFormat = V4L2_PIX_FMT_NV21;
+        } else
+#endif
+        {
+            pictureRect.colorFormat = JPEG_INPUT_COLOR_FMT;
+        }
     }
 
     m_parameters->getPictureSize(&pictureRect.w, &pictureRect.h);
@@ -155,6 +172,22 @@ status_t ExynosCameraPipeJpeg::m_run(void)
 
     m_jpegEnc.setExtScalerNum(m_parameters->getScalerNodeNumPicture());
 
+#ifdef SAMSUNG_JQ
+    if (m_parameters->getJpegQtableOn() == true && m_parameters->getJpegQtableStatus() != JPEG_QTABLE_DEINIT) {
+        if (m_parameters->getJpegQtableStatus() == JPEG_QTABLE_UPDATED) {
+            CLOGD("[JQ]:Get JPEG Q-table");
+            m_parameters->setJpegQtableStatus(JPEG_QTABLE_RETRIEVED);
+            m_parameters->getJpegQtable(m_qtable);
+        }
+
+        CLOGD("[JQ]:Set JPEG Q-table");
+        if (m_jpegEnc.setQuality(m_qtable)) {
+            CLOGE("[JQ]:m_jpegEnc.setQuality(qtable[]) fail");
+            ret = INVALID_OPERATION;
+            goto jpeg_encode_done;
+        }
+    } else
+#endif
     {
         if (m_jpegEnc.setQuality(jpegQuality)) {
             CLOGE("m_jpegEnc.setQuality() fail");
@@ -231,11 +264,45 @@ status_t ExynosCameraPipeJpeg::m_run(void)
         goto jpeg_encode_done;
     }
 
+#ifdef SAMSUNG_DNG
+    if (m_parameters->getDNGCaptureModeOn() == true
+        && m_parameters->getSeriesShotMode() != SERIES_SHOT_MODE_BURST) {
+        thumbBufSize = thumbnailRect.w * thumbnailRect.h * 2;
+        dngThumbnailBuf = m_parameters->createDngThumbnailBuffer(thumbBufSize);
+        thumbBufAddr = dngThumbnailBuf->buf;
+    }
+#endif
+
     if (m_jpegEnc.encode((int *)&jpegBuf.size, &exifInfo, (char **)jpegBuf.addr, m_parameters->getDebugAttribute())) {
         CLOGE("m_jpegEnc.encode() fail");
         ret = INVALID_OPERATION;
         goto jpeg_encode_done;
     }
+
+#ifdef SAMSUNG_DNG
+    if (m_parameters->getDNGCaptureModeOn() == true
+        && m_parameters->getSeriesShotMode() != SERIES_SHOT_MODE_BURST) {
+        if (thumbBufAddr) {
+            dngThumbnailBuf->size = m_jpegEnc.GetThumbnailImage(thumbBufAddr, thumbBufSize);
+            if (!dngThumbnailBuf->size)
+                CLOGE("[DNG] GetThumbnailImage failed");
+        } else {
+            CLOGE("[DNG] Thumbnail buf is NULL");
+            dngThumbnailBuf->size = 0;
+        }
+
+        if (m_parameters->getCaptureExposureTime() > CAMERA_PREVIEW_EXPOSURE_TIME_LIMIT) {
+            dngThumbnailBuf->frameCount = 0;
+        } else {
+            dngThumbnailBuf->frameCount = m_shot_ext->shot.dm.request.frameCount;
+        }
+
+        m_parameters->putDngThumbnailBuffer(dngThumbnailBuf);
+
+        CLOGD("[DNG] Thumbnail enable(%d), (addr:size:frame_count) [%p:%d:%d]",
+                exifInfo.enableThumb, thumbBufAddr, dngThumbnailBuf->size, dngThumbnailBuf->frameCount);
+    }
+#endif
 
     newFrame->setJpegSize(jpegBuf.size[0]);
 
@@ -252,12 +319,8 @@ jpeg_encode_done:
     if (ret != NO_ERROR) {
         CLOGD("[jpegBuf.fd[0] %d][jpegBuf.size[0] + jpegBuf.size[1] + jpegBuf.size[2] %d]",
             jpegBuf.fd[0], jpegBuf.size[0] + jpegBuf.size[1] + jpegBuf.size[2]);
-        CLOGD("[pictureW %d][pictureH %d][pictureFormat %c%c%c%c]",
-            pictureRect.w, pictureRect.h,
-            v4l2Format2Char(pictureRect.colorFormat, 0),
-            v4l2Format2Char(pictureRect.colorFormat, 1),
-            v4l2Format2Char(pictureRect.colorFormat, 2),
-            v4l2Format2Char(pictureRect.colorFormat, 3));
+        CLOGD("[pictureW %d][pictureH %d][pictureFormat %d]",
+            pictureRect.w, pictureRect.h, pictureRect.colorFormat);
     }
 
     if (m_jpegEnc.flagCreate() == true)

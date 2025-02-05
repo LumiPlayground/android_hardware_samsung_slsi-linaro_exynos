@@ -60,6 +60,9 @@ private:
 private:
     ExynosJpegEncoderForCamera  m_jpegEnc;
     struct camera2_shot_ext    *m_shot_ext;
+#ifdef SAMSUNG_JQ
+    unsigned char               m_qtable[128];
+#endif
 };
 
 }; /* namespace android */

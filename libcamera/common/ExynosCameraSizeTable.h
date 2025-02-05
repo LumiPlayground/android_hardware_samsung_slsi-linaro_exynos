@@ -85,7 +85,6 @@ enum SIZE_LUT_INDEX {
 #include "ExynosCameraSizeTableIMX134.h"
 #include "ExynosCameraSizeTableIMX135.h"
 #include "ExynosCameraSizeTableIMX175.h"
-#include "ExynosCameraSizeTableIMX230.h"
 #if 0
 #if defined(CAMERA_LCD_SIZE) && (CAMERA_LCD_SIZE >= LCD_SIZE_2560_1440)
 #include "ExynosCameraSizeTableIMX240_WQHD.h"

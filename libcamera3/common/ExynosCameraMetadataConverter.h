@@ -17,10 +17,10 @@
 #ifndef EXYNOS_CAMERA_METADATA_CONVERTER_H__
 #define EXYNOS_CAMERA_METADATA_CONVERTER_H__
 
-#include <cutils/log.h>
+#include <log/log.h>
 #include <utils/RefBase.h>
 #include <hardware/camera3.h>
-#include <camera/CameraMetadata.h>
+#include <CameraMetadata.h>
 
 #include "ExynosCameraConfig.h"
 #include "ExynosCameraParameters.h"
@@ -83,6 +83,7 @@ enum face_landmarks_index {
 enum frame_count_map_item_index {
     TIMESTAMP,
     FRAMECOUNT,
+    APERTURE,
     FRAME_COUNT_MAP_ITEM_MAX_INDEX,
 };
 
@@ -148,6 +149,7 @@ public:
 
     /* vendor functions */
     /* control meta */
+#ifdef SAMSUNG_TN_FEATURE
     void                    translatePreVendorControlControlData(CameraMetadata *settings,
                                                                   struct camera2_shot_ext *dst_ext);
     void                    translateVendorControlControlData(CameraMetadata *settings, struct camera2_shot_ext *dst_ext);
@@ -170,6 +172,7 @@ public:
     void                    translateVendorPartialLensMetaData(CameraMetadata *settings, struct camera2_shot_ext *src_ext);
     void                    translateVendorPartialControlMetaData(CameraMetadata *settings, struct camera2_shot_ext *src_ext);
     void                    translateVendorPartialMetaData(CameraMetadata *settings, struct camera2_shot_ext *src_ext, enum metadata_type metaType);
+#endif
 
     /* Other helper functions */
     virtual status_t        initShotData(struct camera2_shot_ext *shot_ext);
@@ -178,7 +181,9 @@ public:
 
     virtual void            setStaticInfo(int camId, camera_metadata_t *info);
     virtual status_t        checkMetaValid(camera_metadata_tag_t tag, const void *data);
+#ifdef SAMSUNG_TN_FEATURE
     virtual status_t        checkRangeOfValid(int32_t tag, int32_t value);
+#endif
     virtual status_t        getDefaultSetting(camera_metadata_tag_t tag, void *data);
 private:
     static status_t         m_createAvailableCapabilities(const struct ExynosCameraSensorInfoBase *sensorStaticInfo,
@@ -234,13 +239,17 @@ private:
                                                           struct camera2_shot_ext *shot_ext);
     void                    m_convertActiveArrayTo3AARegion(ExynosRect2 *region);
     void                    m_convert3AAToActiveArrayRegion(ExynosRect2 *region);
+#ifdef SAMSUNG_TN_FEATURE
     static void             m_constructVendorStaticInfo(struct ExynosCameraSensorInfoBase *sensorStaticInfo,
                                                         CameraMetadata *info, int cameraId);
+#endif
     void                    m_constructVendorDefaultRequestSettings(int type, CameraMetadata *settings);
     void                    setMetaCtlSceneMode(struct camera2_shot_ext *shot_ext, enum aa_scene_mode sceneMode, int mode = 0);
+#ifdef SAMSUNG_TN_FEATURE
     void                    setShootingMode(int shotMode, struct camera2_shot_ext *dst_ext);
+#endif
     void                    setSceneMode(int value, struct camera2_shot_ext *dst_ext);
-    uint32_t                m_getFrameCountForTimeStamp(uint64_t timeStamp);
+    uint32_t                m_getFrameInfoForTimeStamp(enum frame_count_map_item_index index, uint64_t timeStamp);
 
 private:
     int                             m_cameraId;
@@ -254,7 +263,7 @@ private:
     struct ExynosCameraSensorInfoBase *m_sensorStaticInfo;
 
     int                             m_frameCountMapIndex;
-    uint64_t                        m_frameCountMap[FRAMECOUNT_MAP_LENGTH][2];
+    uint64_t                        m_frameCountMap[FRAMECOUNT_MAP_LENGTH][FRAME_COUNT_MAP_ITEM_MAX_INDEX];
 
     bool                            m_preCaptureTriggerOn;
     bool                            m_isManualAeControl;
@@ -268,8 +277,8 @@ private:
     bool                            m_flagMultiAf;
 #endif
     int                             m_sceneMode;
-    int                             m_aemode; //for secure test
-    int                             m_aperture; //for secure test
+    int                             m_aemode; //for iris test
+    int                             m_aperture; //for iris test
 };
 
 }; /* namespace android */

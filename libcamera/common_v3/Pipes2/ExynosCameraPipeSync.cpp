@@ -131,22 +131,18 @@ status_t ExynosCameraPipeSync::setBufferManager(ExynosCameraBufferManager **buff
 
     status_t ret = NO_ERROR;
 
-    if (m_dualSelector == NULL) {
-        CLOGE("dualSelector is NULL!!");
-        return INVALID_OPERATION;
-    }
-
     for (int i = 0; i < MAX_NODE; i++) {
         m_bufferManager[i] = bufferManager[i];
 
-        if (i == OUTPUT_NODE &&
-                m_bufferManager[i] != NULL) {
-
-            CLOGI("bufferManager(%d) registered(%d)", i, m_bufferManager[i]->getAllocatedBufferCount());
+        if (m_bufferManager[i] != NULL && m_dualSelector != NULL) {
+            CLOGI("bufferManager registered(%d)", m_bufferManager[i]->getAllocatedBufferCount());
+            m_bufferManager[i]->dump();
 
             m_dualSelector->deinit(m_cameraId);
 
-            m_dualSelector->setFlagValidCameraId(m_masterCameraId, m_slaveCameraId);
+            ret = m_dualSelector->registerNotifyQ(m_cameraId, &m_notifyQ);
+            if (ret != NO_ERROR)
+                CLOG_ASSERT("m_dualSelector->registerNotifyQ is fail");
 
             ret = m_dualSelector->registerRemoveFrameQ(m_cameraId, &m_removeFrameQ);
             if (ret != NO_ERROR)
@@ -156,12 +152,8 @@ status_t ExynosCameraPipeSync::setBufferManager(ExynosCameraBufferManager **buff
             if (ret != NO_ERROR)
                 CLOG_ASSERT("m_dualSelector->setInfo is fail");
 
-            /* only master set ther hold count and notifyQ */
+            /* only master set ther hold count */
             if (m_cameraId == m_masterCameraId) {
-                ret = m_dualSelector->registerNotifyQ(m_cameraId, &m_notifyQ);
-                if (ret != NO_ERROR)
-                    CLOG_ASSERT("m_dualSelector->registerNotifyQ is fail");
-
                 ret = m_dualSelector->setFrameHoldCount(m_cameraId, m_bufferManager[i]->getNumOfAllowedMaxBuffer());
                 if (ret != NO_ERROR)
                     CLOG_ASSERT("m_dualSelector->setFrameHoldCount is fail", m_bufferManager[i]->getAllocatedBufferCount());
@@ -178,22 +170,15 @@ status_t ExynosCameraPipeSync::startThread(void)
 
     status_t ret = NO_ERROR;
 
-    if (m_mainThread->isRunning() == false) {
-        m_mainThread->run(m_name, PRIORITY_URGENT_DISPLAY);
-        CLOGD("mainThread start");
-    }
+    m_mainThread->run(m_name);
+    CLOGD("mainThread start");
 
     /* only master camera's sync pipe run the selectThread */
     if (m_cameraId == m_masterCameraId) {
-        if (m_selectThread->isRunning() == false) {
-            CLOGD("selectThread start(M:%d)", m_masterCameraId);
-            m_selectThread->run(m_name, PRIORITY_URGENT_DISPLAY);
-        }
-
-        if (m_removeFrameThread->isRunning() == false) {
-            CLOGD("removeThread start(M:%d)", m_masterCameraId);
-            m_removeFrameThread->run(m_name);
-        }
+        CLOGD("selectThread start(M:%d)", m_masterCameraId);
+        m_selectThread->run(m_name);
+        CLOGD("removeThread start(M:%d)", m_masterCameraId);
+        m_removeFrameThread->run(m_name);
     } else {
         CLOGD("don't start selectThread(M:%d)", m_masterCameraId);
     }
@@ -248,6 +233,7 @@ status_t ExynosCameraPipeSync::m_run(void)
     static int internalLogCount[CAMERA_ID_MAX];
     status_t ret = 0;
     bool isSrc = true;
+    bool needSync = false;
     ExynosCameraFrameSP_sptr_t newFrame = NULL;
     ExynosCameraFrameEntity *entity = NULL;
 
@@ -273,17 +259,6 @@ status_t ExynosCameraPipeSync::m_run(void)
         return NO_ERROR;
     }
 
-#ifdef USE_DUAL_CAMERA_LOG_TRACE
-    CLOGI("input frame (isSrc:%d, Cam:%d, Fcount:%d, Sync:%d, Type:%d, Time:%lld, State:%d)",
-            isSrc,
-            newFrame->getCameraId(),
-            newFrame->getFrameCount(),
-            newFrame->getSyncType(),
-            newFrame->getFrameType(),
-            newFrame->getTimeStamp(),
-            newFrame->getFrameState());
-#endif
-
     /* check the frame type */
     switch (newFrame->getFrameType()) {
     case FRAME_TYPE_INTERNAL:
@@ -291,7 +266,7 @@ status_t ExynosCameraPipeSync::m_run(void)
             CLOGI("[INTERNAL_FRAME] frame(%d) type(%d), (%d)",
                     newFrame->getFrameCount(), newFrame->getFrameType(), internalLogCount[m_cameraId]);
         }
-        goto func_exit;
+        goto func_internal_type;
         break;
     default:
         internalLogCount[m_cameraId] = 0;
@@ -310,28 +285,30 @@ status_t ExynosCameraPipeSync::m_run(void)
         break;
     }
 
+func_internal_type:
     /* push the frame to dual selector */
     switch (newFrame->getSyncType()) {
     case SYNC_TYPE_BYPASS:
         if (m_cameraId == m_slaveCameraId)
             CLOG_ASSERT("invalid cameraId(%d != %d) frame(%d)", m_cameraId, m_slaveCameraId, newFrame->getFrameCount());
+
+        needSync = false;
         break;
     case SYNC_TYPE_SYNC:
+        needSync = true;
         break;
     case SYNC_TYPE_SWITCH:
         if (m_cameraId == m_masterCameraId)
             CLOG_ASSERT("invalid cameraId(%d != %d) frame(%d)", m_cameraId, m_masterCameraId, newFrame->getFrameCount());
+
+        needSync = false;
         break;
     default:
         CLOG_ASSERT("invalid sync type(%d) frame(%d)", m_cameraId, newFrame->getSyncType(), newFrame->getFrameCount());
         break;
     }
 
-    /* set the entity state */
-    ret = newFrame->setEntityState(getPipeId(), ENTITY_STATE_FRAME_DONE);
-    if (ret != NO_ERROR) {
-        CLOGE("setEntityState(%d, ENTITY_STATE_FRAME_DONE) fail", getPipeId());
-    }
+    CLOGV("input frame (%d, %d, F%d)", isSrc, needSync, newFrame->getFrameCount());
 
     /* push the frame to dual selector */
     ret = m_dualSelector->manageNormalFrameHoldList(m_cameraId, newFrame, getPipeId(), isSrc, OUTPUT_NODE_1);
@@ -340,12 +317,16 @@ status_t ExynosCameraPipeSync::m_run(void)
         if (newFrame->getFrameType() != FRAME_TYPE_INTERNAL) {
             ExynosCameraBuffer buffer;
             buffer.index = -2;
-            CLOGE("manageNormalFrameHoldList fail(%d, F%d)", isSrc, newFrame->getFrameCount());
+            CLOGE("manageNormalFrameHoldList fail(%d, %d, F%d)", isSrc, needSync, newFrame->getFrameCount());
             newFrame->getSrcBuffer(getPipeId(), &buffer, OUTPUT_NODE_1);
             m_dualSelector->releaseBuffer(m_cameraId, &buffer);
             goto func_exit;
         }
     }
+
+    /* return frame to frameDoneQ to remove from runningList in case of slave camera */
+    if (m_cameraId == m_slaveCameraId)
+        goto func_exit;
 
     return NO_ERROR;
 
@@ -357,6 +338,7 @@ func_exit:
     if (ret != NO_ERROR) {
         CLOGE("setEntityState(%d, ENTITY_STATE_FRAME_DONE) fail", getPipeId());
     }
+
     m_outputFrameQ->pushProcessQ(&newFrame);
 
     return NO_ERROR;
@@ -369,13 +351,10 @@ bool ExynosCameraPipeSync::m_selectThreadFunc(void)
     ret = m_select();
     if (ret < 0) {
         if (ret != TIMED_OUT)
-            CLOGE("m_select fail");
+            CLOGE("m_putBuffer fail");
     }
 
-    if (m_flagTryStop == true)
-        return false;
-    else
-        return true;
+    return m_checkThreadLoop();
 }
 
 status_t ExynosCameraPipeSync::m_select(void)
@@ -415,17 +394,13 @@ status_t ExynosCameraPipeSync::m_select(void)
         return NO_ERROR;
     }
 
-#ifdef USE_DUAL_CAMERA_LOG_TRACE
-    CLOGI("pipeId:%d, selected frame(Cam:%d, HF:%d, DF:%d, SyncType:%d, Type:%d, State:%d, TimeStamp:%d",
+    CLOGV("pipeId:%d, selected frame(HF:%d, DF:%d, SyncType:%d, Type:%d, TimeStamp:%d",
            getPipeId(),
-           newFrame->getCameraId(),
            newFrame->getFrameCount(),
            newFrame->getMetaFrameCount(),
            newFrame->getSyncType(),
            newFrame->getFrameType(),
-           newFrame->getFrameState(),
            (int)(newFrame->getTimeStamp() / 1000000));
-#endif
 
     /* 2. check the timeStamp(ms) */
     timeStamp = newFrame->getTimeStamp() / 1000000;
@@ -435,28 +410,11 @@ status_t ExynosCameraPipeSync::m_select(void)
     }
 
     /* 3. set the entity state to done */
-    if (newFrame->getSyncType() == SYNC_TYPE_SWITCH) {
-        /* set the entity state to done */
-        ret = newFrame->setEntityState(getPipeId(), ENTITY_STATE_REWORK);
-        if (ret < 0) {
-            CLOGE("frame(%d)->setEntityState(pipeId(%d), ENTITY_STATE_REWORK), ret(%d)",
-                    newFrame->getFrameCount(), getPipeId(), ret);
-        }
-
-        /* set the entity state to done */
-        ret = newFrame->setEntityState(getPipeId(), ENTITY_STATE_FRAME_DONE);
-        if (ret < 0) {
-            CLOGE("frame(%d)->setEntityState(pipeId(%d), ENTITY_STATE_FRAME_DONE), ret(%d)",
-                    newFrame->getFrameCount(), getPipeId(), ret);
-        }
-    } else {
-        ret = newFrame->setEntityState(getPipeId(), ENTITY_STATE_FRAME_DONE);
-        if (ret < 0) {
-            CLOGE("newFrame->setEntityState(pipeId(%d), ENTITY_STATE_FRAME_DONE), ret(%d)",
-                   getPipeId(), ret);
-            /* TODO: doing exception handling */
-            return OK;
-        }
+    ret = newFrame->setEntityState(getPipeId(), ENTITY_STATE_FRAME_DONE);
+    if (ret < 0) {
+        CLOGE("newFrame->setEntityState(pipeId(%d), ENTITY_STATE_FRAME_DONE), ret(%d)", getPipeId(), ret);
+        /* TODO: doing exception handling */
+        return OK;
     }
 
     /* 4. update last timestamp and push the frame to outputQ */
@@ -524,7 +482,7 @@ DROP_FRAME:
     ret = newFrame->setEntityState(getPipeId(), ENTITY_STATE_FRAME_DONE);
     if (ret < 0) {
         CLOGE("setEntityState(%d, ENTITY_STATE_FRAME_DONE) frame:%d, fail(%d)",
-                getPipeId(), newFrame->getFrameCount(), ret);
+               getPipeId(), newFrame->getFrameCount(), ret);
         /* TODO: doing exception handling */
     }
 
@@ -565,12 +523,11 @@ status_t ExynosCameraPipeSync::m_removeFrame(void)
         return ret;
     }
 
-    CLOGV("remove frame(HF:%d, DF:%d, TimeStamp:%lld, SyncType:%d, State:%d, Type:%d",
+    CLOGV("remove frame(HF:%d, DF:%d, TimeStamp:%lld, SyncType:%d, Type:%d",
            frame->getFrameCount(),
            frame->getMetaFrameCount(),
            frame->getTimeStamp(),
            frame->getSyncType(),
-           frame->getFrameState(),
            frame->getFrameType());
 
     frame->setFrameState(FRAME_STATE_SKIPPED);

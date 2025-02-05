@@ -48,6 +48,38 @@ status_t ExynosCameraMCPipe::create(int32_t *sensorIds)
     return ret;
 }
 
+#ifdef SAMSUNG_COMPANION
+status_t ExynosCameraMCPipe::precreate(int32_t *sensorIds)
+{
+    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+    status_t ret = NO_ERROR;
+
+    ret = m_preCreate();
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):m_preCreate() fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+
+    return ret;
+}
+
+status_t ExynosCameraMCPipe::postcreate(int32_t *sensorIds)
+{
+    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+    status_t ret = NO_ERROR;
+
+    ret = m_postCreate(sensorIds);
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):m_postCreate() fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        return ret;
+    }
+
+    CLOGI("INFO(%s[%d]):postcreate() is succeed, Pipe(%d)", __FUNCTION__, __LINE__, getPipeId());
+
+    return ret;
+}
+#endif
+
 status_t ExynosCameraMCPipe::destroy(void)
 {
     CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
@@ -1885,6 +1917,9 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
                     shot_ext_dst->fd_bypass = shot_ext_src->fd_bypass;
                     shot_ext_dst->shot.dm.request.frameCount = shot_ext_src->shot.dm.request.frameCount;
                     shot_ext_dst->shot.magicNumber= shot_ext_src->shot.magicNumber;
+#ifdef SAMSUNG_COMPANION
+                    shot_ext_dst->shot.uctl.companionUd.wdr_mode = shot_ext_src->shot.uctl.companionUd.wdr_mode;
+#endif
                 } else {
                     CLOGE("ERR(%s[%d]):metadata address fail, frameCount(%d) shot_ext src(%p) dst(%p) ",
                                 __FUNCTION__, __LINE__, newFrame->getFrameCount(), shot_ext_src, shot_ext_dst);

@@ -69,8 +69,10 @@ public:
     virtual status_t        forceDone(unsigned int cid, int value);
 
     virtual void            dump(void);
+//#ifdef SAMSUNG_COMPANION
     virtual status_t        precreate(int32_t *sensorIds = NULL);
     virtual status_t        postcreate(int32_t *sensorIds = NULL);
+//#endif
 
     virtual status_t        dumpFimcIsInfo(bool bugOn);
 //#ifdef MONITOR_LOG_SYNC

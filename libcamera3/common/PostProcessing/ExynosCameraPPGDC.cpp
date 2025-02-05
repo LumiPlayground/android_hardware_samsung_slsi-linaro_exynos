@@ -170,7 +170,7 @@ status_t ExynosCameraPPGDC::m_draw(ExynosCameraImage *srcImage,
     for (int i = 0; i < IMAGE_POS_MAX; i++) {
         ret = m_putBuffer(m_node[i], ptrImage[i]);
         if (ret != NO_ERROR) {
-            CLOGE("m_putBuffer(m_node[i]) fail", i);
+            CLOGE("m_putBuffer(m_node[%d]) fail", i);
             goto done;
         }
     }
@@ -178,7 +178,7 @@ status_t ExynosCameraPPGDC::m_draw(ExynosCameraImage *srcImage,
     for (int i = 0; i < IMAGE_POS_MAX; i++) {
         ret = m_getBuffer(m_node[i], ptrImage[i]);
         if (ret != NO_ERROR) {
-            CLOGE("m_getBuffer(m_node[i]) fail", i);
+            CLOGE("m_getBuffer(m_node[%d]) fail", i);
             goto done;
         }
     }
@@ -278,6 +278,19 @@ status_t ExynosCameraPPGDC::m_setCtrl(ExynosCameraNode *node, ExynosCameraImage 
             image->rect.x, image->rect.y, image->rect.w, image->rect.h, image->rect.fullW, image->rect.fullH);
 
         m_sensorBcropRect = image->rect;
+
+        struct gdc_crop_param {
+            uint32_t sensor_num;
+            uint32_t sensor_width;
+            uint32_t sensor_height;
+            uint32_t crop_start_x;
+            uint32_t crop_start_y;
+            uint32_t crop_width;
+            uint32_t crop_height;
+            bool     is_crop_dzoom;
+            bool     is_scaled;
+            int      reserved[32];
+        };
 
         struct v4l2_ext_controls extCtrls;
         memset(&extCtrls, 0x00, sizeof(extCtrls));

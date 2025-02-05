@@ -64,11 +64,6 @@ public:
     virtual void            stopPPScenario(int pipeId, bool suspendFlag = false);
     virtual int             getPPScenario(int pipeId);
 
-    virtual bool            checkPlugin(int pipeId);
-
-    virtual status_t        setParameter(uint32_t pipeId, int key, void *data);
-    virtual status_t        getParameter(uint32_t pipeId, int key, void *data);
-
 protected:
     virtual status_t        m_setupConfig(void) = 0;
     virtual status_t        m_constructPipes(void) = 0;

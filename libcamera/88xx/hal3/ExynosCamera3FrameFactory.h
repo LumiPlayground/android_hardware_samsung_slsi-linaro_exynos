@@ -78,7 +78,7 @@ public:
 public:
     virtual ~ExynosCamera3FrameFactory();
 
-    virtual status_t        create(bool active = true) = 0;
+    virtual status_t        create(void) = 0;
     virtual status_t        precreate(void);
     virtual status_t        postcreate(void);
     virtual status_t        destroy(void);
@@ -162,6 +162,9 @@ protected:
     virtual int             m_getSensorId(unsigned int nodeNum, unsigned int connectionMode, bool flagLeader, bool reprocessing);
 
     virtual int             m_getFliteNodenum(void);
+#ifdef SUPPORT_DEPTH_MAP
+    virtual int             m_getDepthVcNodeNum(void);
+#endif
 
     virtual void            m_initDeviceInfo(int pipeId);
 
@@ -187,6 +190,9 @@ protected:
     Mutex                       m_frameLock;
 
     uint32_t                    m_requestFLITE;
+    uint32_t                    m_requestVC1;
+    uint32_t                    m_requestVC2;
+    uint32_t                    m_requestVC3;
     uint32_t                    m_request3AC;
     uint32_t                    m_request3AP;
     uint32_t                    m_requestISP;

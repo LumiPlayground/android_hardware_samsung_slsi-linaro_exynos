@@ -34,17 +34,6 @@
 #include "ExynosCameraPlugInConverterVDIS.h"
 #endif
 
-#ifdef USES_DUAL_CAMERA_SOLUTION_ARCSOFT
-#include "ExynosCameraPlugInConverterArcsoftFusionBokehCapture.h"
-#include "ExynosCameraPlugInConverterArcsoftFusionBokehPreview.h"
-#include "ExynosCameraPlugInConverterArcsoftFusionZoomCapture.h"
-#include "ExynosCameraPlugInConverterArcsoftFusionZoomPreview.h"
-#endif
-
-#ifdef USES_HIFI_LLS
-#include "ExynosCameraPlugInConverterHifills.h"
-#endif
-
 namespace android {
 
 ExynosCameraFactoryPlugIn::ExynosCameraFactoryPlugIn()
@@ -53,9 +42,8 @@ ExynosCameraFactoryPlugIn::ExynosCameraFactoryPlugIn()
     m_plugInTotalCount = sizeof(g_plugInList) / sizeof(PlugInList_t);
 }
 
-int ExynosCameraFactoryPlugIn::m_findPlugInIndexByPipeId(int cameraId, int id)
+int ExynosCameraFactoryPlugIn::m_findPlugInIndexByPipeId(int cameraId, int pipeId)
 {
-    status_t ret = NO_ERROR;
     int index;
 
     if (m_plugInTotalCount <= 0) {
@@ -63,28 +51,27 @@ int ExynosCameraFactoryPlugIn::m_findPlugInIndexByPipeId(int cameraId, int id)
         return -1;
     }
 
-    if (id < 0) {
-        CLOGE3(cameraId, "invalid id(%d))", id);
+    if (pipeId < 0) {
+        CLOGE3(cameraId, "invalid pipeId(%d))", pipeId);
         return -1;
     }
 
     for (index = 0; index < m_plugInTotalCount; index++) {
-        if (g_plugInList[index].id == id) {
-            CLOGD3(cameraId, "%s plugIn is found(%d)!!", g_plugInList[index].plugInLibName, id);
+        if (g_plugInList[index].pipeId == pipeId) {
+            CLOGD3(cameraId, "%s plugIn is found(%d)!!", g_plugInList[index].plugInLibName, pipeId);
             break;
         }
     }
 
     if (index == m_plugInTotalCount) {
-        CLOGE3(cameraId, "there's any plugIn to match with id(%d)", id);
+        CLOGE3(cameraId, "there's any plugIn to match with pipeId(%d)", pipeId);
         index = -1;
-        ret = INVALID_OPERATION;
     }
 
     return index;
 }
 
-status_t ExynosCameraFactoryPlugIn::create(int cameraId, int pipeId, ExynosCameraPlugInSP_dptr_t plugIn, ExynosCameraPlugInConverterSP_dptr_t converter, int scenario)
+status_t ExynosCameraFactoryPlugIn::create(int cameraId, int pipeId, ExynosCameraPlugInSP_dptr_t plugIn, ExynosCameraPlugInConverterSP_dptr_t converter, PLUGIN::MODE mode)
 {
     int refCount;
     status_t ret = NO_ERROR;
@@ -96,24 +83,20 @@ status_t ExynosCameraFactoryPlugIn::create(int cameraId, int pipeId, ExynosCamer
 
     Mutex::Autolock lock(m_lock);
     {
-        bool firstShared = false;
         void *libHandle = NULL;
         PlugInSymbol_t createSymbol = NULL;
-        int handleIndex = -1;
 
         /* 1. get the lib index by pipeId */
-        int index = m_findPlugInIndexByPipeId(cameraId, scenario);
+        int index = m_findPlugInIndexByPipeId(cameraId, pipeId);
         if (index < 0) {
             CLOGE3(cameraId, "Invalid pipeId(%d)", pipeId);
             return INVALID_OPERATION;
         }
 
-        handleIndex = getLibHandleID(scenario);
-
         /* 2. if plugIn is NULL, try to get plugIn */
         if (plugIn == NULL) {
             /* search lib handle */
-            libHandle = m_mapLibHandle[handleIndex];
+            libHandle = m_mapLibHandle[pipeId];
             if (libHandle == NULL) {
                 libHandle = dlopen(g_plugInList[index].plugInLibName, RTLD_NOW);
                 if (libHandle == NULL) {
@@ -132,81 +115,43 @@ status_t ExynosCameraFactoryPlugIn::create(int cameraId, int pipeId, ExynosCamer
                 return INVALID_OPERATION;
             }
 
-            plugIn = (ExynosCameraPlugIn *)createSymbol(cameraId, pipeId, scenario);
+            plugIn = (ExynosCameraPlugIn *)createSymbol(cameraId, pipeId, mode);
             if (plugIn != NULL) {
                 /* 3. create the converter by pipeId */
-                switch (scenario) {
+                switch (pipeId) {
 #ifdef USE_DUAL_CAMERA
+                case PIPE_FUSION:
+                case PIPE_FUSION_FRONT:
+                case PIPE_FUSION_REPROCESSING:
 #ifdef USES_DUAL_CAMERA_SOLUTION_FAKE
-                case PLUGIN_SCENARIO_FAKEFUSION_PREVIEW:
                     converter = (new ExynosCameraPlugInConverterFakeFusion(cameraId, pipeId));
+#endif
                     break;
 #endif
-#ifdef USES_DUAL_CAMERA_SOLUTION_ARCSOFT
-                case PLUGIN_SCENARIO_ZOOMFUSION_PREVIEW:
-                    CLOGD3(cameraId, "new ExynosCameraPlugInConverterArcsoftFusionZoomPreview");
-                    converter = (new ExynosCameraPlugInConverterArcsoftFusionZoomPreview(cameraId, pipeId));
-                    break;
-                case PLUGIN_SCENARIO_BOKEHFUSION_PREVIEW:
-                    CLOGD3(cameraId, "new ExynosCameraPlugInConverterArcsoftFusionBokehPreview");
-                    converter = (new ExynosCameraPlugInConverterArcsoftFusionBokehPreview(cameraId, pipeId));
-                    break;
-#endif
-
-#ifdef USES_DUAL_CAMERA_SOLUTION_FAKE
-                case PLUGIN_SCENARIO_FAKEFUSION_REPROCESSING:
-                    converter = (new ExynosCameraPlugInConverterFakeFusion(cameraId, pipeId));
-                    break;
-#endif
-#ifdef USES_DUAL_CAMERA_SOLUTION_ARCSOFT
-                case PLUGIN_SCENARIO_ZOOMFUSION_REPROCESSING:
-                    CLOGD3(cameraId, "new ExynosCameraPlugInConverterArcsoftFusionZoomCapture");
-                    converter = (new ExynosCameraPlugInConverterArcsoftFusionZoomCapture(cameraId, pipeId));
-                    break;
-
-                case PLUGIN_SCENARIO_BOKEHFUSION_REPROCESSING:
-                    CLOGD3(cameraId, "new ExynosCameraPlugInConverterArcsoftFusionBokehCapture");
-                    converter = (new ExynosCameraPlugInConverterArcsoftFusionBokehCapture(cameraId, pipeId));
-                    break;
-#endif
-
-#endif // USE_DUAL_CAMERA
-
 #ifdef SLSI_LLS_REPROCESSING
-                case PLUGIN_SCENARIO_BAYERLLS_REPROCESSING:
+                case PIPE_LLS_REPROCESSING:
                     converter = (new ExynosCameraPlugInConverterLowLightShot(cameraId, pipeId));
                     break;
 #endif
-
+                case PIPE_VDIS:
 #ifdef USES_CAMERA_SOLUTION_VDIS
-                case PLUGIN_SCENARIO_SWVDIS_PREVIEW:
                     converter = (new ExynosCameraPlugInConverterVDIS(cameraId, pipeId));
-                    break;
 #endif
-
-
-#ifdef USES_HIFI_LLS
-                case PLUGIN_SCENARIO_HIFILLS_REPROCESSING:
-                    converter = (new ExynosCameraPlugInConverterHifills(cameraId, pipeId));
                     break;
-#endif
                 default:
-                    CLOGD3(cameraId, "unknown plugin scenario pipeid(%d) scenario(%d) handle(%p) handleIndex(%d) refCount(%d)", pipeId, scenario, m_mapLibHandle[handleIndex], handleIndex, refCount);
-                    ret = INVALID_OPERATION;
-					return ret;
                     break;
                 }
             }
         }
 
         /* 4. save the handle and plugIn to map */
-        m_mapLibHandle[handleIndex] = libHandle;
-        refCount = m_mapPlugInRefCount[handleIndex];
+        m_mapLibHandle[pipeId] = libHandle;
+        refCount = m_mapPlugInRefCount[pipeId];
         refCount++;
-        m_mapPlugInRefCount[handleIndex] = refCount;
+        m_mapPlugInRefCount[pipeId] = refCount;
 
         CLOGD3(cameraId, "createSymbol success!!(%d, %p, %p, %d)",
-                pipeId, m_mapLibHandle[handleIndex], &plugIn, refCount);
+                pipeId, m_mapLibHandle[pipeId], &plugIn, refCount);
     }
 
     return ret;
@@ -221,24 +166,11 @@ status_t ExynosCameraFactoryPlugIn::destroy(int cameraId, ExynosCameraPlugInSP_d
 
     status_t ret = NO_ERROR;
     int pipeId;
-    int pluginInfo;
-    int vendor = 0;
-    int type = 0;
-    int handleIndex = 0;
-    int scenario = 0;
     void *libHandle;
-    bool shared;
     int refCount = 0;
 
     pipeId = plugIn->getPipeId();
-    pluginInfo = plugIn->getLibInfo();
-    vendor = getLibVendorID(pluginInfo);
-    type = getLibType(pluginInfo);
-    handleIndex = getLibHandleID(pluginInfo);
-    scenario = getLibScenario(pluginInfo);
-
-    CLOGD3(cameraId, "pipeId(%d) pluginInfo: vendor(%d) type(%d) handleIndex(%d) scenario(%d) ",
-        pipeId, vendor, type, handleIndex, scenario);
+    CLOGD3(cameraId, "pipeId(%d)", pipeId);
 
     Mutex::Autolock lock(m_lock);
     {
@@ -246,16 +178,16 @@ status_t ExynosCameraFactoryPlugIn::destroy(int cameraId, ExynosCameraPlugInSP_d
         plugIn = NULL;
 
         /* decrease the refCount */
-        refCount = m_mapPlugInRefCount[handleIndex];
+        refCount = m_mapPlugInRefCount[pipeId];
         if (refCount <= 0) {
             CLOGW3(cameraId, "pipeId(%d) refCount(%d) is invalid..", pipeId, refCount);
         } else {
             refCount--;
-            m_mapPlugInRefCount[handleIndex] = refCount;
+            m_mapPlugInRefCount[pipeId] = refCount;
         }
 
         if (!refCount) {
-            libHandle = m_mapLibHandle[handleIndex];
+            libHandle = m_mapLibHandle[pipeId];
             if (libHandle != NULL) {
                 ret = dlclose(libHandle);
                 if (ret) {
@@ -263,17 +195,17 @@ status_t ExynosCameraFactoryPlugIn::destroy(int cameraId, ExynosCameraPlugInSP_d
                     ret = INVALID_OPERATION;
                 }
             }
-            m_mapLibHandle[handleIndex] = NULL;
+            m_mapLibHandle[pipeId] = NULL;
         }
 
         CLOGD3(cameraId, "destroy success!!(%d, %p, %p, %d)",
-                pipeId, m_mapLibHandle[handleIndex], &plugIn, refCount);
+                pipeId, m_mapLibHandle[pipeId], &plugIn, refCount);
     }
 
     return ret;
 }
 
-void ExynosCameraFactoryPlugIn::dump(int cameraId)
+void ExynosCameraFactoryPlugIn::dump(__unused int cameraId)
 {
     /* nothing to do */
 }

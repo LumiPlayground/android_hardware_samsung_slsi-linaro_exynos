@@ -14,10 +14,8 @@ typedef struct {
 typedef plugin_gyro_data_t* Array_pointer_gyro_data_t;
 
 enum PLUGIN_PARAMETER_KEY {
-    PLUGIN_PARAMETER_KEY_PREPARE = 1,
-    PLUGIN_PARAMETER_KEY_START,
-    PLUGIN_PARAMETER_KEY_STOP,
-    PLUGIN_PARAMETER_KEY_GET_SCENARIO,
+    PLUGIN_PARAMETER_KEY_START = 0,
+    PLUGIN_PARAMETER_KEY_STOP = 1,
 };
 
 typedef struct {

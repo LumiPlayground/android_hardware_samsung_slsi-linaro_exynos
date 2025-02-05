@@ -41,6 +41,7 @@ status_t ExynosCameraGraphicBufferAllocator::init(void)
 
     for (int i = 0; i < VIDEO_MAX_FRAME; i++) {
         m_flagGraphicBufferAlloc[i] = false;
+        m_privateHandle[i] = NULL;
     }
 
     return NO_ERROR;
@@ -162,7 +163,7 @@ sp<GraphicBuffer> ExynosCameraGraphicBufferAllocator::m_alloc(int index,
     }
 
     if (planeCount == 1) {
-        m_privateHandle[index] = new private_handle_t(fdArr[0], bufSize[0], grallocUsage, width, height,
+        m_privateHandle[index] = new private_handle_t(fdArr[0], -1, -1, bufSize[0], 0, 0, grallocUsage, width, height,
             halPixelFormat, halPixelFormat, halPixelFormat, width, height, 0);
 
         m_privateHandle[index]->base = (uint64_t)bufAddr[0];
@@ -175,7 +176,8 @@ sp<GraphicBuffer> ExynosCameraGraphicBufferAllocator::m_alloc(int index,
     ALOGV("DEBUG(%s[%d]):new GraphicBuffer(bufAddr(%p), width(%d), height(%d), halPixelFormat(%d), grallocUsage(%d), stride(%d), m_privateHandle[%d](%p), false)",
             __FUNCTION__, __LINE__, bufAddr[0], width, height, halPixelFormat, grallocUsage, stride, index, m_privateHandle[index]);
 
-    m_graphicBuffer[index] = new GraphicBuffer(width, height, halPixelFormat, grallocUsage, stride, (native_handle_t*)m_privateHandle[index], false);
+    m_graphicBuffer[index] = new GraphicBuffer((native_handle_t*)m_privateHandle[index], GraphicBuffer::WRAP_HANDLE,
+                                               width, height, (PixelFormat)halPixelFormat, 1, (uint64_t)grallocUsage, stride);
 
     m_flagGraphicBufferAlloc[index] = true;
 
@@ -332,15 +334,17 @@ status_t ExynosCameraIonAllocator::free(
         if (ionAddr == NULL) {
             ALOGE("ERR(%s):ion_addr equals NULL", __FUNCTION__);
             ret = BAD_VALUE;
-            goto func_exit;
+            goto func_close_exit;
         }
 
         if (munmap(ionAddr, size) < 0) {
             ALOGE("ERR(%s):munmap failed", __FUNCTION__);
             ret = INVALID_OPERATION;
-            goto func_exit;
+            goto func_close_exit;
         }
     }
+
+func_close_exit:
 
     ion_close(ionFd);
 
@@ -367,7 +371,7 @@ status_t ExynosCameraIonAllocator::map(int size, int fd, char **addr)
     }
 
     if (fd <= 0) {
-        ALOGE("ERR(%s):fd=%d failed", __FUNCTION__, size);
+        ALOGE("ERR(%s):fd=%d failed", __FUNCTION__, fd);
         ret = BAD_VALUE;
         goto func_exit;
     }
@@ -375,7 +379,7 @@ status_t ExynosCameraIonAllocator::map(int size, int fd, char **addr)
     ionAddr = (char *)mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
 
     if (ionAddr == (char *)MAP_FAILED || ionAddr == NULL) {
-        ALOGE("ERR(%s):ion_map(size=%d) failed", __FUNCTION__, size);
+        ALOGE("ERR(%s):ion_map(size=%d) failed, (fd=%d), (%s)", __FUNCTION__, size, fd, strerror(errno));
         close(fd);
         ionAddr = NULL;
         ret = INVALID_OPERATION;
@@ -537,6 +541,12 @@ status_t ExynosCameraGrallocAllocator::init(
         goto func_exit;
     }
 
+    if (m_allocator == NULL) {
+        ALOGE("ERR(%s):m_allocator equals NULL", __FUNCTION__);
+        ret = INVALID_OPERATION;
+        goto func_exit;
+    }
+
     if (m_allocator->set_usage(m_allocator, grallocUsage) != 0) {
         ALOGE("ERR(%s):set_usage failed", __FUNCTION__);
         ret = INVALID_OPERATION;
@@ -544,6 +554,7 @@ status_t ExynosCameraGrallocAllocator::init(
     }
 
     m_grallocUsage = grallocUsage;
+    m_halPixelFormat = 0;
 
     if (m_grallocHal == NULL) {
         if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID, (const hw_module_t **)&m_grallocHal))
@@ -567,6 +578,7 @@ status_t ExynosCameraGrallocAllocator::alloc(
     int   height = 0;
     void  *grallocAddr[3] = {NULL};
     int   grallocFd[3] = {0};
+    android_ycbcr ycbcr;
     const private_handle_t *priv_handle = NULL;
     int   retryCount = 5;
     ExynosCameraDurationTimer   dequeuebufferTimer;
@@ -577,6 +589,12 @@ status_t ExynosCameraGrallocAllocator::alloc(
         ALOGI("INFO(%s[%d]):dequeue_buffer retryCount=%d",
             __FUNCTION__, __LINE__, retryCount);
 #endif
+        if (m_allocator == NULL) {
+            ALOGE("ERR(%s):m_allocator equals NULL", __FUNCTION__);
+            ret = INVALID_OPERATION;
+            goto func_exit;
+        }
+
         dequeuebufferTimer.start();
         ret = m_allocator->dequeue_buffer(m_allocator, bufHandle, bufStride);
         dequeuebufferTimer.stop();
@@ -590,7 +608,10 @@ status_t ExynosCameraGrallocAllocator::alloc(
                     __FUNCTION__, __LINE__, dequeuebufferTimer.durationMsecs());
 #endif
 
-        if (ret != 0) {
+        if (ret == NO_INIT) {
+            ALOGW("WARN(%s):BufferQueue is abandoned", __FUNCTION__);
+            return ret;
+        } else if (ret != 0) {
             ALOGE("ERR(%s):dequeue_buffer failed", __FUNCTION__);
             continue;
         }
@@ -617,8 +638,8 @@ status_t ExynosCameraGrallocAllocator::alloc(
 
         if (*isLocked == false) {
             lockbufferTimer.start();
-            ret = m_grallocHal->lock(m_grallocHal, **bufHandle, GRALLOC_LOCK_FOR_CAMERA,
-                                    0, 0,/* left, top */ width, height, grallocAddr);
+            ret = m_grallocHal->lock_ycbcr(m_grallocHal, **bufHandle, GRALLOC_LOCK_FOR_CAMERA,
+                                    0, 0,/* left, top */ width, height, &ycbcr);
             lockbufferTimer.stop();
 
 #if defined (EXYNOS_CAMERA_MEMORY_TRACE_GRALLOC_PERFORMANCE)
@@ -626,12 +647,12 @@ status_t ExynosCameraGrallocAllocator::alloc(
                     __FUNCTION__, __LINE__, lockbufferTimer.durationUsecs());
 #else
             if (lockbufferTimer.durationMsecs() > GRALLOC_WARNING_DURATION_MSEC)
-                ALOGW("WRN(%s[%d]):grallocHAL->lock() duration(%lld msec)",
+                ALOGW("WRN(%s[%d]):grallocHAL->lock_ycbcr() duration(%lld msec)",
                         __FUNCTION__, __LINE__, lockbufferTimer.durationMsecs());
 #endif
 
             if (ret != 0) {
-                ALOGE("ERR(%s):grallocHal->lock failed.. retry", __FUNCTION__);
+                ALOGE("ERR(%s):grallocHal->lock_ycbcr failed.. retry", __FUNCTION__);
 
                 if (m_allocator->cancel_buffer(m_allocator, *bufHandle) != 0)
                     ALOGE("ERR(%s):cancel_buffer failed", __FUNCTION__);
@@ -658,14 +679,37 @@ status_t ExynosCameraGrallocAllocator::alloc(
 
     grallocFd[0] = priv_handle->fd;
     grallocFd[1] = priv_handle->fd1;
+    grallocFd[2] = priv_handle->fd2;
     *isLocked    = true;
 
 func_exit:
 
-    fd[0] = grallocFd[0];
-    fd[1] = grallocFd[1];
-    addr[0] = (char *)grallocAddr[0];
-    addr[1] = (char *)grallocAddr[1];
+    switch (m_halPixelFormat) {
+    /* three plane */
+    case HAL_PIXEL_FORMAT_EXYNOS_YV12_M:
+        fd[2] = grallocFd[2];
+        addr[2] = (char *)ycbcr.cr;
+    /* two plane */
+    case HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M_FULL:
+    case HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M:
+        fd[1] = grallocFd[1];
+        if (m_halPixelFormat == HAL_PIXEL_FORMAT_EXYNOS_YCbCr_420_SP_M) {
+            addr[1] = (char *)ycbcr.cb;
+        } else if (m_halPixelFormat == HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M ||
+                m_halPixelFormat == HAL_PIXEL_FORMAT_EXYNOS_YCrCb_420_SP_M_FULL) {
+            addr[1] = (char *)ycbcr.cr;
+        }
+        /* one plane */
+    case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+    case HAL_PIXEL_FORMAT_YV12:
+        fd[0] = grallocFd[0];
+        addr[0] = (char *)ycbcr.y;
+        break;
+    default:
+        android_printAssert(NULL, LOG_TAG, "invalid halPixelFormat(%x)", m_halPixelFormat);
+        break;
+    }
 
     return ret;
 }
@@ -688,6 +732,12 @@ status_t ExynosCameraGrallocAllocator::free(buffer_handle_t *bufHandle, bool isL
         }
     }
 
+    if (m_allocator == NULL) {
+        ALOGE("ERR(%s):m_allocator equals NULL", __FUNCTION__);
+        ret = INVALID_OPERATION;
+        goto func_exit;
+    }
+
     if (m_allocator->cancel_buffer(m_allocator, bufHandle) != 0) {
         ALOGE("ERR(%s):cancel_buffer failed", __FUNCTION__);
         ret = INVALID_OPERATION;
@@ -703,6 +753,12 @@ status_t ExynosCameraGrallocAllocator::setBufferCount(int bufCount)
 {
     status_t ret = NO_ERROR;
 
+    if (m_allocator == NULL) {
+        ALOGE("ERR(%s):m_allocator equals NULL", __FUNCTION__);
+        ret = INVALID_OPERATION;
+        return ret;
+    }
+
     if (m_allocator->set_buffer_count(m_allocator, bufCount) != 0) {
         ALOGE("ERR(%s):set_buffer_count failed [bufCount=%d]", __FUNCTION__, bufCount);
         ret = INVALID_OPERATION;
@@ -717,6 +773,12 @@ status_t ExynosCameraGrallocAllocator::setBuffersGeometry(
 {
     status_t ret = NO_ERROR;
 
+    if (m_allocator == NULL) {
+        ALOGE("ERR(%s):m_allocator equals NULL", __FUNCTION__);
+        ret = INVALID_OPERATION;
+        return ret;
+    }
+
     if (m_allocator->set_buffers_geometry(
                     m_allocator,
                     width, height,
@@ -724,6 +786,8 @@ status_t ExynosCameraGrallocAllocator::setBuffersGeometry(
         ALOGE("ERR(%s):set_buffers_geometry failed", __FUNCTION__);
         ret = INVALID_OPERATION;
     }
+
+    m_halPixelFormat = halPixelFormat;
 
     return ret;
 }
@@ -743,6 +807,12 @@ status_t ExynosCameraGrallocAllocator::getAllocator(preview_stream_ops **allocat
 int ExynosCameraGrallocAllocator::getMinUndequeueBuffer()
 {
     int minUndeqBufCount = 0;
+
+    if (m_allocator == NULL) {
+        ALOGE("ERR(%s):m_allocator equals NULL", __FUNCTION__);
+        return INVALID_OPERATION;
+    }
+
     if (m_allocator->get_min_undequeued_buffer_count(m_allocator, &minUndeqBufCount) != 0) {
         ALOGE("ERR(%s):enqueue_buffer failed", __FUNCTION__);
         return INVALID_OPERATION;
@@ -755,11 +825,18 @@ status_t ExynosCameraGrallocAllocator::dequeueBuffer(
         buffer_handle_t **bufHandle,
         int fd[],
         char *addr[],
-        bool *isLocked)
+        bool *isLocked, Mutex *lock)
 {
     int bufStride = 0;
+    status_t ret = NO_ERROR;
 
-    if (alloc(bufHandle, fd, addr, &bufStride, isLocked) != 0) {
+    lock->unlock();
+    ret = alloc(bufHandle, fd, addr, &bufStride, isLocked);
+    lock->lock();
+    if (ret == NO_INIT) {
+        ALOGW("WARN(%s):BufferQueue is abandoned", __FUNCTION__);
+        return ret;
+    } else if (ret != NO_ERROR) {
         ALOGE("ERR(%s):alloc failed", __FUNCTION__);
         return INVALID_OPERATION;
     }
@@ -767,13 +844,20 @@ status_t ExynosCameraGrallocAllocator::dequeueBuffer(
     return NO_ERROR;
 }
 
-status_t ExynosCameraGrallocAllocator::enqueueBuffer(buffer_handle_t *handle)
+status_t ExynosCameraGrallocAllocator::enqueueBuffer(buffer_handle_t *handle, Mutex *lock)
 {
     status_t ret = NO_ERROR;
     ExynosCameraDurationTimer   enqueuebufferTimer;
 
+    if (m_allocator == NULL) {
+        ALOGE("ERR(%s):m_allocator equals NULL", __FUNCTION__);
+        return INVALID_OPERATION;
+    }
+
     enqueuebufferTimer.start();
+    lock->unlock();
     ret = m_allocator->enqueue_buffer(m_allocator, handle);
+    lock->lock();
     enqueuebufferTimer.stop();
 
 #if defined (EXYNOS_CAMERA_MEMORY_TRACE_GRALLOC_PERFORMANCE)
@@ -793,10 +877,15 @@ status_t ExynosCameraGrallocAllocator::enqueueBuffer(buffer_handle_t *handle)
     return NO_ERROR;
 }
 
-status_t ExynosCameraGrallocAllocator::cancelBuffer(buffer_handle_t *handle)
+status_t ExynosCameraGrallocAllocator::cancelBuffer(buffer_handle_t *handle, Mutex *lock)
 {
     status_t ret = NO_ERROR;
     ExynosCameraDurationTimer   cancelbufferTimer;
+
+    if (m_allocator == NULL) {
+        ALOGE("ERR(%s):m_allocator equals NULL", __FUNCTION__);
+        return INVALID_OPERATION;
+    }
 
     if (m_grallocHal->unlock(m_grallocHal, *handle) != 0) {
         ALOGE("ERR(%s):grallocHal->unlock failed", __FUNCTION__);
@@ -804,7 +893,9 @@ status_t ExynosCameraGrallocAllocator::cancelBuffer(buffer_handle_t *handle)
     }
 
     cancelbufferTimer.start();
+    lock->unlock();
     ret = m_allocator->cancel_buffer(m_allocator, handle);
+    lock->lock();
     cancelbufferTimer.stop();
 
 #if defined (EXYNOS_CAMERA_MEMORY_TRACE_GRALLOC_PERFORMANCE)
@@ -858,6 +949,7 @@ int ExynosCameraStreamAllocator::lock(
     void  *grallocAddr[3] = {NULL};
     const private_handle_t *priv_handle = NULL;
     int   grallocFd[3] = {0};
+    android_ycbcr ycbcr;
     ExynosCameraDurationTimer   lockbufferTimer;
 
     if (bufHandle == NULL) {
@@ -878,7 +970,29 @@ int ExynosCameraStreamAllocator::lock(
     format = m_allocator->format;
 
     switch (format) {
-    case HAL_PIXEL_FORMAT_YCbCr_420_888:
+    case HAL_PIXEL_FORMAT_EXYNOS_ARGB_8888:
+    case HAL_PIXEL_FORMAT_RGBA_8888:
+    case HAL_PIXEL_FORMAT_RGBX_8888:
+    case HAL_PIXEL_FORMAT_BGRA_8888:
+    case HAL_PIXEL_FORMAT_RGB_888:
+    case HAL_PIXEL_FORMAT_RGB_565:
+    case HAL_PIXEL_FORMAT_RAW16:
+    case HAL_PIXEL_FORMAT_RAW_OPAQUE:
+    case HAL_PIXEL_FORMAT_BLOB:
+    case HAL_PIXEL_FORMAT_YCbCr_422_I:
+        if (planeCount == 1) {
+            lockbufferTimer.start();
+            ret = m_grallocHal->lock(
+                    m_grallocHal,
+                    **bufHandle,
+                    usage,
+                    0, 0, /* left, top */
+                    width, height,
+                    grallocAddr);
+            lockbufferTimer.stop();
+            break;
+        }
+    default:
         android_ycbcr ycbcr;
         lockbufferTimer.start();
         ret = m_grallocHal->lock_ycbcr(
@@ -888,18 +1002,6 @@ int ExynosCameraStreamAllocator::lock(
                 0, 0, /* left, top */
                 width, height,
                 &ycbcr);
-        lockbufferTimer.stop();
-        grallocAddr[0] = ycbcr.y;
-        break;
-    default:
-        lockbufferTimer.start();
-        ret = m_grallocHal->lock(
-                m_grallocHal,
-                **bufHandle,
-                usage,
-                0, 0, /* left, top */
-                width, height,
-                grallocAddr);
         lockbufferTimer.stop();
         break;
     }
@@ -918,27 +1020,20 @@ int ExynosCameraStreamAllocator::lock(
         goto func_exit;
     }
 
-    if (bufHandle == NULL) {
-        ALOGE("ERR(%s):bufHandle == NULL failed", __FUNCTION__);
-        ret = INVALID_OPERATION;
-        goto func_exit;
-    }
-
-    if (*bufHandle == NULL) {
-        ALOGE("@@@@ERR(%s):*bufHandle == NULL failed", __FUNCTION__);
-        ret = INVALID_OPERATION;
-        goto func_exit;
-    }
-
     priv_handle = private_handle_t::dynamicCast(**bufHandle);
 
     switch (planeCount) {
     case 3:
         grallocFd[2] = priv_handle->fd2;
+        grallocAddr[2] = ycbcr.cr;
     case 2:
         grallocFd[1] = priv_handle->fd1;
+        grallocAddr[1] = ycbcr.cb;
     case 1:
         grallocFd[0] = priv_handle->fd;
+        if (grallocAddr[0] == NULL) {
+            grallocAddr[0] = ycbcr.y;
+        }
         break;
     default:
         break;

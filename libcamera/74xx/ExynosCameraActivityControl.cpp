@@ -83,6 +83,9 @@ bool ExynosCameraActivityControl::autoFocus(int focusMode, int focusType, bool f
     }
 
     if (focusType == AUTO_FOCUS_HAL
+#ifdef SAMSUNG_MANUAL_FOCUS
+        && this->getAutoFocusMode() != FOCUS_MODE_MANUAL
+#endif
         )
         newfocusMode = FOCUS_MODE_AUTO;
     else
@@ -122,6 +125,11 @@ bool ExynosCameraActivityControl::autoFocus(int focusMode, int focusType, bool f
     case FOCUS_MODE_EDOF:
         newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_EDOF;
         break;
+#ifdef SAMSUNG_MANUAL_FOCUS
+    case FOCUS_MODE_MANUAL:
+        newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL;
+        break;
+#endif
     default:
         ALOGE("ERR(%s):Unsupported focusMode=%d", __FUNCTION__, newfocusMode);
         return false;
@@ -162,6 +170,9 @@ bool ExynosCameraActivityControl::autoFocus(int focusMode, int focusType, bool f
     case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_VIDEO:
     case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_PICTURE:
     case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO:
+#ifdef SAMSUNG_MANUAL_FOCUS
+    case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL:
+#endif
         flagAutoFocusTringger = false;
         break;
     default:
@@ -225,6 +236,11 @@ bool ExynosCameraActivityControl::autoFocus(int focusMode, int focusType, bool f
             }
 
             break;
+#ifdef SAMSUNG_MANUAL_FOCUS
+        case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL:
+            ret = true;
+            goto done;
+#endif
         default:
             break;
         }
@@ -324,6 +340,19 @@ void ExynosCameraActivityControl::setAutoFocusMode(int focusMode)
     case FOCUS_MODE_CONTINUOUS_PICTURE_MACRO:
         newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO;
         break;
+#ifdef SAMSUNG_OT
+    case FOCUS_MODE_OBJECT_TRACKING_PICTURE:
+        newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE;
+        break;
+    case FOCUS_MODE_OBJECT_TRACKING_VIDEO:
+        newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO;
+        break;
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+    case FOCUS_MODE_MANUAL:
+        newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL;
+        break;
+#endif
     default:
         break;
     }
@@ -385,6 +414,13 @@ void ExynosCameraActivityControl::setAutoFocusMode(int focusMode)
         case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_VIDEO:
         case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_PICTURE:
         case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO:
+#ifdef SAMSUNG_OT
+        case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE:
+        case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO:
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+        case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL:
+#endif
             if (m_autofocusMgr->flagAutofocusStart() == true)
                 m_autofocusMgr->stopAutofocus();
 
@@ -672,6 +708,16 @@ void ExynosCameraActivityControl::setHdrMode(bool hdrMode)
     else
         m_specialCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_NONE);
 }
+
+#ifdef OIS_CAPTURE
+void ExynosCameraActivityControl::setOISCaptureMode(bool oisMode)
+{
+    if (oisMode)
+        m_specialCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_OIS);
+    else
+        m_specialCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_NONE);
+}
+#endif
 
 int ExynosCameraActivityControl::getHdrFcount(int index)
 {

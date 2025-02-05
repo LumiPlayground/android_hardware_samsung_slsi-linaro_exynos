@@ -48,17 +48,12 @@ typedef enum
     SENSOR_NAME_S5K3L8_MASTER       = 25,
     SENSOR_NAME_S5K3L8_SLAVE        = 26,
     SENSOR_NAME_S5K4H8              = 27,
-    SENSOR_NAME_S5K2X8              = 28,
     SENSOR_NAME_S5K2L1              = 29,
-    SENSOR_NAME_S5K3P8              = 30,
+
+    SENSOR_NAME_S5K2L7              = 30,
     SENSOR_NAME_S5K3H1              = 31,
     SENSOR_NAME_S5K2L2              = 32,
     SENSOR_NAME_S5K3M3              = 33,
-    SENSOR_NAME_S5K4H5YC_FF         = 34,
-    SENSOR_NAME_S5K2L7              = 35,
-    SENSOR_NAME_S5K2P7SQ            = 43,
-    SENSOR_NAME_S5K3P8SP            = 44,
-    SENSOR_NAME_S5K2P7SX            = 45,
     SENSOR_NAME_S5K4EC              = 57,
 
     SENSOR_NAME_IMX135              = 101, // 101 ~ 200 Sony sensors
@@ -72,8 +67,6 @@ typedef enum
     SENSOR_NAME_IMX258              = 110,
     SENSOR_NAME_IMX320              = 111,
     SENSOR_NAME_IMX333              = 112,
-    SENSOR_NAME_IMX241              = 113,
-    SENSOR_NAME_IMX386              = 114,
 
     SENSOR_NAME_SR261               = 201, // 201 ~ 300 Other vendor sensors
     SENSOR_NAME_OV5693              = 202,
@@ -81,27 +74,14 @@ typedef enum
     SENSOR_NAME_OV5670              = 204,
     SENSOR_NAME_OV8865              = 205,
     SENSOR_NAME_SR259               = 206,
-    SENSOR_NAME_VIRTUAL             = 207,
-    SENSOR_NAME_OV5695              = 208,
 
-    SENSOR_NAME_S5K5E6              = 254, // IRIS Camera Sensor
-    
     SENSOR_NAME_CUSTOM              = 301,
     SENSOR_NAME_SR200               = 302, // SoC Module
     SENSOR_NAME_SR352               = 303,
     SENSOR_NAME_SR130PC20           = 304,
-    SENSOR_NAME_VIRTUAL_ZEBU        = 901,
+    SENSOR_NAME_S5K5E6              = 305,
     SENSOR_NAME_END,
 
-} IS_SensorNameEnum;
-
-enum PROCESSING_MODE {
-    PROCESSING_MODE_BASE = 0,
-    PROCESSING_MODE_REPROCESSING_PURE_BAYER,        // Jungfrau
-    PROCESSING_MODE_REPROCESSING_PROCESSED_BAYER,   // Kanchen
-    PROCESSING_MODE_REPROCESSING_YUV,               // Java
-    PROCESSING_MODE_NON_REPROCESSING_YUV,           // Katmai
-    PROCESSING_MODE_MAX,
-};
+}IS_SensorNameEnum;
 
 #endif /* EXYNOS_CAMERA_COMMON_CONFIG_H */

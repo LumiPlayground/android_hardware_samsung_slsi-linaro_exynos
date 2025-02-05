@@ -99,7 +99,6 @@ protected:
     virtual int t_funcVRAAfter(void *args) = 0;
 
 protected:
-    int  (ExynosCameraActivityBase::*pFunc)(void *args);
     bool t_isExclusiveReq;
     bool t_isActivated;
     int  t_reqNum;

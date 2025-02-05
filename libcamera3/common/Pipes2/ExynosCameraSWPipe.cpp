@@ -22,7 +22,7 @@
 
 namespace android {
 
-status_t ExynosCameraSWPipe::create(int32_t *sensorIds)
+status_t ExynosCameraSWPipe::create(__unused int32_t *sensorIds)
 {
     char SuperClassName[EXYNOS_CAMERA_NAME_STR_SIZE] = {0,};
 

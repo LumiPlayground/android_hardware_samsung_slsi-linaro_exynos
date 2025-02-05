@@ -33,10 +33,6 @@ ExynosCameraActivityControl::ExynosCameraActivityControl(__unused int cameraId)
     m_flashMgr = new ExynosCameraActivityFlash();
     m_specialCaptureMgr = new ExynosCameraActivitySpecialCapture();
     m_uctlMgr = new ExynosCameraActivityUCTL();
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    m_vendorLibraryActivityMgr = new ExynosCameraActivityVendorLibrary();
-#endif
-
     m_focusMode = FOCUS_MODE_AUTO;
     m_fpsValue = 1;
     m_halVersion = IS_HAL_VER_1_0;
@@ -63,14 +59,6 @@ ExynosCameraActivityControl::~ExynosCameraActivityControl()
         delete m_uctlMgr;
         m_uctlMgr = NULL;
     }
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-    if (m_vendorLibraryActivityMgr != NULL) {
-        delete m_vendorLibraryActivityMgr;
-        m_vendorLibraryActivityMgr = NULL;
-    }
-#endif
-
 }
 
 bool ExynosCameraActivityControl::autoFocus(int focusMode, int focusType, bool flagStartFaceDetection, int numOfFace)
@@ -94,7 +82,11 @@ bool ExynosCameraActivityControl::autoFocus(int focusMode, int focusType, bool f
             ALOGE("ERR(%s[%d]):start Pre-flash Fail", __FUNCTION__, __LINE__);
     }
 
-    if (focusType == AUTO_FOCUS_HAL)
+    if (focusType == AUTO_FOCUS_HAL
+#ifdef SAMSUNG_MANUAL_FOCUS
+        && this->getAutoFocusMode() != FOCUS_MODE_MANUAL
+#endif
+        )
         newfocusMode = FOCUS_MODE_AUTO;
     else
         newfocusMode = this->getAutoFocusMode();
@@ -133,6 +125,11 @@ bool ExynosCameraActivityControl::autoFocus(int focusMode, int focusType, bool f
     case FOCUS_MODE_EDOF:
         newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_EDOF;
         break;
+#ifdef SAMSUNG_MANUAL_FOCUS
+    case FOCUS_MODE_MANUAL:
+        newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL;
+        break;
+#endif
     default:
         ALOGE("ERR(%s):Unsupported focusMode=%d", __FUNCTION__, newfocusMode);
         return false;
@@ -173,6 +170,9 @@ bool ExynosCameraActivityControl::autoFocus(int focusMode, int focusType, bool f
     case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_VIDEO:
     case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_PICTURE:
     case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO:
+#ifdef SAMSUNG_MANUAL_FOCUS
+    case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL:
+#endif
         flagAutoFocusTringger = false;
         break;
     default:
@@ -236,6 +236,11 @@ bool ExynosCameraActivityControl::autoFocus(int focusMode, int focusType, bool f
             }
 
             break;
+#ifdef SAMSUNG_MANUAL_FOCUS
+        case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL:
+            ret = true;
+            goto done;
+#endif
         default:
             break;
         }
@@ -338,6 +343,19 @@ void ExynosCameraActivityControl::setAutoFocusMode(int focusMode)
     case FOCUS_MODE_CONTINUOUS_PICTURE_MACRO:
         newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO;
         break;
+#ifdef SAMSUNG_OT
+    case FOCUS_MODE_OBJECT_TRACKING_PICTURE:
+        newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE;
+        break;
+    case FOCUS_MODE_OBJECT_TRACKING_VIDEO:
+        newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO;
+        break;
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+    case FOCUS_MODE_MANUAL:
+        newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL;
+        break;
+#endif
     default:
         break;
     }
@@ -384,11 +402,20 @@ void ExynosCameraActivityControl::setAutoFocusMode(int focusMode)
         m_flashMgr->getFlashTrigerPath(&triggerPath);
 
         if ((triggerPath == ExynosCameraActivityFlash::FLASH_TRIGGER_LONG_BUTTON) ||
-            ((m_flashMgr->getNeedCaptureFlash() == true) && (m_flashMgr->getFlashStatus() != AA_FLASHMODE_OFF)))
+            ((m_flashMgr->getNeedCaptureFlash() == true) && (m_flashMgr->getFlashStatus() != AA_FLASHMODE_OFF))) {
             this->cancelFlash();
-        else
-            m_flashMgr->setFlashStep(ExynosCameraActivityFlash::FLASH_STEP_OFF);
+        } else {
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+            enum ExynosCameraActivityFlash::FLASH_STEP flashStep;
+            m_flashMgr->getFlashStep(&flashStep);
 
+            if (flashStep < ExynosCameraActivityFlash::FLASH_STEP_PRE_LCD_ON ||
+                flashStep > ExynosCameraActivityFlash::FLASH_STEP_LCD_OFF)
+#endif
+            {
+                m_flashMgr->setFlashStep(ExynosCameraActivityFlash::FLASH_STEP_OFF);
+            }
+        }
         m_flashMgr->setFlashTrigerPath(ExynosCameraActivityFlash::FLASH_TRIGGER_OFF);
 
     } else { /* single autofocus */
@@ -400,6 +427,13 @@ void ExynosCameraActivityControl::setAutoFocusMode(int focusMode)
         case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_VIDEO:
         case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_PICTURE:
         case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_CONTINUOUS_PICTURE_MACRO:
+#ifdef SAMSUNG_OT
+        case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_OBJECT_TRACKING_PICTURE:
+        case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_OBJECT_TRACKING_VIDEO:
+#endif
+#ifdef SAMSUNG_MANUAL_FOCUS
+        case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL:
+#endif
             if (m_autofocusMgr->flagAutofocusStart() == true)
                 m_autofocusMgr->stopAutofocus();
 
@@ -567,11 +601,6 @@ bool ExynosCameraActivityControl::flagFocusing(struct camera2_shot_ext *shot_ext
         break;
     }
 
-    if (shot_ext == NULL) {
-        ALOGE("ERR(%s):shot_ext is NULL", __func__);
-        return false;
-    }
-
     ExynosCameraActivityAutofocus::AUTOFOCUS_STATE autoFocusState = m_autofocusMgr->afState2AUTOFOCUS_STATE(shot_ext->shot.dm.aa.afState);
     switch(autoFocusState) {
     case ExynosCameraActivityAutofocus::AUTOFOCUS_STATE_SCANNING:
@@ -602,6 +631,17 @@ void ExynosCameraActivityControl::stopPreFlash(void)
 
 bool ExynosCameraActivityControl::waitFlashMainReady()
 {
+    int totalWaitingTime = 0;
+
+    while ((totalWaitingTime <= FLASH_WAITING_SLEEP_TIME * 30) && (m_flashMgr->checkPreFlash() == false)) {
+        usleep(FLASH_WAITING_SLEEP_TIME);
+        totalWaitingTime += FLASH_WAITING_SLEEP_TIME;
+    }
+
+    if (FLASH_WAITING_SLEEP_TIME * 30 < totalWaitingTime) {
+        ALOGE("ERR(%s):waiting too much (%d msec)", __FUNCTION__, totalWaitingTime);
+    }
+
     return m_flashMgr->waitMainReady();
 }
 
@@ -688,6 +728,16 @@ void ExynosCameraActivityControl::setHdrMode(bool hdrMode)
         m_specialCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_NONE);
 }
 
+#ifdef OIS_CAPTURE
+void ExynosCameraActivityControl::setOISCaptureMode(bool oisMode)
+{
+    if (oisMode)
+        m_specialCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_OIS);
+    else
+        m_specialCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_NONE);
+}
+#endif
+
 int ExynosCameraActivityControl::getHdrFcount(int index)
 {
     int startFcount = 0;
@@ -718,10 +768,6 @@ void ExynosCameraActivityControl::activityBeforeExecFunc(int pipeId, void *args)
         m_flashMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SENSOR_BEFORE, args);
         m_specialCaptureMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SENSOR_BEFORE, args);
         m_uctlMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SENSOR_BEFORE, args);
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-        m_vendorLibraryActivityMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SENSOR_BEFORE, args);
-#endif
         break;
     case PIPE_3AA:
     case PIPE_3AA_ISP:
@@ -733,10 +779,6 @@ void ExynosCameraActivityControl::activityBeforeExecFunc(int pipeId, void *args)
         }
         m_specialCaptureMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_3A_BEFORE, args);
         m_uctlMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_3A_BEFORE, args);
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-        m_vendorLibraryActivityMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_3A_BEFORE, args);
-#endif
         break;
     /* to set metadata of ISP buffer */
     case PIPE_POST_3AA_ISP:
@@ -758,10 +800,6 @@ void ExynosCameraActivityControl::activityBeforeExecFunc(int pipeId, void *args)
         m_flashMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCC_BEFORE, args);
         m_specialCaptureMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCC_BEFORE, args);
         m_uctlMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCC_BEFORE, args);
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-        m_vendorLibraryActivityMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCC_BEFORE, args);
-#endif
         break;
     case PIPE_SCP:
         if (m_halVersion != IS_HAL_VER_3_2)
@@ -769,10 +807,6 @@ void ExynosCameraActivityControl::activityBeforeExecFunc(int pipeId, void *args)
         m_flashMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCP_BEFORE, args);
         m_specialCaptureMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCP_BEFORE, args);
         m_uctlMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCP_BEFORE, args);
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-        m_vendorLibraryActivityMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCP_BEFORE, args);
-#endif
         break;
     /* HW FD Orientation is enabled 2014/04/28 */
     case PIPE_ISP:
@@ -791,10 +825,6 @@ void ExynosCameraActivityControl::activityAfterExecFunc(int pipeId, void *args)
         m_flashMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SENSOR_AFTER, args);
         m_specialCaptureMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SENSOR_AFTER, args);
         m_uctlMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SENSOR_AFTER, args);
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-        m_vendorLibraryActivityMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SENSOR_AFTER, args);
-#endif
         break;
     case PIPE_3AA:
     case PIPE_3AA_ISP:
@@ -805,10 +835,6 @@ void ExynosCameraActivityControl::activityAfterExecFunc(int pipeId, void *args)
             m_flashMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_3A_AFTER_HAL3, args);
         }
         m_specialCaptureMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_3A_AFTER, args);
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-        m_vendorLibraryActivityMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_3A_AFTER, args);
-#endif
         break;
     case PIPE_POST_3AA_ISP:
         m_uctlMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_3A_AFTER, args);
@@ -827,20 +853,12 @@ void ExynosCameraActivityControl::activityAfterExecFunc(int pipeId, void *args)
         m_flashMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCC_AFTER, args);
         m_specialCaptureMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCC_AFTER, args);
         m_uctlMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCC_AFTER, args);
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-        m_vendorLibraryActivityMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCC_AFTER, args);
-#endif
         break;
     case PIPE_SCP:
         m_autofocusMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCP_AFTER, args);
         m_flashMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCP_AFTER, args);
         m_specialCaptureMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCP_AFTER, args);
         m_uctlMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCP_AFTER, args);
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-        m_vendorLibraryActivityMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_SCP_AFTER, args);
-#endif
         break;
     default:
         break;
@@ -866,13 +884,6 @@ ExynosCameraActivityUCTL*ExynosCameraActivityControl::getUCTLMgr(void)
 {
     return m_uctlMgr;
 }
-
-#ifdef CAMERA_VENDOR_TURNKEY_FEATURE
-ExynosCameraActivityVendorLibrary* ExynosCameraActivityControl::getVendorLibraryActivityMgr(void)
-{
-    return m_vendorLibraryActivityMgr;
-}
-#endif
 
 void ExynosCameraActivityControl::setFpsValue(int fpsValue)
 {

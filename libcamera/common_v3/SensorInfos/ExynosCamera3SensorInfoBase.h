@@ -220,13 +220,6 @@ public:
     ExynosCamera3SensorIMX240_2P2Base(int sensorId);
 };
 
-struct ExynosCamera3SensorS5K2P8Base: public ExynosCamera3SensorInfoBase {
-private:
-
-public:
-    ExynosCamera3SensorS5K2P8Base();
-};
-
 struct ExynosCamera3SensorIMX258Base : public ExynosCamera3SensorInfoBase {
 private:
 
@@ -267,58 +260,6 @@ private:
 
 public:
     ExynosCamera3SensorOV5670Base();
-};
-
-struct ExynosCamera3SensorS5K3M3Base : public ExynosCamera3SensorInfoBase {
-protected:
-    ExynosCamera3SensorS5K3M3Base() {
-        android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Invalid Call. Call another contructor, assert!!!!",
-            __FUNCTION__, __LINE__);
-    }
-
-public:
-    ExynosCamera3SensorS5K3M3Base(int cameraId) : ExynosCamera3SensorInfoBase()
-    {
-        m_init(cameraId);
-    }
-
-private:
-    void m_init(int cameraId);
-};
-
-struct ExynosCamera3SensorS5K2P7SXBase : public ExynosCamera3SensorInfoBase {
-protected:
-    ExynosCamera3SensorS5K2P7SXBase() {
-        android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Invalid Call. Call another contructor, assert!!!!",
-            __FUNCTION__, __LINE__);
-    }
-
-public:
-    ExynosCamera3SensorS5K2P7SXBase(int cameraId) : ExynosCamera3SensorInfoBase()
-    {
-        m_init(cameraId);
-    }
-
-private:
-    void m_init(int cameraId);
-};
-
-
-struct ExynosCamera3SensorS5K3P8SPBase : public ExynosCamera3SensorInfoBase {
-protected:
-    ExynosCamera3SensorS5K3P8SPBase() {
-        android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Invalid Call. Call another contructor, assert!!!!",
-            __FUNCTION__, __LINE__);
-    }
-
-public:
-    ExynosCamera3SensorS5K3P8SPBase(int cameraId) : ExynosCamera3SensorInfoBase()
-    {
-        m_init(cameraId);
-    }
-
-private:
-    void m_init(int cameraId);
 };
 
 }; /* namespace android */

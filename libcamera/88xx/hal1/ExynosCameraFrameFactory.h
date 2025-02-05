@@ -90,11 +90,10 @@ public:
     virtual status_t        stopThread(uint32_t pipeId);
     virtual status_t        stopThreadAndWait(uint32_t pipeId, int sleep = 5, int times = 40);
     virtual bool            checkPipeThreadRunning(uint32_t pipeId);
+    virtual void            setThreadOneShotMode(uint32_t pipeId, bool enable);
 
     virtual status_t        setFrameManager(ExynosCameraFrameManager *manager);
     virtual status_t        getFrameManager(ExynosCameraFrameManager **manager);
-
-    virtual status_t        setFlagFlipIgnoreToPipe(uint32_t pipeId, bool ignoreFlip);
 
     virtual status_t        setBufferManagerToPipe(ExynosCameraBufferManager **bufferManager, uint32_t pipeId);
 
@@ -108,7 +107,9 @@ public:
 
     virtual status_t        setParam(struct v4l2_streamparm *streamParam, uint32_t pipeId);
     virtual status_t        setControl(int cid, int value, uint32_t pipeId);
+    virtual status_t        setControl(int cid, int value, uint32_t pipeId, enum NODE_TYPE nodeType);
     virtual status_t        getControl(int cid, int *value, uint32_t pipeId);
+    virtual status_t        setExtControl(struct v4l2_ext_controls *ctrl, uint32_t pipeId);
 
     virtual void            setRequest(int pipeId, bool enable);
     virtual void            setRequestFLITE(bool enable);
@@ -152,7 +153,9 @@ protected:
     virtual int             m_getSensorId(unsigned int nodeNum, unsigned int connectionMode, bool flagLeader, bool reprocessing);
 
     virtual int             m_getFliteNodenum(void);
-
+#ifdef SUPPORT_DEPTH_MAP
+    virtual int             m_getDepthVcNodeNum(void);
+#endif
     virtual void            m_initDeviceInfo(int pipeId);
 
 private:
@@ -176,6 +179,9 @@ protected:
     Mutex                       m_createLock;
 
     uint32_t                    m_requestFLITE;
+    uint32_t                    m_requestVC1;
+    uint32_t                    m_requestVC2;
+    uint32_t                    m_requestVC3;
     uint32_t                    m_request3AC;
     uint32_t                    m_request3AP;
     uint32_t                    m_requestISP;

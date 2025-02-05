@@ -531,6 +531,52 @@ status_t ExynosCameraMCPipe::getControl(int cid, int *value, enum NODE_TYPE node
     return ret;
 }
 
+status_t ExynosCameraMCPipe::setExtControl(struct v4l2_ext_controls *ctrl)
+{
+    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+    status_t ret = NO_ERROR;
+
+    for (int i = OUTPUT_NODE; i < MAX_NODE; i++) {
+        if (m_node[i] != NULL) {
+            ret = m_node[i]->setExtControl(ctrl);
+            if (ret != NO_ERROR) {
+                CLOGE("ERR(%s[%d]):m_node(%s)->setControl failed, ret(%d)",
+                        __FUNCTION__, __LINE__, m_deviceInfo->nodeName[i], ret);
+                return ret;
+            }
+            CLOGI("INFO(%s[%d]):setControl() is succeed, Pipe(%d)",
+                    __FUNCTION__, __LINE__, getPipeId((enum NODE_TYPE)i));
+            return ret;
+        }
+    }
+
+    CLOGE("ERR(%s[%d]):All nodes is NULL", __FUNCTION__, __LINE__);
+
+    return INVALID_OPERATION;
+}
+
+status_t ExynosCameraMCPipe::setExtControl(struct v4l2_ext_controls *ctrl, enum NODE_TYPE nodeType)
+{
+    CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
+    status_t ret = NO_ERROR;
+
+    if (m_node[nodeType] == NULL) {
+        CLOGE("ERR(%s[%d]):m_node[%d] == NULL. so, fail",
+                __FUNCTION__, __LINE__, nodeType);
+        return INVALID_OPERATION;
+    }
+
+    ret = m_node[nodeType]->setExtControl(ctrl);
+    if (ret != NO_ERROR) {
+        CLOGE("ERR(%s[%d]):m_node(%s)->setControl failed, ret(%d)",
+                __FUNCTION__, __LINE__, m_deviceInfo->nodeName[nodeType], ret);
+        return ret;
+    }
+    CLOGI("INFO(%s[%d]):setControl() is succeed, Pipe(%d)",
+            __FUNCTION__, __LINE__, getPipeId());
+    return ret;
+}
+
 status_t ExynosCameraMCPipe::setParam(struct v4l2_streamparm streamParam)
 {
     CLOGD("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
@@ -684,7 +730,7 @@ status_t ExynosCameraMCPipe::instantOnQbuf(ExynosCameraFrame **frame, BUFFER_POS
         return BAD_VALUE;
     }
 
-    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(newBuffer.addr[1]);
+    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(newBuffer.addr[newBuffer.planeCount - 1]);
 
     if (shot_ext != NULL) {
         newFrame->getMetaData(shot_ext);
@@ -698,8 +744,18 @@ status_t ExynosCameraMCPipe::instantOnQbuf(ExynosCameraFrame **frame, BUFFER_POS
         shot_ext->shot.ctl.scaler.cropRegion[2] = FASTEN_AE_WIDTH;
         shot_ext->shot.ctl.scaler.cropRegion[3] = FASTEN_AE_HEIGHT;
 #else
-        shot_ext->shot.ctl.scaler.cropRegion[2] = 0;
-        shot_ext->shot.ctl.scaler.cropRegion[3] = 0;
+        int bcropW = 0;
+        int bcropH = 0;
+
+        ret = m_parameters->getFastenAeStableBcropSize(&bcropW, &bcropH);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):m_parameters->getFastenAeStableBcropSize() fail on fastAE",
+                __FUNCTION__, __LINE__);
+            return INVALID_OPERATION;
+        }
+
+        shot_ext->shot.ctl.scaler.cropRegion[2] = bcropW;
+        shot_ext->shot.ctl.scaler.cropRegion[3] = bcropH;
 #endif
         uint32_t frameRate = 0;
         if (m_parameters->getCameraId() == CAMERA_ID_FRONT) {
@@ -823,7 +879,7 @@ status_t ExynosCameraMCPipe::instantOnDQbuf(ExynosCameraFrame **frame, __unused 
 
     m_activityControl->activityAfterExecFunc(getPipeId(), (void *)&curBuffer);
 
-    ret = m_updateMetadataToFrame(curBuffer.addr[1], curBuffer.index);
+    ret = m_updateMetadataToFrame(curBuffer.addr[curBuffer.planeCount - 1], curBuffer.index);
     if (ret < 0)
         CLOGE("ERR(%s[%d]): updateMetadataToFrame fail, ret(%d)", __FUNCTION__, __LINE__, ret);
 
@@ -1263,7 +1319,7 @@ status_t ExynosCameraMCPipe::m_preCreate(void)
                     location = NODE_LOCATION_SRC;
 
                 /* JpegHAL Destinaion node case */
-                m_node[i] = new ExynosCameraNodeJpegHAL();
+                m_node[i] = (ExynosCameraNode*)new ExynosCameraNodeJpegHAL();
 
                 ExynosJpegEncoderForCamera *jpegEncoder = NULL;
                 ret = jpegNode->getJpegEncoder(&jpegEncoder);
@@ -1471,13 +1527,17 @@ status_t ExynosCameraMCPipe::m_putBuffer(void)
     status_t ret = NO_ERROR;
     ExynosCameraFrame *newFrame = NULL;
     ExynosCameraBuffer buffer[OTF_NODE_BASE];
+    ExynosCameraFrameEntity *entity = NULL;
     int pipeId = 0;
     int bufferIndex[OTF_NODE_BASE];
     for (int i = OUTPUT_NODE; i < OTF_NODE_BASE; i++)
         bufferIndex[i] = -2;
     uint32_t captureNodeCount = 0;
+    ExynosCameraDurationTimer blockingTimer[4];
 
     /* 1. Pop from input frame queue */
+    blockingTimer[0].start();
+    blockingTimer[1].start();
     ret = m_inputFrameQ->waitAndPopProcessQ(&newFrame);
     if (ret == TIMED_OUT) {
         CLOGW("WARN(%s[%d]):inputFrameQ wait timeout", __FUNCTION__, __LINE__);
@@ -1487,6 +1547,7 @@ status_t ExynosCameraMCPipe::m_putBuffer(void)
         /* TODO: doing exception handling */
         return ret;
     }
+    blockingTimer[1].stop();
 
     if (newFrame == NULL) {
         CLOGE("ERR(%s[%d]):New frame is NULL", __FUNCTION__, __LINE__);
@@ -1495,17 +1556,14 @@ status_t ExynosCameraMCPipe::m_putBuffer(void)
 
     if (newFrame->getFrameState() == FRAME_STATE_SKIPPED
         || newFrame->getFrameState() == FRAME_STATE_INVALID) {
-        CLOGE("ERR(%s[%d]):New frame is INVALID, frameCount(%d)",
-                __FUNCTION__, __LINE__, newFrame->getFrameCount());
-        goto CLEAN_FRAME;
-    }
-
-    if (m_reprocessing == false
-        && newFrame->searchEntityByPipeId(getPipeId())->flagSpecficParent() == true
-        && m_bufferManager[OUTPUT_NODE]->getNumOfAvailableBuffer() <= 0) {
-            CLOGE("ERR(%s[%d]):Pipe is Busy, Skip frame, frameCount(%d)",
+        if (newFrame->getFrameType() == FRAME_TYPE_INTERNAL) {
+            CLOGI("INFO(%s[%d]):Internal Frame(%d), frameCount(%d) (%d)",
+                    __FUNCTION__, __LINE__, newFrame->getFrameType(), newFrame->getFrameCount());
+        } else {
+            CLOGE("ERR(%s[%d]):New frame is INVALID, frameCount(%d)",
                     __FUNCTION__, __LINE__, newFrame->getFrameCount());
-            goto CLEAN_FRAME;
+        }
+        goto CLEAN_FRAME;
     }
 
 #ifdef USE_MCPIPE_SERIALIZATION_MODE
@@ -1518,6 +1576,7 @@ status_t ExynosCameraMCPipe::m_putBuffer(void)
     }
 #endif
 
+    blockingTimer[2].start();
     for (int i = (OTF_NODE_BASE - 1); i > OUTPUT_NODE; i--) {
         if (m_node[i] == NULL)
             continue;
@@ -1625,6 +1684,7 @@ status_t ExynosCameraMCPipe::m_putBuffer(void)
         if (m_skipPutBuffer[i] == true)
             captureNodeCount++;
     }
+    blockingTimer[2].stop();
 
     if (captureNodeCount == 0) {
         CLOGW("WRN(%s[%d]):Capture node putbuffer is Zero, frameCount(%d)",
@@ -1636,6 +1696,7 @@ status_t ExynosCameraMCPipe::m_putBuffer(void)
     }
 
     /* 4. Get output node(SrcBuffer) buffer from frame */
+    blockingTimer[3].start();
     if (m_node[OUTPUT_NODE] != NULL) {
         ret = newFrame->getSrcBuffer(getPipeId(OUTPUT_NODE), &(buffer[OUTPUT_NODE]));
         if (ret != NO_ERROR) {
@@ -1646,8 +1707,18 @@ status_t ExynosCameraMCPipe::m_putBuffer(void)
         }
 
         if (m_runningFrameList[OUTPUT_NODE][(buffer[OUTPUT_NODE].index)] != NULL) {
-            CLOGE("ERR(%s[%d]):New buffer is invalid, we already get buffer, index(%d), frameCount(%d)",
-                    __FUNCTION__, __LINE__, buffer[OUTPUT_NODE].index, newFrame->getFrameCount());
+            if ( (m_parameters->isReprocessing() == true)
+                 && (m_parameters->getUsePureBayerReprocessing() == false)  /* if Dirty bayer reprocessing */
+                 && (newFrame->getFrameType() == FRAME_TYPE_INTERNAL)
+                 && (getPipeId(OUTPUT_NODE) == PIPE_ISP) ) {                /* if internal frame at ISP pipe */
+                    /* In dirty bayer mode, Internal frame would not have valid
+                       output buffer on ISP pipe. So suppress error message */
+                    CLOGI("INFO(%s[%d]):Internal frame will raises an error here, but it's normal operation, index(%d), frameCount(%d)",
+                            __FUNCTION__, __LINE__, buffer[OUTPUT_NODE].index, newFrame->getFrameCount());
+            } else {
+                CLOGE("ERR(%s[%d]):New buffer is invalid, we already get buffer, index(%d), frameCount(%d)",
+                        __FUNCTION__, __LINE__, buffer[OUTPUT_NODE].index, newFrame->getFrameCount());
+            }
             /* dump(); */
             goto CLEAN_FRAME;
         }
@@ -1735,9 +1806,21 @@ status_t ExynosCameraMCPipe::m_putBuffer(void)
             }
         }
     }
+    blockingTimer[3].stop();
+    blockingTimer[0].stop();
 
     /* 8. Push frame to getBufferThread */
     m_requestFrameQ->pushProcessQ(&newFrame);
+
+    if ((int) blockingTimer[0].durationMsecs() > 1000) { /* Over 1 sec */
+        CLOGW("WARN(%s[%d]):[F%d]putBuffer is delayed!! total %d waitInputFrameQ %d captureQ %d OutputQ %d",
+                __FUNCTION__, __LINE__,
+                newFrame->getFrameCount(),
+                (int) blockingTimer[0].durationMsecs(),
+                (int) blockingTimer[1].durationMsecs(),
+                (int) blockingTimer[2].durationMsecs(),
+                (int) blockingTimer[3].durationMsecs());
+    }
 
     CLOGV("DEBUG(%s[%d]):OUT-", __FUNCTION__, __LINE__);
     return NO_ERROR;
@@ -1880,6 +1963,12 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
                         __FUNCTION__, __LINE__, newFrame->getFrameCount(), ret);
             }
         } else {
+            if (bufferIndex[OUTPUT_NODE] < 0) {
+                CLOGE("ERR(%s[%d]):Invalid DQ buffer index(%d)", __FUNCTION__, __LINE__, bufferIndex[OUTPUT_NODE]);
+                ret = BAD_VALUE;
+                goto EXIT;
+            }
+
             /*
                 prevent the frame null pointer exception, get the frame from m_runningFrameList
                 1. in case of NDONE,  dq order was reversed.
@@ -1912,7 +2001,7 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
 
         if (bufferIndex[OUTPUT_NODE] >= 0) {
     /* 3. Update frame from dynamic metadata of output node buffer(SrcBuffer) for request, ... */
-            ret = m_updateMetadataToFrame(buffer[OUTPUT_NODE].addr[1], buffer[OUTPUT_NODE].index, newFrame, OUTPUT_NODE);
+            ret = m_updateMetadataToFrame(buffer[OUTPUT_NODE].addr[buffer[OUTPUT_NODE].planeCount - 1], buffer[OUTPUT_NODE].index, newFrame, OUTPUT_NODE);
             if (ret != NO_ERROR) {
                 CLOGE("ERR(%s[%d]):Update metadata fail, frameCount(%d), ret(%d)",
                         __FUNCTION__, __LINE__, newFrame->getFrameCount(), ret);
@@ -2056,7 +2145,9 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
                     shot_ext_dst->fd_bypass = shot_ext_src->fd_bypass;
                     shot_ext_dst->shot.dm.request.frameCount = shot_ext_src->shot.dm.request.frameCount;
                     shot_ext_dst->shot.magicNumber= shot_ext_src->shot.magicNumber;
+//#ifdef SAMSUNG_COMPANION
                     shot_ext_dst->shot.uctl.companionUd.wdr_mode = shot_ext_src->shot.uctl.companionUd.wdr_mode;
+//#endif
                 } else {
                     CLOGE("ERR(%s[%d]):metadata address fail, frameCount(%d) shot_ext src(%p) dst(%p) ",
                                 __FUNCTION__, __LINE__, newFrame->getFrameCount(), shot_ext_src, shot_ext_dst);
@@ -2077,8 +2168,17 @@ status_t ExynosCameraMCPipe::m_getBuffer(void)
     }
 
     if (captureNodeCount == 0 || checkRet != NO_ERROR) {
-        CLOGE("ERR(%s[%d]):frameCount(%d) : captureNodeCount == %d || checkRet(%d) != NO_ERROR. so, setFrameState(FRAME_STATE_SKIPPED)",
-            __FUNCTION__, __LINE__, newFrame->getFrameCount(), captureNodeCount, checkRet);
+        if (newFrame->getFrameType() == FRAME_TYPE_INTERNAL) {
+            CLOGI("INFO(%s[%d]):InternalFrame(%d) frameCount(%d)\
+                    : captureNodeCount == %d || checkRet(%d) != NO_ERROR.\
+                    so, setFrameState(FRAME_STATE_SKIPPED)",
+                __FUNCTION__, __LINE__, newFrame->getFrameType(), newFrame->getFrameCount(), captureNodeCount, checkRet);
+        } else {
+            CLOGE("ERR(%s[%d]):frameCount(%d)\
+                    : captureNodeCount == %d || checkRet(%d) != NO_ERROR.\
+                    so, setFrameState(FRAME_STATE_SKIPPED)",
+                __FUNCTION__, __LINE__, newFrame->getFrameCount(), captureNodeCount, checkRet);
+        }
 
         /* set err on frame */
         newFrame->setFrameState(FRAME_STATE_SKIPPED);
@@ -2168,7 +2268,7 @@ status_t ExynosCameraMCPipe::m_updateMetadataFromFrame(ExynosCameraFrame *frame,
     CLOGV("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
     status_t ret = NO_ERROR;
 
-    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buffer->addr[1]);
+    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buffer->addr[buffer->planeCount - 1]);
 
     if (shot_ext != NULL) {
         int perframePosition = 0;
@@ -2383,7 +2483,7 @@ status_t ExynosCameraMCPipe::m_updateMetadataFromFrame_v2(ExynosCameraFrame *fra
     CLOGV("DEBUG(%s[%d])", __FUNCTION__, __LINE__);
     status_t ret = NO_ERROR;
 
-    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buffer->addr[1]);
+    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buffer->addr[buffer->planeCount - 1]);
 
     if (shot_ext != NULL) {
         int perframePosition = 0;
@@ -2985,6 +3085,12 @@ status_t ExynosCameraMCPipe::m_getPerframePosition(int *perframePosition, uint32
     case PIPE_ISPP_REPROCESSING:
         *perframePosition = PERFRAME_REPROCESSING_ISPP_POS;
         break;
+    case PIPE_MCSC0_REPROCESSING:
+        *perframePosition = PERFRAME_REPROCESSING_MCSC0_POS;
+        break;
+    case PIPE_MCSC2_REPROCESSING:
+        *perframePosition = PERFRAME_REPROCESSING_MCSC2_POS;
+        break;
     case PIPE_MCSC3_REPROCESSING:
         *perframePosition = PERFRAME_REPROCESSING_MCSC3_POS;
         break;
@@ -3115,9 +3221,11 @@ status_t ExynosCameraMCPipe::m_setMapBuffer(ExynosCameraNode *node, ExynosCamera
     }
 
     /* Require code sync release-git to Repo */
-    /* ret = node->mapBuffer(buffer); */
+#if 0
+    ret = node->mapBuffer(buffer);
     if (ret != NO_ERROR)
         CLOGE("ERR(%s[%d]):mapBuffer() fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+#endif
 
     return ret;
 }
@@ -3142,7 +3250,7 @@ status_t ExynosCameraMCPipe::m_setJpegInfo(int nodeType, ExynosCameraBuffer *buf
     }
 
     /* 2. Get control metadata from buffer and pipeId */
-    shot_ext = (struct camera2_shot_ext *)(buffer->addr[buffer->planeCount-1]);
+    shot_ext = (struct camera2_shot_ext *)(buffer->addr[buffer->planeCount - 1]);
     pipeId = m_deviceInfo->pipeId[nodeType];
 
     /* 3. Get control informations from parameter & metadata */
@@ -3155,27 +3263,7 @@ status_t ExynosCameraMCPipe::m_setJpegInfo(int nodeType, ExynosCameraBuffer *buf
 
     /* 3. Set JPEG node perframe control information for each node */
     switch (pipeId) {
-    case PIPE_HWFC_JPEG_SRC_REPROCESSING:
     case PIPE_HWFC_JPEG_DST_REPROCESSING:
-        /* JPEG HAL setSize */
-        ret = m_node[nodeType]->setSize(pictureRect.w, pictureRect.h);
-        if (ret != NO_ERROR)
-            CLOGE("ERR(%s[%d]):Failed to set size %dx%d into %s, ret %d",
-                    __FUNCTION__, __LINE__,
-                    pictureRect.w, pictureRect.h,
-                    m_deviceInfo->nodeName[nodeType], ret);
-
-        {
-            /* JPEG HAL setQuality */
-            CLOGD("DEBUG(%s[%d]):m_node[nodeType]->setQuality(int)", __FUNCTION__, __LINE__);
-            ret = m_node[nodeType]->setQuality(jpegQuality);
-            if (ret != NO_ERROR)
-                CLOGE("ERR(%s[%d]):Failed to set jpeg quality %d into %s, ret %d",
-                        __FUNCTION__, __LINE__,
-                        jpegQuality,
-                        m_deviceInfo->nodeName[nodeType], ret);
-        }
-
         /* Create EXIF info */
         m_parameters->getFixedExifInfo(&exifInfo);
         if (ret != NO_ERROR)
@@ -3202,6 +3290,40 @@ status_t ExynosCameraMCPipe::m_setJpegInfo(int nodeType, ExynosCameraBuffer *buf
             CLOGE("ERR(%s[%d]):Failed to set DEBUG Info into %s, ret %d",
                     __FUNCTION__, __LINE__,
                     m_deviceInfo->nodeName[nodeType], ret);
+        /* continue to setSize & setQuality */
+    case PIPE_HWFC_JPEG_SRC_REPROCESSING:
+        /* JPEG HAL setSize */
+        ret = m_node[nodeType]->setSize(pictureRect.w, pictureRect.h);
+        if (ret != NO_ERROR)
+            CLOGE("ERR(%s[%d]):Failed to set size %dx%d into %s, ret %d",
+                    __FUNCTION__, __LINE__,
+                    pictureRect.w, pictureRect.h,
+                    m_deviceInfo->nodeName[nodeType], ret);
+
+#ifdef SAMSUNG_JQ
+        if (m_parameters->getJpegQtableOn() == true && m_parameters->getJpegQtableStatus() != JPEG_QTABLE_DEINIT) {
+            if (m_parameters->getJpegQtableStatus() == JPEG_QTABLE_UPDATED) {
+                CLOGD("[JQ]DEBUG(%s[%d]):Get JPEG Q-table", __FUNCTION__, __LINE__);
+                m_parameters->setJpegQtableStatus(JPEG_QTABLE_RETRIEVED);
+                m_parameters->getJpegQtable(m_qtable);
+            }
+
+            CLOGD("[JQ]DEBUG(%s[%d]):Set JPEG Q-table", __FUNCTION__, __LINE__);
+            ret = m_node[nodeType]->setQuality(m_qtable);
+            if (ret != NO_ERROR)
+                CLOGE("[JQ]ERR(%s[%d]):m_node[nodeType]->setQuality(qtable[]) fail", __FUNCTION__, __LINE__);
+        } else
+#endif
+        {
+            /* JPEG HAL setQuality */
+            CLOGD("DEBUG(%s[%d]):m_node[nodeType]->setQuality(int)", __FUNCTION__, __LINE__);
+            ret = m_node[nodeType]->setQuality(jpegQuality);
+            if (ret != NO_ERROR)
+                CLOGE("ERR(%s[%d]):Failed to set jpeg quality %d into %s, ret %d",
+                        __FUNCTION__, __LINE__,
+                        jpegQuality,
+                        m_deviceInfo->nodeName[nodeType], ret);
+        }
         break;
     case PIPE_HWFC_THUMB_SRC_REPROCESSING:
         /* JPEG HAL setSize */
@@ -3470,6 +3592,9 @@ bool ExynosCameraMCPipe::m_checkThreadLoop(frame_queue_t *frameQ)
     bool loop = false;
 
     if (m_reprocessing == false)
+        loop = true;
+
+    if (m_oneShotMode == false)
         loop = true;
 
     if (frameQ->getSizeOfProcessQ() > 0)

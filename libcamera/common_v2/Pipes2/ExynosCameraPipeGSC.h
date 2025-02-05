@@ -23,6 +23,7 @@
 
 #define CSC_HW_PROPERTY_DEFAULT ((CSC_HW_PROPERTY_TYPE)2) /* Not fixed mode */
 #define CSC_MEMORY_TYPE         CSC_MEMORY_DMABUF /* (CSC_MEMORY_USERPTR) */
+/* #define EXYNOS_CAMERA_TRACE_CSC_DURATION */
 
 namespace android {
 

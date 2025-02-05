@@ -76,9 +76,16 @@ status_t ExynosCameraPipeVRA::create(int32_t *sensorIds)
 
     m_prepareBufferCount = 0;
     m_timeLogCount = TIME_LOG_COUNT;
+
     CLOGI("create() is succeed (%d) prepare (%d)", getPipeId(), m_prepareBufferCount);
 
     return NO_ERROR;
+}
+
+status_t ExynosCameraPipeVRA::setUseLatestFrame(bool flag)
+{
+    m_useLatestFrame = flag;
+    return  NO_ERROR;
 }
 
 status_t ExynosCameraPipeVRA::m_putBuffer(void)
@@ -90,7 +97,7 @@ status_t ExynosCameraPipeVRA::m_putBuffer(void)
     struct camera2_shot_ext check_shot_ext;
 
     while (m_inputFrameQ->getSizeOfProcessQ() > 1) {
-        if (m_isReprocessing() == true) {
+       if ((m_isReprocessing() == true) && (!m_useLatestFrame)) {
             break;
         }
 
@@ -441,6 +448,9 @@ status_t ExynosCameraPipeVRA::m_updateMetadataToFrame(void *metadata, int index)
 void ExynosCameraPipeVRA::m_init(void)
 {
     /* m_init */
+    m_prevPipeId = -1;
+    m_flagStreamLeader = 0;
+    m_useLatestFrame = false;
 }
 
 status_t ExynosCameraPipeVRA::m_useImageFromFile(ExynosCameraBuffer *buffer)

@@ -1436,7 +1436,6 @@ static int S5K2P8_YUV_LIST[][SIZE_OF_RESOLUTION] =
     /* { width, height, minFrameDuration, ratioId } */
     { 5312, 2988, 33331760, SIZE_RATIO_16_9},
     { 3984, 2988, 33331760, SIZE_RATIO_4_3},
-    { 3840, 2160, 33331760, SIZE_RATIO_16_9},
     { 2976, 2976, 16665880, SIZE_RATIO_1_1},
     { 3264, 2448, 16665880, SIZE_RATIO_4_3},
     { 3264, 1836, 16665880, SIZE_RATIO_16_9},
@@ -1466,7 +1465,6 @@ static int S5K2P8_JPEG_LIST[][SIZE_OF_RESOLUTION] =
     /* { width, height, minFrameDuration, ratioId } */
     { 5312, 2988, 50000000, SIZE_RATIO_16_9},
     { 3984, 2988, 50000000, SIZE_RATIO_4_3},
-    { 3840, 2160, 50000000, SIZE_RATIO_16_9},
     { 2976, 2976, 50000000, SIZE_RATIO_1_1},
     { 3264, 2448, 50000000, SIZE_RATIO_4_3},
     { 3264, 1836, 50000000, SIZE_RATIO_16_9},
@@ -1518,7 +1516,6 @@ static int S5K2P8_FPS_RANGE_LIST[][2] =
     {  10000,  30000},
     {  15000,  30000},
     {  30000,  30000},
-    {  60000,  60000},
 };
 
 /* For HAL3 */

@@ -31,6 +31,10 @@
 #include "videodev2_exynos_media.h"
 #include "ExynosCameraBuffer.h"
 
+#ifdef SAMSUNG_SENSOR_LISTENER
+#include "sensor_listener_wrapper.h"
+#endif
+
 #define ROUND_OFF(x, dig)           (floor((x) * pow(10.0f, dig)) / pow(10.0f, dig))
 #define GET_MAX_NUM(a, b, c) \
     ((a) < (b) ? \
@@ -197,6 +201,25 @@ void setMetaCtlSharpness(struct camera2_shot_ext *shot_ext, enum processing_mode
 void getMetaCtlSharpness(struct camera2_shot_ext *shot_ext, enum processing_mode *mode, int32_t *sharpness,
                             enum processing_mode *noise_mode, int32_t *noise_sharpness);
 
+#ifdef SAMSUNG_COMPANION
+void setMetaCtlRTDrc(struct camera2_shot_ext *shot_ext, enum companion_drc_mode mode);
+void getMetaCtlRTDrc(struct camera2_shot_ext *shot_ext, enum companion_drc_mode *mode);
+void setMetaCtlPaf(struct camera2_shot_ext *shot_ext, enum companion_paf_mode mode);
+void getMetaCtlPaf(struct camera2_shot_ext *shot_ext, enum companion_paf_mode *mode);
+void setMetaCtlRTHdr(struct camera2_shot_ext *shot_ext, enum companion_wdr_mode mode);
+void getMetaCtlRTHdr(struct camera2_shot_ext *shot_ext, enum companion_wdr_mode *mode);
+#endif
+
+#ifdef SAMSUNG_OIS
+void setMetaCtlOIS(struct camera2_shot_ext *shot_ext, enum optical_stabilization_mode mode);
+void getMetaCtlOIS(struct camera2_shot_ext *shot_ext, enum optical_stabilization_mode *mode);
+#endif
+
+#ifdef SAMSUNG_MANUAL_FOCUS
+void setMetaCtlFocusDistance(struct camera2_shot_ext *shot_ext, float distance);
+void getMetaCtlFocusDistance(struct camera2_shot_ext *shot_ext, float *distance);
+#endif
+
 void setMetaCtlIso(struct camera2_shot_ext *shot_ext, enum aa_isomode mode, uint32_t iso);
 void getMetaCtlIso(struct camera2_shot_ext *shot_ext, enum aa_isomode *mode, uint32_t *iso);
 void setMetaCtlFdMode(struct camera2_shot_ext *shot_ext, enum facedetect_mode mode);
@@ -206,6 +229,9 @@ void getStreamFrameCount(struct camera2_stream *shot_stream, uint32_t *fcount);
 
 status_t setMetaDmSensorTimeStamp(struct camera2_shot_ext *shot_ext, uint64_t timeStamp);
 nsecs_t getMetaDmSensorTimeStamp(struct camera2_shot_ext *shot_ext);
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+nsecs_t getMetaUdmSensorTimeStampBoot(struct camera2_shot_ext *shot_ext);
+#endif
 
 void setMetaNodeLeaderRequest(struct camera2_shot_ext* shot_ext, int value);
 void setMetaNodeLeaderVideoID(struct camera2_shot_ext* shot_ext, int value);
@@ -223,8 +249,26 @@ void setMetaBypassFd(struct camera2_shot_ext *shot_ext, int value);
 
 void setMetaSetfile(struct camera2_shot_ext *shot_ext, int value);
 
+#ifdef SAMSUNG_DOF
+void setMetaCtlLensPos(struct camera2_shot_ext *shot_ext, int value);
+#endif
+
+#ifdef SAMSUNG_HRM
+void setMetaCtlHRM(struct camera2_shot_ext *shot_ext, int ir_data, int status);
+#endif
+#ifdef SAMSUNG_LIGHT_IR
+void setMetaCtlLight_IR(struct camera2_shot_ext *shot_ext, SensorListenerEvent_t data);
+#endif
+#ifdef SAMSUNG_GYRO
+void setMetaCtlGyro(struct camera2_shot_ext *shot_ext, SensorListenerEvent_t data);
+#endif
+
 #ifdef USE_FW_ZOOMRATIO
 void setMetaCtlZoom(struct camera2_shot_ext *shot_ext, float data);
+#endif
+
+#ifdef SAMSUNG_OIS_VDIS
+void setMetaCtlOISCoef(struct camera2_shot_ext *shot_ext, uint32_t data);
 #endif
 
 int mergeSetfileYuvRange(int setfile, int yuvRange);

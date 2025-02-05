@@ -80,6 +80,12 @@ enum NODE_TYPE ExynosCameraFrameFactory::getNodeType(uint32_t pipeId)
 	case PIPE_3AF_REPROCESSING:
 		nodeType = CAPTURE_NODE_24;
         break;
+
+    case PIPE_3AG:
+    case PIPE_3AG_REPROCESSING:
+        nodeType = CAPTURE_NODE_25;
+        break;
+
     case PIPE_ISP:
     case PIPE_ISP_REPROCESSING:
         if (m_flag3aaIspOTF == HW_CONNECTION_MODE_M2M) {
@@ -161,8 +167,12 @@ enum NODE_TYPE ExynosCameraFrameFactory::getNodeType(uint32_t pipeId)
     case PIPE_FUSION:
     case PIPE_FUSION_REPROCESSING:
 #endif
-#ifdef USES_SW_VDIS
-    case PIPE_VDIS:
+#ifdef SAMSUNG_TN_FEATURE
+    case PIPE_PP_UNI_REPROCESSING:
+    case PIPE_PP_UNI_REPROCESSING2:
+    case PIPE_PP_UNI:
+    case PIPE_PP_UNI2:
+    case PIPE_PP_UNI3:
 #endif
     case PIPE_GSC:
         nodeType = OUTPUT_NODE;
@@ -212,41 +222,27 @@ int ExynosCameraFrameFactory::getPPScenario(int pipeId)
     return -1;
 }
 
-bool ExynosCameraFrameFactory::checkPlugin(int pipeId)
-{
-    bool ret = false;
-
-    int startIndex = 0;
-    int maxIndex = 0;
-    if(m_flagReprocessing == false) {
-        startIndex = PIPE_PLUGIN_BASE;
-        maxIndex = PIPE_PLUGIN_MAX;
-    } else {
-        startIndex = PIPE_PLUGIN_BASE_REPROCESSING;
-        maxIndex = PIPE_PLUGIN_MAX_REPROCESSING;
-    }
-
-    for (int i = startIndex ; i <= maxIndex ; i++) {
-        if (pipeId == i) {
-            ret = true;
-            break;
-        }
-    }
-
-    return ret;
-}
-
 status_t ExynosCameraFrameFactory::m_initFlitePipe(int sensorW, int sensorH, __unused uint32_t frameRate)
 {
     CLOGI("");
 
     status_t ret = NO_ERROR;
+    camera_pipe_info_t pipeInfo[MAX_NODE];
 
     int pipeId = PIPE_FLITE;
 
     if (m_parameters->getHwConnectionMode(PIPE_FLITE, PIPE_3AA) != HW_CONNECTION_MODE_M2M) {
         pipeId = PIPE_3AA;
     }
+
+    ExynosRect tempRect;
+
+#ifdef DEBUG_RAWDUMP
+    int bayerFormat = m_parameters->getBayerFormat(PIPE_FLITE);
+    if (m_configurations->checkBayerDumpEnable()) {
+        bayerFormat = CAMERA_DUMP_BAYER_FORMAT;
+    }
+#endif
 
     CLOGI("SensorSize(%dx%d)", sensorW, sensorH);
 
@@ -297,6 +293,9 @@ int ExynosCameraFrameFactory::m_getSensorId(unsigned int nodeNum, unsigned int c
         sensorId = 2;
         break;
 #endif
+    case CAMERA_ID_SECURE:
+        sensorId = 3;
+        break;
     default:
         break;
     }
@@ -357,32 +356,5 @@ int ExynosCameraFrameFactory::m_getDepthVcNodeNum(void)
 void ExynosCameraFrameFactory::m_init(void)
 {
 }
-
-status_t ExynosCameraFrameFactory::setParameter(uint32_t pipeId, int key, void *data)
-{
-    status_t ret = NO_ERROR;
-
-    ret = m_pipes[INDEX(pipeId)]->setParameter(key, data);
-    if (ret != NO_ERROR) {
-        CLOGE("setParameter fail, pipeId(%d), ret(%d)", pipeId, ret);
-        /* TODO: exception handling */
-    }
-
-    return ret;
-}
-
-status_t ExynosCameraFrameFactory::getParameter(uint32_t pipeId, int key, void *data)
-{
-    status_t ret = NO_ERROR;
-
-    ret = m_pipes[INDEX(pipeId)]->getParameter(key, data);
-    if (ret != NO_ERROR) {
-        CLOGE("getParameter fail, pipeId(%d), ret(%d)", pipeId, ret);
-        /* TODO: exception handling */
-    }
-
-    return ret;
-}
-
 
 }; /* namespace android */

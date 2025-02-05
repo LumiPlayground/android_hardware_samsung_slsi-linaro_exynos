@@ -82,11 +82,22 @@ status_t ExynosCameraPipeGSC::stop(void)
 
     m_flagTryStop = true;
 
+    ret = stopThread();
+    if (ret < NO_ERROR) {
+        CLOGE("ERR(%s[%d]):Failed to stopThread for GSC",
+                __FUNCTION__, __LINE__);
+    }
+
     m_mainThread->requestExitAndWait();
 
     CLOGD("DEBUG(%s[%d]): thead exited", __FUNCTION__, __LINE__);
 
     m_inputFrameQ->release();
+
+    for (uint32_t i = 0; i < MAX_BUFFERS; i++) {
+        m_runningFrameList[i] = NULL;
+    }
+    m_numBuffers = 0;
 
     m_flagTryStop = false;
 
@@ -111,6 +122,7 @@ status_t ExynosCameraPipeGSC::startThread(void)
 
 status_t ExynosCameraPipeGSC::m_run(void)
 {
+    ExynosCameraDurationTimer cscTimer;
     ExynosCameraFrame *newFrame = NULL;
     ExynosCameraBuffer srcBuffer;
     ExynosCameraBuffer dstBuffer;
@@ -122,11 +134,6 @@ status_t ExynosCameraPipeGSC::m_run(void)
     int rotation = 0;
     int flipHorizontal = 0;
     int flipVertical = 0;
-
-    if (m_flagIgnoreFlip == false) {
-        flipHorizontal = m_parameters->getFlipHorizontal();
-        flipVertical = m_parameters->getFlipVertical();
-    }
 
     ret = m_inputFrameQ->waitAndPopProcessQ(&newFrame);
     if (ret < 0) {
@@ -145,11 +152,26 @@ status_t ExynosCameraPipeGSC::m_run(void)
         return NO_ERROR;
     }
 
+    /* For debugging */
+    m_runningFrameList[m_numBuffers] = newFrame;
+    m_numBuffers += 1;
+
     entity = newFrame->searchEntityByPipeId(getPipeId());
     if (entity == NULL || entity->getSrcBufState() == ENTITY_BUFFER_STATE_ERROR) {
         CLOGE("ERR(%s[%d]):frame(%d) entityState(ENTITY_BUFFER_STATE_ERROR), skip msc", __FUNCTION__, __LINE__, newFrame->getFrameCount());
         goto func_exit;
     }
+
+    rotation = newFrame->getRotation(getPipeId());
+    CLOGV("INFO(%s[%d]): getPipeId(%d), rotation(%d)", __FUNCTION__, __LINE__, getPipeId(), rotation);
+
+#ifdef PERFRAME_CONTROL_FOR_FLIP
+    flipHorizontal = newFrame->getFlipHorizontal(getPipeId());
+    flipVertical = newFrame->getFlipVertical(getPipeId());
+#else
+    flipHorizontal = m_parameters->getFlipHorizontal();
+    flipVertical = m_parameters->getFlipVertical();
+#endif
 
     ret = newFrame->getSrcRect(getPipeId(), &srcRect);
     ret = newFrame->getDstRect(getPipeId(), &dstRect);
@@ -196,13 +218,24 @@ status_t ExynosCameraPipeGSC::m_run(void)
     csc_set_dst_buffer(m_csc,
             (void **)dstBuffer.fd, CSC_MEMORY_TYPE);
 
+    cscTimer.start();
     if (csc_convert_with_rotation(m_csc, rotation, flipHorizontal, flipVertical) != 0)
         CLOGE("ERR(%s):csc_convert() fail", __FUNCTION__);
+    cscTimer.stop();
 
     CLOGV("DEBUG(%s[%d]):Rotation(%d), flip horizontal(%d), vertical(%d)",
             __FUNCTION__, __LINE__, rotation, flipHorizontal, flipVertical);
 
     CLOGV("DEBUG(%s[%d]):CSC(%d) converting done", __FUNCTION__, __LINE__, m_gscNum);
+
+#ifdef EXYNOS_CAMERA_TRACE_CSC_DURATION
+    CLOGD("DEBUG(%s[%d]):TRACE csc_convert() duration time(%5d msec)", __FUNCTION__, __LINE__,
+            (int)cscTimer.durationMsecs());
+#else
+    if (cscTimer.durationMsecs() > 33)
+        CLOGW("WARN(%s[%d]):csc_convert() duration time(%5d msec > 33 msec)", __FUNCTION__, __LINE__,
+                (int)cscTimer.durationMsecs());
+#endif
 
     ret = newFrame->setEntityState(getPipeId(), ENTITY_STATE_FRAME_DONE);
     if (ret < 0) {
@@ -212,6 +245,10 @@ status_t ExynosCameraPipeGSC::m_run(void)
     }
 
     m_outputFrameQ->pushProcessQ(&newFrame);
+
+    /* For debugging */
+    m_numBuffers -= 1;
+    m_runningFrameList[m_numBuffers] = NULL;
 
     return NO_ERROR;
 
@@ -225,6 +262,11 @@ func_exit:
     }
 
     m_outputFrameQ->pushProcessQ(&newFrame);
+
+    /* For debugging */
+    m_numBuffers -= 1;
+    m_runningFrameList[m_numBuffers] = NULL;
+
     return NO_ERROR;
 }
 

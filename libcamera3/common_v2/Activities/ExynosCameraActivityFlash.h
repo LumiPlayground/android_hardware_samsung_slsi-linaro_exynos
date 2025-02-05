@@ -167,12 +167,18 @@ public:
     bool getFlashStep(enum FLASH_STEP *flashStepVal);
     int  getFlashStatus(void);
     bool getNeedCaptureFlash(void);
+    void setNeedFlashMainStart(bool isFlashMainStart);
+    bool getNeedFlashMainStart(void);
     void notifyAfResultHAL3(void);
     void notifyAeResult(void);
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+    void setAeFlashModeForLcdFlashHAL3(camera2_shot_ext *shot_ext, int flashStep);
+#endif
 
 private:
     bool m_isNeedFlash;
     bool m_isNeedCaptureFlash;
+    bool m_isNeedFlashMainStart;
     /* TODO: If need another delay, add variables */
     bool m_isNeedFlashOffDelay;
     int  m_flashTriggerStep;

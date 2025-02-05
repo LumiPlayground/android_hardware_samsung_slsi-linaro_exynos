@@ -17,7 +17,7 @@
 
 /* #define LOG_NDEBUG 0 */
 #define LOG_TAG "ExynosCameraActivityUCTL"
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "ExynosCameraActivityUCTL.h"
 //#include "ExynosCamera.h"
@@ -36,42 +36,28 @@ ExynosCameraActivityUCTL::~ExynosCameraActivityUCTL()
 {
 }
 
-int ExynosCameraActivityUCTL::t_funcNull(void *args)
+int ExynosCameraActivityUCTL::t_funcNull(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-
     return 1;
 }
 
-int ExynosCameraActivityUCTL::t_funcSensorBefore(void *args)
+int ExynosCameraActivityUCTL::t_funcSensorBefore(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buf->addr[buf->getMetaPlaneIndex()]);
-
     return 1;
 }
 
-int ExynosCameraActivityUCTL::t_funcSensorAfter(void *args)
+int ExynosCameraActivityUCTL::t_funcSensorAfter(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buf->addr[buf->getMetaPlaneIndex()]);
-
     return 1;
 }
 
-int ExynosCameraActivityUCTL::t_funcISPBefore(void *args)
+int ExynosCameraActivityUCTL::t_funcISPBefore(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buf->addr[buf->getMetaPlaneIndex()]);
-
     return 1;
 }
 
-int ExynosCameraActivityUCTL::t_funcISPAfter(void *args)
+int ExynosCameraActivityUCTL::t_funcISPAfter(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buf->addr[buf->getMetaPlaneIndex()]);
-
     return 1;
 }
 
@@ -89,11 +75,8 @@ int ExynosCameraActivityUCTL::t_func3ABefore(void *args)
     return 1;
 }
 
-int ExynosCameraActivityUCTL::t_func3AAfter(void *args)
+int ExynosCameraActivityUCTL::t_func3AAfter(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-    camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buf->addr[buf->getMetaPlaneIndex()]);
-
     return 1;
 }
 
@@ -103,6 +86,35 @@ int ExynosCameraActivityUCTL::t_func3ABeforeHAL3(__unused void *args)
     camera2_shot_ext *shot_ext = (struct camera2_shot_ext *)(buf->addr[buf->getMetaPlaneIndex()]);
 
     if (shot_ext != NULL) {
+        if (m_metadata != NULL) {
+#ifdef SAMSUNG_HRM
+            if (m_metadata->shot.uctl.aaUd.hrmInfo.ir_data != 0)
+                shot_ext->shot.uctl.aaUd.hrmInfo = m_metadata->shot.uctl.aaUd.hrmInfo;
+#endif
+
+#ifdef SAMSUNG_LIGHT_IR
+            if (m_metadata->shot.uctl.aaUd.illuminationInfo.visible_exptime != 0)
+                shot_ext->shot.uctl.aaUd.illuminationInfo = m_metadata->shot.uctl.aaUd.illuminationInfo;
+#endif
+
+#ifdef SAMSUNG_GYRO
+            shot_ext->shot.uctl.aaUd.gyroInfo = m_metadata->shot.uctl.aaUd.gyroInfo;
+#endif
+
+#ifdef SAMSUNG_ACCELEROMETER
+            shot_ext->shot.uctl.aaUd.accInfo = m_metadata->shot.uctl.aaUd.accInfo;
+#endif
+
+#ifdef SAMSUNG_DOF
+            if (m_metadata->shot.uctl.lensUd.pos > 0) {
+                shot_ext->shot.uctl.lensUd.pos = m_metadata->shot.uctl.lensUd.pos;
+                shot_ext->shot.uctl.lensUd.posSize = m_metadata->shot.uctl.lensUd.posSize;
+                shot_ext->shot.uctl.lensUd.direction = m_metadata->shot.uctl.lensUd.direction;
+                shot_ext->shot.uctl.lensUd.slewRate = m_metadata->shot.uctl.lensUd.slewRate;
+            }
+#endif
+        }
+
 #ifdef FD_ROTATION
         shot_ext->shot.uctl.scalerUd.orientation = m_rotation;
 #endif
@@ -123,11 +135,8 @@ int ExynosCameraActivityUCTL::t_funcSCPBefore(__unused void *args)
     return 1;
 }
 
-int ExynosCameraActivityUCTL::t_funcSCPAfter(void *args)
+int ExynosCameraActivityUCTL::t_funcSCPAfter(__unused void *args)
 {
-    ExynosCameraBuffer *buf = (ExynosCameraBuffer *)args;
-    camera2_stream *shot_stream = (struct camera2_stream *)(buf->addr[buf->getMetaPlaneIndex()]);
-
     return 1;
 }
 
