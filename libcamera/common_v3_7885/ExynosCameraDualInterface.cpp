@@ -109,7 +109,7 @@ static int HAL_camera_device_close(struct hw_device_t* device)
 {
     ExynosCameraAutoTimer autoTimer(__FUNCTION__);
 
-    uint32_t cameraId;
+    uint32_t cameraId = 0;
     enum CAMERA_STATE state;
 
 #if (defined BOARD_BACK_CAMERA_USES_EXTERNAL_CAMERA) && (defined BOARD_FRONT_CAMERA_USES_EXTERNAL_CAMERA)
