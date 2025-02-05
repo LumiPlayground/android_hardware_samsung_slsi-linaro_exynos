@@ -2276,9 +2276,9 @@ void ExynosCameraThreadInterface::m_clearApiQ(void)
     m_apiQ.clear();
 }
 
-char *ExynosCameraThreadInterface::m_apiType2Str(enum API_TYPE apiType)
+const char *ExynosCameraThreadInterface::m_apiType2Str(enum API_TYPE apiType)
 {
-    char *str = NULL;
+    const char *str = nullptr;
 
     switch (apiType) {
     case API_TYPE_BASE:
@@ -2320,9 +2320,9 @@ char *ExynosCameraThreadInterface::m_apiType2Str(enum API_TYPE apiType)
     return str;
 }
 
-char *ExynosCameraThreadInterface::m_runMode2Str(enum RUM_MODE runMode)
+const char *ExynosCameraThreadInterface::m_runMode2Str(enum RUM_MODE runMode)
 {
-    char *str = NULL;
+    const char *str = nullptr;
 
     switch (runMode) {
     case RUN_MODE_BASE:

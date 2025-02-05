@@ -620,8 +620,8 @@ private:
     int      m_sizeOfApiQ(void);
     void     m_clearApiQ(void);
 
-    static char    *m_apiType2Str(enum API_TYPE apiType);
-    static char    *m_runMode2Str(enum RUM_MODE runMode);
+    static const char    *m_apiType2Str(enum API_TYPE apiType);
+    static const char    *m_runMode2Str(enum RUM_MODE runMode);
 };
 
 ExynosCameraThreadInterface *g_threadInterface[MAX_NUM_OF_CAMERA];

@@ -537,7 +537,7 @@ static int HAL_open_legacy(const struct hw_module_t* module, const char* id,
     if (halVersion == 0)
         ALOGE("ERR(%s[%d]):halVersion is Zero", __FUNCTION__, __LINE__);
 
-    char *newId = "20";
+    const char *newId = "20";
     int cameraId = atoi(id);
 
 #ifdef TIME_LOGGER_LAUNCH_ENABLE
@@ -3838,9 +3838,9 @@ void ExynosCameraThreadInterface::m_clearApiQ(void)
     m_apiQ.clear();
 }
 
-char *ExynosCameraThreadInterface::m_apiType2Str(enum API_TYPE apiType)
+const char *ExynosCameraThreadInterface::m_apiType2Str(enum API_TYPE apiType)
 {
-    char *str = NULL;
+    const char *str = nullptr;
 
     switch (apiType) {
     case API_TYPE_BASE:
@@ -3909,9 +3909,9 @@ char *ExynosCameraThreadInterface::m_apiType2Str(enum API_TYPE apiType)
     return str;
 }
 
-char *ExynosCameraThreadInterface::m_runMode2Str(enum RUM_MODE runMode)
+const char *ExynosCameraThreadInterface::m_runMode2Str(enum RUM_MODE runMode)
 {
-    char *str = NULL;
+    const char *str = nullptr;
 
     switch (runMode) {
     case RUN_MODE_BASE:
