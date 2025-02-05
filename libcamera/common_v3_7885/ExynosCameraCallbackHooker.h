@@ -24,8 +24,6 @@
 
 namespace android {
 
-#define MAX_NUM_OF_CAMERA (5)
-
 /*
  * callback hooking class
  * it refer frameworks/av/services/camera/libcameraservice/device1/CameraHardwareInterface.h
