@@ -32,7 +32,7 @@
 #define CAMERA_MODULE_VERSION   CAMERA_MODULE_API_VERSION_2_4
 #endif
 
-#define SET_METHOD(m) m : HAL_camera_device_##m
+#define SET_METHOD(m) .m = HAL_camera_device_##m
 
 namespace android {
 
@@ -368,31 +368,31 @@ static camera_device_ops_t camera_device_ops = {
 };
 
 static hw_module_methods_t camera_module_methods = {
-            open : HAL_camera_device_open
+            .open = HAL_camera_device_open
 };
 
 extern "C" {
     struct camera_module HAL_MODULE_INFO_SYM = {
-      common : {
-          tag                : HARDWARE_MODULE_TAG,
-          module_api_version : CAMERA_MODULE_VERSION,
-          hal_api_version    : HARDWARE_HAL_API_VERSION,
-          id                 : CAMERA_HARDWARE_MODULE_ID,
-          name               : "Exynos Camera HAL1",
-          author             : "Samsung Corporation",
-          methods            : &camera_module_methods,
-          dso                : NULL,
-          reserved           : {0},
+      .common = {
+          .tag                = HARDWARE_MODULE_TAG,
+          .module_api_version = CAMERA_MODULE_VERSION,
+          .hal_api_version    = HARDWARE_HAL_API_VERSION,
+          .id                 = CAMERA_HARDWARE_MODULE_ID,
+          .name               = "Exynos Camera HAL1",
+          .author             = "Samsung Corporation",
+          .methods            = &camera_module_methods,
+          .dso                = NULL,
+          .reserved           = {0},
       },
-      get_number_of_cameras : HAL_getNumberOfCameras,
-      get_camera_info       : HAL_getCameraInfo,
-      set_callbacks         : HAL_set_callbacks,
+      .get_number_of_cameras = HAL_getNumberOfCameras,
+      .get_camera_info       = HAL_getCameraInfo,
+      .set_callbacks         = HAL_set_callbacks,
 #if (TARGET_ANDROID_VER_MAJ >= 4 && TARGET_ANDROID_VER_MIN >= 4)
-      get_vendor_tag_ops    : HAL_get_vendor_tag_ops,
-      open_legacy           : HAL_open_legacy,
-      set_torch_mode        : HAL_set_torch_mode,
-      init                  : HAL_init,
-      reserved              : {0}
+      .get_vendor_tag_ops    = HAL_get_vendor_tag_ops,
+      .open_legacy           = HAL_open_legacy,
+      .set_torch_mode        = HAL_set_torch_mode,
+      .init                  = HAL_init,
+      .reserved              = {0}
 #endif
     };
 }

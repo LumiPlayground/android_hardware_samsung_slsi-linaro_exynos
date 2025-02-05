@@ -34,9 +34,9 @@
 #include "pthread.h"
 
 #ifdef USE_ONE_INTERFACE_FILE
-#define SET_METHOD(m) m : HAL_camera_device_##m
+#define SET_METHOD(m) .m = HAL_camera_device_##m
 #endif
-#define SET_METHOD3(m) m : HAL3_camera_device_##m
+#define SET_METHOD3(m) .m = HAL3_camera_device_##m
 
 /* init camera module */
 #define INIT_MODULE_PATH "/sys/class/camera/rear/fw_update"
@@ -484,7 +484,7 @@ static camera3_device_ops_t camera_device3_ops = {
 };
 
 static hw_module_methods_t mCameraHwModuleMethods = {
-            open : HAL3_camera_device_open
+            .open = HAL3_camera_device_open
 };
 
 /*
@@ -492,25 +492,25 @@ static hw_module_methods_t mCameraHwModuleMethods = {
  */
 extern "C" {
     camera_module_t HAL_MODULE_INFO_SYM = {
-      common : {
-          tag                : HARDWARE_MODULE_TAG,
-          module_api_version : CAMERA_MODULE_API_VERSION_2_4,
-          hal_api_version    : HARDWARE_HAL_API_VERSION,
-          id                 : CAMERA_HARDWARE_MODULE_ID,
-          name               : "Exynos Camera HAL3",
-          author             : "Samsung Electronics Inc",
-          methods            : &mCameraHwModuleMethods,
-          dso                : NULL,
-          reserved           : {0},
+      .common = {
+          .tag                = HARDWARE_MODULE_TAG,
+          .module_api_version = CAMERA_MODULE_API_VERSION_2_4,
+          .hal_api_version    = HARDWARE_HAL_API_VERSION,
+          .id                 = CAMERA_HARDWARE_MODULE_ID,
+          .name               = "Exynos Camera HAL3",
+          .author             = "Samsung Electronics Inc",
+          .methods            = &mCameraHwModuleMethods,
+          .dso                = NULL,
+          .reserved           = {0},
       },
-      get_number_of_cameras : HAL_getNumberOfCameras,
-      get_camera_info       : HAL_getCameraInfo,
-      set_callbacks         : HAL_set_callbacks,
-      get_vendor_tag_ops    : HAL_get_vendor_tag_ops,
-      open_legacy           : HAL_open_legacy,
-      set_torch_mode        : HAL_set_torch_mode,
-      init                  : HAL_init,
-      reserved              : {0},
+      .get_number_of_cameras = HAL_getNumberOfCameras,
+      .get_camera_info       = HAL_getCameraInfo,
+      .set_callbacks         = HAL_set_callbacks,
+      .get_vendor_tag_ops    = HAL_get_vendor_tag_ops,
+      .open_legacy           = HAL_open_legacy,
+      .set_torch_mode        = HAL_set_torch_mode,
+      .init                  = HAL_init,
+      .reserved              = {0},
     };
 }
 
