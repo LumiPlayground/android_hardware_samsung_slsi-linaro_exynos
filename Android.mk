@@ -65,6 +65,10 @@ common_exynos_dirs += abox
 endif
 endif
 
+common_exynos_dirs += \
+	libcamera \
+	libcamera3
+
 ifeq ($(BOARD_BACK_CAMERA_USES_EXTERNAL_CAMERA), true)
 common_exynos_dirs += \
 	libcamera_external
