@@ -302,6 +302,7 @@ static int HAL3_camera_device_configure_streams(const struct camera3_device *dev
     return ret;
 }
 
+#if 0
 static int HAL3_camera_device_register_stream_buffers(const struct camera3_device *dev,
                                                     const camera3_stream_buffer_set_t *buffer_set)
 {
@@ -320,6 +321,7 @@ static int HAL3_camera_device_register_stream_buffers(const struct camera3_devic
     ALOGI("INFO(%s[%d]):out =====", __FUNCTION__, __LINE__);
     return ret;
 }
+#endif
 
 static const camera_metadata_t* HAL3_camera_device_construct_default_request_settings(
                                                                 const struct camera3_device *dev,
