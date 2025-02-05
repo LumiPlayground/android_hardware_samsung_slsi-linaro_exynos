@@ -53,11 +53,18 @@ public:
     virtual status_t        preparePipes(void);
 
     virtual status_t        startPipes(void);
+    virtual status_t        startSensor3AAPipe(void);
     virtual status_t        stopPipes(void);
     virtual status_t        startInitialThreads(void);
     virtual status_t        setStopFlag(void);
 
+    virtual status_t        switchSensorMode(void);
+    virtual status_t        finishSwitchSensorMode(void);
+
     virtual ExynosCameraFrameSP_sptr_t createNewFrame(ExynosCameraFrameSP_sptr_t refFrame = NULL);
+#ifdef USE_DUAL_CAMERA
+    virtual status_t        sensorStandby(bool standby);
+#endif
 
 protected:
     virtual status_t        m_setupConfig(bool isFastAE = false);
@@ -75,7 +82,8 @@ protected:
                                                       int hwSensorH,
                                                       uint32_t frameRate);
 
-    virtual status_t        m_fillNodeGroupInfo(ExynosCameraFrameSP_sptr_t frame);
+    virtual status_t        m_setupRequestFlags(void);
+    virtual status_t        m_fillNodeGroupInfo(ExynosCameraFrameSP_sptr_t frame, ExynosCameraFrameSP_sptr_t refFrame = NULL);
 
 #ifdef SUPPORT_GROUP_MIGRATION
     status_t        m_initNodeInfo(void);

@@ -78,8 +78,144 @@
 
 #define IS_WBLEVEL_DEFAULT (4)
 #define FW_CUSTOM_OFFSET (1)
+#define ZOOM_RATIO_3X (430)
 
 namespace android {
+
+#ifdef USE_DUAL_CAMERA
+enum dual_camera_notify_type {
+    DUAL_CAMERA_NOTIFY_BASE,
+    DUAL_CAMERA_NOTIFY_WAKE_UP,
+    DUAL_CAMERA_NOTIFY_WAKE_UP_FINISH,
+    DUAL_CAMERA_NOTIFY_SET_OBJECT_TRACKING_FOCUS_AREA,
+    DUAL_CAMERA_NOTIFY_MAX,
+};
+
+class ExynosCamera;
+typedef status_t (ExynosCamera::*dual_notify_func_t)(enum dual_camera_notify_type /* notifyType */,
+                                                     int32_t /* arg1 */, int32_t /* arg2 */, void* /* arg3 */);
+
+/* singleton object */
+class ExynosCamera1DualParameters : public ExynosCameraSingleton<ExynosCamera1DualParameters> {
+    protected:
+        friend class ExynosCameraSingleton<ExynosCamera1DualParameters>;
+
+        /* Constructor */
+        ExynosCamera1DualParameters() { init(); };
+        ~ExynosCamera1DualParameters() {};
+        void     init();
+
+    public:
+        typedef struct dual_camera_notify_parcel {
+            enum dual_camera_notify_type notifyType;
+            int32_t arg1;
+            int32_t arg2;
+            void* arg3;
+        } dual_camera_notify_parcel_t;
+
+        /* type equals to sync_type_t in ExynosCameraFrame */
+        void                        setDualCameraSyncType(int32_t cameraId, sync_type_t *type, sync_type_t *reprocessingType);
+        sync_type_t                 getDualCameraSyncType(int32_t cameraId);
+        sync_type_t                 getDualCameraReprocessingSyncType(int32_t cameraId);
+        void                        setZoom(int32_t cameraId, int zoom);
+        int                         getZoom(int32_t cameraId);
+        void                        setLLSValue(int32_t cameraId, int LLSValue);
+        int                         getLLSValue(int32_t cameraId);
+        void                        lockDualCameraSyncType(int32_t cameraId, bool lockFlag);
+        void                        clearDualCameraInformation(int32_t cameraId);
+#ifdef DUAL_SMOOTH_TRANSITION_LAUNCH
+        void                        finishStartPreview(int32_t cameraId, int32_t targetCameraId);
+        bool                        getFlagFinishStartPreview(int32_t cameraId, int32_t targetCameraId);
+#endif
+        void                        setForceSwitchingOnly(int32_t cameraId, bool forceSwitchingOnly);
+        int                         getFlagForceSwitchingOnly(int32_t cameraId);
+#ifdef SAMSUNG_DUAL_SOLUTION
+        void                        setForceWide(int32_t cameraId, bool forceWide);
+        int                         getForceWide(int32_t cameraId);
+        int                         checkDualAfState(int cameraId, int focusState);
+        void                        setForceWideCond(int32_t cameraId, bool forceWideCond);
+        bool                        getForceWideCond(int32_t cameraId);
+        void                        checkFusionCaptureMode(int cameraId,
+                                               struct camera2_shot_ext *wideMeta, struct camera2_shot_ext *teleMeta);
+        bool                        getFusionCaptureMode(int cameraId, bool isLogPrint);
+        void                        setRecordingHint(int32_t cameraId, bool hint);
+        bool                        getRecordingHint(int32_t cameraId);
+        void                        setMasterCam(int32_t cameraId, int32_t curDispCamId);
+        int                         getMasterCam(int32_t cameraId);
+#ifdef SAMSUNG_SENSOR_LISTENER
+#ifdef SAMSUNG_GYRO
+        void                        setDualGyro(SensorListenerEvent_t data);
+        void                        setDualGyroHint(bool onOff);
+        bool                        getDualGyroHint(void);
+#endif
+#ifdef SAMSUNG_HRM
+        void                        setDualHRM(int ir_data, int flicker_data, int status);
+        void                        setDualHRMHint(bool onOff);
+        bool                        getDualHRMHint(void);
+#endif
+#ifdef SAMSUNG_ACCELEROMETER
+        void                        setDualAccelerometer(SensorListenerEvent_t data);
+        void                        setDualAccelerometerHint(bool onOff);
+        bool                        getDualAccelerometerHint(void);
+#endif
+#endif
+        camera2_shot_ext*           getDualMetadata(void);
+#endif
+        void                        setParamExifInfo(int32_t cameraId, uint32_t iso, uint32_t exposureTime);
+        void                        registerCameraParam(int32_t cameraId, CameraParameters* param);
+        /* to notify */
+        void                        registerNotifyCallback(int32_t cameraId, ExynosCamera *camera, dual_notify_func_t notifyFunc);
+        void                        unregisterNotifyCallback(int32_t cameraId);
+        status_t                    notify(int32_t cameraId,
+                                           enum dual_camera_notify_type notifyType,
+                                           bool useThread,
+                                           int32_t arg1,
+                                           int32_t arg2,
+                                           void* arg3);
+
+    private:
+        /* to notify specific camera from other camera */
+        typedef ExynosCameraThread<ExynosCamera1DualParameters> DualNotifyThread;
+        ExynosCameraList<dual_camera_notify_parcel_t *> m_dualNotifyQ;
+        sp<DualNotifyThread>          m_dualNotifyThread;
+        bool                          m_dualNotifyThreadFunc(void);
+        bool                          m_flagDualNotifyThreadStop;
+        ExynosCamera                  *m_camera[CAMERA_ID_MAX];
+        CameraParameters              *m_params[CAMERA_ID_MAX];
+        dual_notify_func_t            m_dualNotifyCallbackFunc[CAMERA_ID_MAX]; /* it will be registered by each ExynosCamera */
+
+        char                        m_name[EXYNOS_CAMERA_NAME_STR_SIZE];
+        Mutex                       m_lock;
+        int                         m_zoom;
+        int                         m_LLSValue;
+        sync_type_t                 m_dualCameraSyncType;
+        sync_type_t                 m_dualCameraReprocessingSyncType;
+        bool                        m_lockDualCameraSyncType;
+        bool                        m_flagFinishStartPreview[CAMERA_ID_MAX];
+        bool                        m_flagForceSwitchingOnly;
+#ifdef SAMSUNG_DUAL_SOLUTION
+        bool                        m_forceWideCond;
+        bool                        m_forceWide;
+        int                         m_wideFocusState;
+        int                         m_teleFocusState;
+        bool                        m_wideFocusDone;
+        bool                        m_teleFocusDone;
+        int32_t                     m_dualLux;
+        int32_t                     m_dualFocusDistance;
+        int32_t                     m_forceWideOnDelay;
+        int32_t                     m_forceWideOffDelay;
+        int32_t                     m_checkForceWideCount;
+        int32_t                     m_checkForceWideCond;
+        bool                        m_isFusionCapture;
+        camera2_shot_ext            m_dualmetadata;
+        bool                        m_dualGyroHint;
+        bool                        m_dualAccHint;
+        bool                        m_dualHrmHint;
+        bool                        m_recordingHint;
+        int32_t                     m_masterCam;
+#endif
+};
+#endif
 
 class ExynosCamera1Parameters : public ExynosCameraParameters {
 public:
@@ -105,10 +241,13 @@ public:
 
 public:
     status_t        checkVisionMode(const CameraParameters& params);
+#ifdef USE_FW_OPMODE
+    status_t        checkFactorytest(const CameraParameters& params);
+#endif
     status_t        checkRecordingHint(const CameraParameters& params);
     status_t        checkDualMode(const CameraParameters& params);
     status_t        checkDualRecordingHint(const CameraParameters& params);
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     status_t        checkDualCameraMode(const CameraParameters& params);
 #endif
     status_t        checkEffectHint(const CameraParameters& params);
@@ -219,23 +358,27 @@ public:
     status_t        checkIrLedWidth(const CameraParameters& params);
     status_t        checkIrLedDelay(const CameraParameters& params);
     status_t        checkIrLedCurrent(const CameraParameters& params);
-    status_t        checkIrLedOnTime(const CameraParameters& params);    
+    status_t        checkIrLedOnTime(const CameraParameters& params);
     status_t        calcPreviewGSCRect(ExynosRect *srcRect, ExynosRect *dstRect);
     status_t        calcHighResolutionPreviewGSCRect(ExynosRect *srcRect, ExynosRect *dstRect);
     status_t        calcRecordingGSCRect(ExynosRect *srcRect, ExynosRect *dstRect);
     status_t        calcPictureRect(ExynosRect *srcRect, ExynosRect *dstRect);
     status_t        calcPictureRect(int originW, int originH, ExynosRect *srcRect, ExynosRect *dstRect);
 
+#ifdef SAMSUNG_DUAL_SOLUTION
+    void            getPreviewStatsRoi(ExynosRect *dstRect, ExynosRect *statsRoi);
+#endif
     status_t        getPreviewBayerCropSize(ExynosRect *srcRect, ExynosRect *dstRect, bool applyZoom = true);
     status_t        getPreviewBdsSize(ExynosRect *dstRect, bool applyZoom = true);
     status_t        getPictureBayerCropSize(ExynosRect *srcRect, ExynosRect *dstRect);
     status_t        getPictureBdsSize(ExynosRect *dstRect);
     status_t        getPreviewYuvCropSize(ExynosRect *yuvCropSize);
     status_t        getPictureYuvCropSize(ExynosRect *yuvCropSize);
-    status_t        getFastenAeStableSensorSize(int *hwSensorW, int *hwSensorH);
-    status_t        getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH);
-    status_t        getFastenAeStableBdsSize(int *hwBdsW, int *hwBdsH);
+    status_t        getFastenAeStableSensorSize(int *hwSensorW, int *hwSensorH, int index);
+    status_t        getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH, int index);
+    status_t        getFastenAeStableBdsSize(int *hwBdsW, int *hwBdsH, int index);
     status_t        getDepthMapSize(int *depthMapW, int *depthMapH);
+    int             getActualPictureRatioIdx(int pictureRatioId);
 #ifdef SUPPORT_DEPTH_MAP
     bool            getUseDepthMap(void);
     bool            getDepthCallbackOnPreview(void);
@@ -244,6 +387,7 @@ public:
     void            setDepthCallbackOnCapture(bool enable);
     void            setDisparityMode(enum companion_disparity_mode disparity_mode);
 #endif
+    bool            checkFaceDetectMeta(struct camera2_shot_ext *shot_ext);
 
     status_t        calcPreviewBayerCropSize(ExynosRect *srcRect, ExynosRect *dstRect);
     status_t        calcPictureBayerCropSize(ExynosRect *srcRect, ExynosRect *dstRect);
@@ -457,6 +601,7 @@ public:
 #ifdef SAMSUNG_HRM
     void            m_setHRM(int ir_data, int flicker_data, int status);
     void            m_setHRM_Hint(bool flag);
+    bool            m_getHRMHint(void);
 #endif
 #ifdef SAMSUNG_LIGHT_IR
     void            m_setLight_IR(SensorListenerEvent_t data);
@@ -465,10 +610,12 @@ public:
 #ifdef SAMSUNG_GYRO
     void            m_setGyro(SensorListenerEvent_t data);
     void            m_setGyroHint(bool flag);
+    bool            m_getGyroHint(void);
 #endif
 #ifdef SAMSUNG_ACCELEROMETER
     void            m_setAccelerometer(SensorListenerEvent_t data);
     void            m_setAccelerometerHint(bool flag);
+    bool            m_getAccelerometerHint(void);
 #endif
 #ifdef USE_MULTI_FACING_SINGLE_CAMERA
     void            m_setCameraDirection(int cameraDirection);
@@ -592,6 +739,10 @@ public:
  * Additional API.
  */
 
+    /* Set IonClient */
+    void            setIonClient(int ionClient);
+    int             getIonClient(void);
+
     /* Gets metering */
     int             getMeteringMode(void);
     /* Gets metering List */
@@ -652,6 +803,13 @@ public:
     bool            getDrcMode(void);
     /* Gets TPU enable case or not */
     bool            getTpuEnabledMode(void);
+    void            getHwVraInputSize(int *w, int *h);
+    int             getHwVraInputFormat(void);
+
+#ifdef USE_VRA_GROUP
+    void            setDsInputPortId(int dsInputPortId);
+    int             getDsInputPortId(void);
+#endif
 
 #ifdef SAMSUNG_COMPANION
      /* Gets RT DRC */
@@ -839,7 +997,31 @@ public:
     float           getZoomRatio(int zoom);
     /* Gets current zoom ratio */
     float           getZoomRatio(void);
-
+#ifdef SAMSUNG_DUAL_SOLUTION
+    float           getZoomRatio(int cameraId, int zoomLevel);
+    float           getZoomOrgRatio(int zoomLevel);
+    void            getZoomList(int** list, int *size);
+    void            setPreviewNeedMargin(int zoomLevel);
+    int             getPreviewNeedMargin(void) { return m_needPreviewMargin; };
+    status_t        adjustDualSolutionSize(int targetWidth, int targetHeight);
+    void            getDualSolutionSize(int *dstW, int *dstH, int *wideW, int *wideH, int *teleW, int *teleH);
+    void            setForceWide(bool forceWide);
+    bool            getForceWide(void);
+    void            setForceWideCond(bool flagValidFrame, struct camera2_shot_ext *meta);
+    bool            getForceWideCond(void);
+    void            setFusionParam(UniPlugin_DCVOZ_CAMERAPARAM_t *cameraParam);
+    int             getFusionParamIndex(void);
+    UniPlugin_DCVOZ_CAMERAPARAM_t* getFusionParam(void);
+    int             checkDualAfState(int cameraId, int focusState);
+    void            checkFusionCaptureMode(int cameraId,
+                                struct camera2_shot_ext *wideMeta, struct camera2_shot_ext *teleMeta);
+    bool            getFusionCaptureMode(int cameraId, bool isLogPrint);
+    bool            isUseNewCropRect(void);
+    void            getDualCropRect(ExynosRect *dualRect);
+    int             getMasterCam(void);
+#endif
+    /* Set displayed camera information */
+    void            setMasterCamera(int curDispCamId);
     /* Returns true if auto-exposure locking is supported. */
     bool            getAutoExposureLockSupported(void);
 
@@ -883,9 +1065,15 @@ public:
     void            setExifChangedAttribute(exif_attribute_t    *exifInfo,
                                             ExynosRect          *PictureRect,
                                             ExynosRect          *thumbnailRect,
-                                            camera2_shot_t      *shot);
+                                            camera2_shot_t      *shot,
+                                            bool                useDebugInfo2 = false
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+                                            , camera2_shot_t      *shot2 = NULL
+#endif
+                                            );
 
     debug_attribute_t *getDebugAttribute(void);
+    debug_attribute_t *getDebug2Attribute(void);
 #ifdef USE_MULTI_FACING_SINGLE_CAMERA
     int             getCameraDirection(void);
 #endif
@@ -899,12 +1087,29 @@ public:
 #ifdef USE_BINNING_MODE
     int             getBinningMode(void);
 #endif /* USE_BINNING_MODE */
+
+    bool            getSwitchSensor(void);
+
     int             getShutterSpeed(void);
     int             getGain(void);
     int             getIrLedWidth(void);
     int             getIrLedDelay(void);
     int             getIrLedCurrent(void);
     int             getIrLedOnTime(void);
+#ifdef USE_REMOSAIC_CAPTURE
+    enum remosaic_capture_mode {
+        REMOSAIC_CAPTURE_MODE_NOT_SUPPORTED,
+        REMOSAIC_CAPTURE_MODE_NONE,
+        REMOSAIC_CAPTURE_MODE_PURE_BAYER,
+        REMOSAIC_CAPTURE_MODE_PROCESSED_BAYER,
+    };
+    int             getAvailableRemosaicCapture(void);
+    void            setRemosaicCaptureMode(enum remosaic_capture_mode remosaic_mode);
+    int             getRemosaicCaptureMode();
+    bool            isUseRemosaicCapture();
+    enum remosaic_capture_mode m_flagRemosaicCaptureMode;
+#endif
+
 public:
     bool            DvfsLock();
     bool            DvfsUnLock();
@@ -1012,10 +1217,23 @@ private:
                                               ExynosRect        *PictureRect,
                                               ExynosRect        *thumbnailRect,
                                               camera2_dm        *dm,
-                                              camera2_udm       *udm);
+                                              camera2_udm       *udm,
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+                                              camera2_dm        *dm2 = NULL,
+                                              camera2_udm       *udm2 = NULL,
+#endif
+                                              bool              useDebugInfo2 = false);
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     status_t        m_getFusionSize(int w, int h, ExynosRect *rect, bool flagSrc);
+
+    bool            m_updateTpuParameters(void);
+#endif
+
+#ifdef USE_MCSC_FOR_FD
+    bool                m_setFDConfig(CONFIG_FD::TAG tag, ExynosFDConfig_t *config);
+    ExynosFDConfig_t   *m_getFDConfig();
+    bool                m_updateVRAParameters(void);
 #endif
 
 public:
@@ -1074,6 +1292,7 @@ public:
 
     void                setFastenAeStableOn(bool enable);
     bool                getFastenAeStableOn(void);
+    bool                isFastenAeStableEnable(void);
 
     void                setUsePureBayerReprocessing(bool enable);
     bool                getUsePureBayerReprocessing(void);
@@ -1099,7 +1318,7 @@ public:
      * This must call before startPreview(),
      * this update h/w setting at once.
      */
-    bool                updateTpuParameters(void);
+    bool                updateParameters(void);
     int                 getHalVersion(void);
     void                setHalVersion(int halVersion);
     struct ExynosSensorInfoBase *getSensorStaticInfo();
@@ -1115,6 +1334,10 @@ public:
     bool                checkEnablePicture(void);
 #ifdef SAMSUNG_OIS_VDIS
     void                setOISCoef(uint32_t coef);
+    void                setSWVdisOISInit();
+    uint32_t            getOISGain();
+    void                setOISFadeVal(int oisFadeVal);
+    void                setSWVdisPreviewFrameExposureTime(int exposureTime);
 #endif
 
 #ifdef BURST_CAPTURE
@@ -1155,6 +1378,8 @@ public:
     bool                isIspTpuOtf(void);
     bool                isIspMcscOtf(void);
     bool                isTpuMcscOtf(void);
+    bool                isMcscVraOtf(void);
+
     bool                isReprocessing3aaIspOTF(void);
     bool                isReprocessingIspTpuOtf(void);
     bool                isReprocessingIspMcscOtf(void);
@@ -1207,6 +1432,13 @@ public:
 #ifdef SR_CAPTURE
     void                setSROn(uint32_t enable);
     bool                getSROn(void);
+#endif
+#if defined(SR_CAPTURE) || defined(SAMSUNG_HIFI_LLS)
+    void                setNoBayerCrop(bool enable);
+    bool                getNoBayerCrop(void);
+#endif
+#ifdef SAMSUNG_HIFI_LLS
+    bool                checkHiFiLLSEnable(void);
 #endif
 #ifdef OIS_CAPTURE
     void                setOISCaptureModeOn(bool enable);
@@ -1262,6 +1494,11 @@ bool                    getMotionPhotoOn(void);
     int                 getLDCaptureLLSValue(void);
     void                setLDCaptureCount(int count);
     int                 getLDCaptureCount(void);
+#ifdef SUPPORT_ZSL_MULTIFRAME
+    void                checkZslMultiframeMode(void);
+    void                setZslMultiframeModeOn(bool enable);
+    bool                getZslMultiframeModeOn(void);
+#endif
 #endif
 #ifdef LLS_STUNR
     void                checkLLSStunrMode(void);
@@ -1284,7 +1521,21 @@ bool                    getMotionPhotoOn(void);
     void                setLensDCEnable(bool enable);
     bool                getLensDCEnable(void);
 #endif
-
+#ifdef SAMSUNG_STR_CAPTURE
+    bool                checkSTRCaptureMode(void);
+    void                setSTRCaptureEnable(bool enable);
+    bool                getSTRCaptureEnable(void);
+#endif
+#ifdef SAMSUNG_STR_PREVIEW
+    bool                checkSTRPreviewMode(void);
+#endif
+#ifdef SAMSUNG_FOCUS_PEAKING
+    void                m_setFocusPeakingMode(bool enable);
+    bool                m_getFocusPeakingMode(void);
+#endif
+#ifdef SAMSUNG_IDDQD
+    bool                checkIDDQDMode(void);
+#endif
     void                setZoomActiveOn(bool enable);
     bool                getZoomActiveOn(void);
     void                setFocusModeLock(bool enable);
@@ -1358,6 +1609,9 @@ bool                    getMotionPhotoOn(void);
 #ifdef SAMSUNG_LENS_DC
     void                setLensDCdebugInfo(unsigned char *data, unsigned int size);
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+    void                setSTRdebugInfo(unsigned char *data, unsigned int size);
+#endif
 #ifdef SENSOR_FW_GET_FROM_FILE
     bool                m_checkCalibrationDataValid(char *sensor_fw);
 #endif
@@ -1365,21 +1619,63 @@ bool                    getMotionPhotoOn(void);
     bool                getUseCompanion();
     void                setIsThumbnailCallbackOn(bool enable);
     bool                getIsThumbnailCallbackOn();
-
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    bool                getDualCameraMode(void);
+#ifdef USE_DUAL_CAMERA
     /* Set/Get Dual camera mode */
     void                setDualCameraMode(bool toggle);
-    bool                getDualCameraMode(void);
     bool                isFusionEnabled(void);
+    void                updateDualCameraFusionMode();
+    bool                getDualCameraPreviewFusionMode(void);
+    bool                getDualCameraCaptureFusionMode(void);
     status_t            getFusionSize(int w, int h, ExynosRect *srcRect, ExynosRect *dstRect);
     status_t            setFusionInfo(camera2_shot_ext *shot_ext);
     DOF                *getDOF(void);
+    dual_standby_mode_t         getDualStandbyMode(void);
+    void                        setDualStandbyMode(dual_standby_mode_t dualStandbyMode);
+    /* type equals to sync_type_t in ExynosCameraFrame */
+    void                updateDualCameraSyncType(int zoom, sync_type_t *syncType, sync_type_t *reprocessingSyncType);
+    sync_type_t         getDualCameraSyncType(void);
+    sync_type_t         getDualCameraReprocessingSyncType(void);
+    void                lockDualCameraSyncType(bool lockFlag);
+    /* for transition/smoothTransition */
+    int                 setDualTransitionCount(int count);
+    int                 getDualTransitionCount(void);
+    int                 decreaseDualTransitionCount(void);
+    int                 setDualSmoothTransitionCount(int count);
+    int                 getDualSmoothTransitionCount(void);
+    int                 decreaseDualSmoothTransitionCount(void);
+    int                 setDualWakeupFinishCount(int count);
+    int                 getDualWakeupFinishCount(void);
+    int                 decreaseDualWakeupFinishCount(void);
+    void                clearDualCameraInformation(void);
+    void                getDualBackupPostStandbyFps(uint32_t *min, uint32_t *max);
+#ifdef DUAL_SMOOTH_TRANSITION_LAUNCH
+    void                finishStartPreview(int32_t targetCameraId);
+    bool                getFlagFinishStartPreview(int32_t targetCameraId);
+#endif
+    void                setForceSwitchingOnly(bool forceSwitchingOnly);
+    bool                getFlagForceSwitchingOnly(void);
+    void                setDualStableFromStandby(bool stable);
+    bool                getDualStableFromStandby(void);
+
+    /* to notify */
+    void                registerDualNotifyCallback(ExynosCamera *camera, dual_notify_func_t notifyFunc);
+    void                unregisterDualNotifyCallback(void);
+    status_t            dualNotify(enum dual_camera_notify_type notifyType,
+                                   bool useThread,
+                                   int32_t arg1,
+                                   int32_t arg2,
+                                   void* arg3);
 #ifdef USE_CP_FUSION_LIB
     char               *readFusionCalData(int *readSize);
     void                setFusionCalData(char *addr, int size);
     char               *getFusionCalData(int *size);
 #endif // USE_CP_FUSION_LIB
-#endif // BOARD_CAMERA_USES_DUAL_CAMERA
+#endif // USE_DUAL_CAMERA
+
+#ifdef USE_MCSC_FOR_FD
+    ExynosFDConfig_t   *getFDConfig();
+#endif // USE_MCSC_FOR_FD
 
 #ifdef USE_FADE_IN_ENTRANCE
     status_t            checkFirstEntrance(const CameraParameters& params);
@@ -1403,6 +1699,7 @@ bool                    getMotionPhotoOn(void);
     void                setQuickSwitchCmd(int cmd);
     int                 getQuickSwitchCmd();
 #endif
+    void                switchSensorMode();
 
 private:
     int                         m_cameraId;
@@ -1415,8 +1712,10 @@ private:
     struct exynos_camera_info   m_cameraInfo;
     struct ExynosSensorInfoBase    *m_staticInfo;
 
+    int                         m_ionClient;
     exif_attribute_t            m_exifInfo;
     debug_attribute_t           mDebugInfo;
+    debug_attribute_t           mDebugInfo2;
 
     int32_t                     m_enabledMsgType;
     mutable Mutex               m_msgLock;
@@ -1426,6 +1725,7 @@ private:
 
     mutable Mutex               m_parameterLock;
     mutable Mutex               m_staticInfoExifLock;
+    mutable Mutex               m_faceDetectMetaLock;
 
     ExynosCameraActivityControl *m_activityControl;
 
@@ -1435,8 +1735,20 @@ private:
     bool                        m_pictureRunning;
     bool                        m_recordingRunning;
     bool                        m_flagCheckDualMode;
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     bool                        m_flagCheckDualCameraMode;
+    bool                        m_flagDualCameraPreviewFusionMode;
+    bool                        m_flagDualCameraCaptureFusionMode;
+    uint32_t                    m_backupDualPostStandbyMinFps;
+    uint32_t                    m_backupDualPostStandbyMaxFps;
+    mutable Mutex               m_transitionLock;
+    int                         m_transitionCount;
+    int                         m_smoothTransitionCount;
+    /* count to indicate whether this camera finishs wakeup from standby or not */
+    int                         m_wakeupFinishCount;
+    ExynosCameraParameters::dual_standby_mode_t     m_dualStandbyMode;
+    ExynosCamera1DualParameters *m_dualParameters;
+    bool                        m_dualStableFromStandby;
 #endif
     bool                        m_romReadThreadDone;
     bool                        m_use_companion;
@@ -1453,6 +1765,25 @@ private:
 
     int32_t                     m_reprocessingBayerMode;
 
+#ifdef USE_MCSC_FOR_FD
+    struct ExynosFDConfig       m_fdConfig;
+    mutable Mutex               m_fdConfigLock;
+#endif
+
+#ifdef SAMSUNG_DUAL_SOLUTION
+    int                         m_orgZoomLevel;
+    ExynosCameraFusionWrapper   *m_fusionPreviewWrapper;
+    ExynosCameraFusionWrapper   *m_fusionCaptureWrapper;
+    int                         m_dualDstWidth;
+    int                         m_dualDstHeight;
+    int                         m_dualSrcWideWidth;
+    int                         m_dualSrcWideHeight;
+    int                         m_dualSrcTeleWidth;
+    int                         m_dualSrcTeleHeight;
+    int                         m_needPreviewMargin;
+    UniPlugin_DCVOZ_CAMERAPARAM_t* m_fusionParam;
+#endif
+
 #ifdef LLS_CAPTURE
     bool                        m_flagLLSOn;
     int                         m_LLSValue;
@@ -1464,6 +1795,9 @@ private:
 
 #ifdef SR_CAPTURE
     bool                        m_flagSRSOn;
+#endif
+#if defined(SR_CAPTURE) || defined(SAMSUNG_HIFI_LLS)
+    bool                        m_flagNoBayerCrop;
 #endif
 #ifdef OIS_CAPTURE
     bool                        m_flagOISCaptureOn;
@@ -1487,6 +1821,9 @@ private:
     int                         m_flagLDCaptureMode;
     uint32_t                    m_flagLDCaptureLLSValue;
     int                         m_LDCaptureCount;
+#ifdef SUPPORT_ZSL_MULTIFRAME
+    bool                        m_flagZslMultiframeOn;
+#endif
 #endif
     bool                        m_flagOutPutFormatNV21Enable;
     bool                        m_flagCheckRecordingHint;
@@ -1494,6 +1831,13 @@ private:
     bool                        m_flagLensDCEnable;
     bool                        m_flagLensDCMode;
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+    bool                        m_flagSTRCaptureEnable;
+#endif
+#ifdef SAMSUNG_STR_PREVIEW
+    bool                        m_flagSTRPreviewMode;
+#endif
+
 #ifdef SAMSUNG_HRM
     bool                        m_flagSensorHRM_Hint;
 #endif
@@ -1506,13 +1850,18 @@ private:
 #ifdef SAMSUNG_ACCELEROMETER
     bool                        m_flagSensorAccelerationHint;
 #endif
-
+#ifdef SAMSUNG_FOCUS_PEAKING
+    bool                        m_flagFocusPeakingMode;
+#endif
     int                         m_setfile;
     int                         m_yuvRange;
     int                         m_setfileReprocessing;
     int                         m_yuvRangeReprocessing;
 #ifdef USE_BINNING_MODE
     int                         m_binningProperty;
+#endif
+#ifdef USE_LIMITATION_FOR_THIRD_PARTY
+    int                         m_fpsProperty;
 #endif
     bool                        m_useSizeTable;
     bool                        m_useDynamicBayer;
@@ -1550,6 +1899,11 @@ private:
 #ifdef SAMSUNG_OIS
     ExynosCameraNode           *m_oisNode;
     bool                        m_setOISmodeSetting;
+#endif
+#ifdef SAMSUNG_OIS_VDIS
+    int                         m_oisFadeVal;
+    int                         m_SWVdisOisGainFrameCount[2];
+    int                         m_SWVdisPreviewFrameExposureTime;
 #endif
     bool                        m_zoom_activated;
     int                         m_firing_flash_marking;
@@ -1622,6 +1976,10 @@ private:
     bool                        m_flagODCCaptureMode;
     bool                        m_flagODCCaptureEnable;
 #endif
+#ifdef USE_VRA_GROUP
+    int                         m_dsInputPortId;
+#endif
+    bool                        m_isSwitchSensor;
 };
 
 

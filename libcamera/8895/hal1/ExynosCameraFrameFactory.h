@@ -25,15 +25,19 @@
 #include "ExynosCameraPipeFlite.h"
 #include "ExynosCameraPipeGSC.h"
 #include "ExynosCameraPipeJpeg.h"
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
 #include "ExynosCameraPipeFusion.h"
 #include "ExynosCameraPipeSync.h"
+#include "ExynosCameraSyncFrameSelector.h"
 #include "ExynosCameraDualFrameSelector.h"
 #endif
 #include "ExynosCameraFrameManager.h"
 #include "ExynosCameraStreamMutex.h"
 
 #include "ExynosCamera1Parameters.h"
+#ifdef USE_VRA_GROUP
+#include "ExynosCameraPipeVRAGroup.h"
+#endif
 
 namespace android {
 
@@ -76,11 +80,13 @@ public:
     virtual status_t        postcreate(void);
     virtual status_t        destroy(void);
     virtual bool            isCreated(void);
+    virtual bool            isSwitching(void);
 
     virtual status_t        initPipes(void) = 0;
     virtual status_t        mapBuffers(void);
     virtual status_t        preparePipes(void) = 0;
     virtual status_t        startPipes(void) = 0;
+    virtual status_t        startSensor3AAPipe(void) = 0;
     virtual status_t        stopPipes(void) = 0;
     virtual status_t        startInitialThreads(void) = 0;
 
@@ -131,9 +137,12 @@ public:
 
     virtual enum NODE_TYPE  getNodeType(uint32_t pipeId);
 
-    virtual ExynosCameraFrameSP_sptr_t createNewFrameOnlyOnePipe(int pipeId, int frameCnt=-1, uint32_t frameType = 0);
+    virtual ExynosCameraFrameSP_sptr_t createNewFrameOnlyOnePipe(int pipeId, int frameCnt=-1, uint32_t frameType = 0, ExynosCameraFrameSP_sptr_t refFrame = NULL);
     virtual ExynosCameraFrameSP_sptr_t createNewFrameVideoOnly(void);
     virtual ExynosCameraFrameSP_sptr_t createNewFrame(ExynosCameraFrameSP_sptr_t refFrame = NULL) = 0;
+
+    virtual status_t        switchSensorMode(void);
+    virtual status_t        finishSwitchSensorMode(void);
 
     virtual void            dump(void);
     /* only for debugging */
@@ -141,13 +150,13 @@ public:
 #ifdef MONITOR_LOG_SYNC
     virtual status_t        syncLog(uint32_t pipeId, uint32_t syncId);
 #endif
+    virtual status_t        sensorStandby(__unused bool standby) { return NO_ERROR; };
 
 protected:
-    virtual status_t        m_setCreate(bool create);
-
     /* flite pipe setting */
     virtual status_t        m_initFlitePipe(int sensorW, int sensorH, uint32_t frameRate);
 
+    virtual status_t        m_setupRequestFlags(void) = 0;
     virtual status_t        m_initFrameMetadata(ExynosCameraFrameSP_sptr_t frame);
     virtual status_t        m_initPipelines(ExynosCameraFrameSP_sptr_t frame);
     virtual status_t        m_checkPipeInfo(uint32_t srcPipeId, uint32_t dstPipeId);
@@ -156,6 +165,8 @@ protected:
     virtual int             m_getSensorId(unsigned int nodeNum, unsigned int connectionMode, bool flagLeader, bool reprocessing, int sensorScenario = SENSOR_SCENARIO_NORMAL);
 
     virtual void            m_initDeviceInfo(int pipeId);
+
+    virtual status_t        m_transitState(frame_factory_state_t state);
 
     virtual status_t        m_setSensorSize(int pipeId, int sensorW, int sensorH);
 
@@ -177,7 +188,6 @@ protected:
     ExynosCameraActivityControl *m_activityControl;
 
     Mutex                       m_frameLock;
-    Mutex                       m_createLock;
 
     uint32_t                    m_requestVC0;
     uint32_t                    m_requestVC1;
@@ -196,6 +206,9 @@ protected:
     uint32_t                    m_requestMCSC2;
     uint32_t                    m_requestMCSC3;
     uint32_t                    m_requestMCSC4;
+#ifdef USE_VRA_GROUP
+    uint32_t                    m_requestVRA;
+#endif
     uint32_t                    m_requestJPEG;
     uint32_t                    m_requestThumbnail;
 
@@ -209,6 +222,7 @@ protected:
     bool                        m_flagIspTpuOTF;
     bool                        m_flagIspMcscOTF;
     bool                        m_flagTpuMcscOTF;
+    bool                        m_flagMcscVraOTF;
 
     bool                        m_supportReprocessing;
     bool                        m_flagReprocessing;
@@ -216,13 +230,15 @@ protected:
     bool                        m_supportSCC;
     bool                        m_supportSingleChain;
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+    frame_factory_state_t       m_state;
+    Mutex                       m_stateLock;
+
+#ifdef USE_DUAL_CAMERA
     sync_type_t m_preSyncType;
     int         m_preZoom;
-    uint32_t    m_transitionCount;
+    Mutex       m_sensorStandbyLock;
 #endif
 private:
-    bool                        m_create;
     struct camera2_shot_ext     *m_shot_ext;
 };
 

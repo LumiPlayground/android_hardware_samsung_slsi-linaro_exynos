@@ -123,6 +123,7 @@ private:
     int m_focusMode;
 
     int  m_halVersion;
+    int  m_camId;
 };
 
 }

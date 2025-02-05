@@ -22,7 +22,7 @@
 #include <utils/threads.h>
 #include <utils/String8.h>
 
-#include "ExynosCameraParameters.h"
+#include "ExynosCamera1Parameters.h"
 #include "ExynosCameraConfig.h"
 
 #include "ExynosRect.h"
@@ -47,11 +47,18 @@ typedef struct size_control_info {
     ExynosRect      hwVideoSize;
     ExynosRect      pictureSize;
     ExynosRect      thumbnailSize;
+#ifdef SAMSUNG_DUAL_SOLUTION
+    ExynosRect      fusionSrcSize;
+    ExynosRect      fusionDstSize;
+#endif
+#ifdef USE_VRA_GROUP
+    ExynosRect      vraInputSize;
+#endif
 } size_control_info_t;
 
 void updateNodeGroupInfo(
         int pipeId,
-        ExynosCameraParameters *params,
+        ExynosCamera1Parameters *params,
         const size_control_info_t sizeControlInfo,
         camera2_node_group *node_group_info);
 

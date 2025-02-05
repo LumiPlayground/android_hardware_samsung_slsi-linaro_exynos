@@ -34,28 +34,28 @@ ExynosCameraFrameFactoryVision::~ExynosCameraFrameFactoryVision()
 
 status_t ExynosCameraFrameFactoryVision::create(__unused bool active)
 {
+    Mutex::Autolock lock(ExynosCameraStreamMutex::getInstance()->getStreamMutex());
     CLOGI("");
+    int pipeId = -1;
 
     m_setupConfig();
 
     int ret = 0;
-    int32_t nodeNums[MAX_NODE] = {-1, -1, -1};
 
-    m_pipes[INDEX(PIPE_FLITE)] = (ExynosCameraPipe*)new ExynosCameraPipeFlite(m_cameraId, m_parameters, false, m_nodeNums[INDEX(PIPE_FLITE)]);
-    m_pipes[INDEX(PIPE_FLITE)]->setPipeId(PIPE_FLITE);
-    m_pipes[INDEX(PIPE_FLITE)]->setPipeName("PIPE_FLITE");
+    pipeId = PIPE_FLITE;
+    m_pipes[pipeId] = (ExynosCameraPipe*)new ExynosCameraMCPipe(m_cameraId, m_parameters, false, &m_deviceInfo[pipeId]);
+    m_pipes[pipeId]->setPipeName("PIPE_FLITE");
+    m_pipes[pipeId]->setPipeId(pipeId);
 
     /* flite pipe initialize */
-    ret = m_pipes[INDEX(PIPE_FLITE)]->create();
+    ret = m_pipes[INDEX(PIPE_FLITE)]->create(m_sensorIds[pipeId]);
     if (ret < 0) {
         CLOGE("FLITE create fail, ret(%d)", ret);
         /* TODO: exception handling */
         return INVALID_OPERATION;
     }
 
-    m_setCreate(true);
-
-    CLOGD("Pipe(%d) created", INDEX(PIPE_FLITE));
+    CLOGD("Pipe(%d) created", pipeId);
 
     return NO_ERROR;
 }
@@ -79,23 +79,70 @@ status_t ExynosCameraFrameFactoryVision::destroy(void)
         }
     }
 
-    m_setCreate(false);
+    return NO_ERROR;
+}
 
+status_t ExynosCameraFrameFactoryVision::m_setupRequestFlags(void)
+{
+    /* Do nothing */
     return NO_ERROR;
 }
 
 status_t ExynosCameraFrameFactoryVision::m_fillNodeGroupInfo(__unused ExynosCameraFrameSP_sptr_t frame)
 {
     /* Do nothing */
+    size_control_info_t sizeControlInfo;
+    camera2_node_group node_group_info_flite;
+    camera2_node_group *node_group_info_temp;
+    ExynosRect sensorSize;
+
+    int zoom = m_parameters->getZoomLevel();
+    int pipeId = -1;
+    uint32_t perframePosition = 0;
+
+    memset(&node_group_info_flite, 0x0, sizeof(camera2_node_group));
+
+     /* FLITE */
+    pipeId = PIPE_FLITE; // this is hack. (not PIPE_FLITE)
+    perframePosition = 0;
+
+    node_group_info_temp = &node_group_info_flite;
+    node_group_info_temp->leader.request = 1;
+
+    node_group_info_temp->capture[perframePosition].request = m_requestVC0;
+    node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_VC0)] - FIMC_IS_VIDEO_BAS_NUM;
+
+    frame->setZoom(zoom);
+
+    sensorSize.x = 0;
+    sensorSize.y = 0;
+    if (m_cameraId == CAMERA_ID_SECURE) {
+        sensorSize.w = SECURE_CAMERA_WIDTH;
+        sensorSize.h = SECURE_CAMERA_HEIGHT;
+    } else {
+        sensorSize.w = VISION_WIDTH;
+        sensorSize.h = VISION_HEIGHT;
+    }
+
+
+    setLeaderSizeToNodeGroupInfo(&node_group_info_flite, sensorSize.x, sensorSize.y, sensorSize.w, sensorSize.h);
+    setCaptureSizeToNodeGroupInfo(&node_group_info_flite, perframePosition, sensorSize.w, sensorSize.h);
+
+    frame->storeNodeGroupInfo(&node_group_info_flite, PERFRAME_INFO_FLITE);
+
     return NO_ERROR;
 }
 
-ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryVision::createNewFrame(ExynosCameraFrameSP_sptr_t refFrame)
+ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryVision::createNewFrame(__unused ExynosCameraFrameSP_sptr_t refFrame)
 {
     int ret = 0;
     ExynosCameraFrameEntity *newEntity[MAX_NUM_PIPES];
 
     ExynosCameraFrameSP_sptr_t frame = m_frameMgr->createFrame(m_parameters, m_frameCount);
+    if (frame == NULL) {
+        CLOGE("[F%d]Failed to createFrame. frameType %d", m_frameCount, FRAME_TYPE_PREVIEW);
+        return NULL;
+    }
 
     int requestEntityCount = 0;
 
@@ -106,7 +153,7 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryVision::createNewFrame(Exynos
         CLOGE("frame(%d) metadata initialize fail", m_frameCount);
 
     /* set flite pipe to linkageList */
-    newEntity[INDEX(PIPE_FLITE)] = new ExynosCameraFrameEntity(PIPE_FLITE, ENTITY_TYPE_OUTPUT_ONLY, ENTITY_BUFFER_FIXED);
+    newEntity[INDEX(PIPE_FLITE)] = new ExynosCameraFrameEntity(PIPE_FLITE, ENTITY_TYPE_INPUT_ONLY, ENTITY_BUFFER_FIXED);
     frame->addSiblingEntity(NULL, newEntity[INDEX(PIPE_FLITE)]);
     requestEntityCount++;
 
@@ -115,6 +162,7 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryVision::createNewFrame(Exynos
         CLOGE("m_initPipelines fail, ret(%d)", ret);
     }
 
+    /* add perframe info for vision. */
     m_fillNodeGroupInfo(frame);
 
     /* TODO: make it dynamic */
@@ -129,60 +177,90 @@ status_t ExynosCameraFrameFactoryVision::initPipes(void)
 {
     CLOGI("");
 
-    int ret = 0;
-    camera_pipe_info_t pipeInfo[3];
-    int32_t nodeNums[MAX_NODE] = {-1, -1, -1};
-    int32_t sensorIds[MAX_NODE] = {-1, -1, -1};
+    status_t ret = NO_ERROR;
+    camera_pipe_info_t pipeInfo[MAX_NODE];
+    camera_pipe_info_t nullPipeInfo;
+    enum NODE_TYPE nodeType = INVALID_NODE;
+    enum NODE_TYPE leaderNodeType = OUTPUT_NODE;
+    int pipeId = -1;
 
     ExynosRect tempRect;
-    int maxSensorW = 0, maxSensorH = 0, hwSensorW = 0, hwSensorH = 0;
-    int maxPreviewW = 0, maxPreviewH = 0, hwPreviewW = 0, hwPreviewH = 0;
-    int maxPictureW = 0, maxPictureH = 0, hwPictureW = 0, hwPictureH = 0;
-    int bayerFormat = V4L2_PIX_FMT_SBGGR12;
-    int previewFormat = m_parameters->getHwPreviewFormat();
-    int pictureFormat = m_parameters->getHwPictureFormat();
+    int hwSensorW = 0, hwSensorH = 0;
+    int bayerFormat = 0;
+    int perFramePos = 0;
+    uint32_t frameRate = 15;
+    int bufferCount = 0;
 
-    m_parameters->getMaxSensorSize(&maxSensorW, &maxSensorH);
-    m_parameters->getHwSensorSize(&hwSensorW, &hwSensorH);
-    m_parameters->getMaxPreviewSize(&maxPreviewW, &maxPreviewH);
-    m_parameters->getHwPreviewSize(&hwPreviewW, &hwPreviewH);
-    m_parameters->getMaxPictureSize(&maxPictureW, &maxPictureH);
-    m_parameters->getHwPictureSize(&hwPictureW, &hwPictureH);
+    pipeId = PIPE_FLITE;
 
-    CLOGI(" MaxSensorSize(%dx%d), HwSensorSize(%dx%d)", maxSensorW, maxSensorH, hwSensorW, hwSensorH);
-    CLOGI(" MaxPreviewSize(%dx%d), HwPreviewSize(%dx%d)", maxPreviewW, maxPreviewH, hwPreviewW, hwPreviewH);
-    CLOGI(" MaxPixtureSize(%dx%d), HwPixtureSize(%dx%d)", maxPictureW, maxPictureH, hwPictureW, hwPictureH);
-
-    memset(pipeInfo, 0, (sizeof(camera_pipe_info_t) * 3));
-
-    /* FLITE pipe */
-#if 0
-    tempRect.fullW = maxSensorW + 16;
-    tempRect.fullH = maxSensorH + 10;
-    tempRect.colorFormat = bayerFormat;
-#else
     if (m_cameraId == CAMERA_ID_SECURE) {
-        tempRect.fullW = SECURE_CAMERA_WIDTH;
-        tempRect.fullH = SECURE_CAMERA_HEIGHT;
-        tempRect.colorFormat = V4L2_PIX_FMT_SBGGR8;
+        hwSensorW = SECURE_CAMERA_WIDTH;
+        hwSensorH = SECURE_CAMERA_HEIGHT;
+        bayerFormat = V4L2_PIX_FMT_SBGGR8;
+        bufferCount = RESERVED_NUM_SECURE_BUFFERS;
     } else {
-        tempRect.fullW = VISION_WIDTH;
-        tempRect.fullH = VISION_HEIGHT;
-        tempRect.colorFormat = V4L2_PIX_FMT_SGRBG8;
+        hwSensorW = VISION_WIDTH;
+        hwSensorH = VISION_HEIGHT;
+        bayerFormat = V4L2_PIX_FMT_SGRBG8;
+        bufferCount = FRONT_NUM_BAYER_BUFFERS;
     }
-#endif
 
-    pipeInfo[0].rectInfo = tempRect;
-    pipeInfo[0].bufInfo.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    pipeInfo[0].bufInfo.memory = V4L2_CAMERA_MEMORY_TYPE;
-    pipeInfo[0].bufInfo.count = FRONT_NUM_BAYER_BUFFERS;
-    /* per frame info */
-    pipeInfo[0].perFrameNodeGroupInfo.perframeSupportNodeNum = 0;
-    pipeInfo[0].perFrameNodeGroupInfo.perFrameLeaderInfo.perFrameNodeType = PERFRAME_NODE_TYPE_NONE;
+    /* setParam for Frame rate : must after setInput on Flite */
+    struct v4l2_streamparm streamParam;
+    memset(&streamParam, 0x0, sizeof(v4l2_streamparm));
 
-    ret = m_pipes[INDEX(PIPE_FLITE)]->setupPipe(pipeInfo, m_sensorIds[INDEX(PIPE_FLITE)]);
-    if (ret < 0) {
-        CLOGE("FLITE setupPipe fail, ret(%d)", ret);
+    streamParam.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    streamParam.parm.capture.timeperframe.numerator   = 1;
+    streamParam.parm.capture.timeperframe.denominator = frameRate;
+    CLOGI("Set framerate (denominator=%d)", frameRate);
+
+    ret = setParam(&streamParam, pipeId);
+    if (ret != NO_ERROR) {
+        CLOGE("FLITE setParam(frameRate(%d), pipeId(%d)) fail", frameRate, pipeId);
+        return INVALID_OPERATION;
+    }
+
+    ret = m_setSensorSize(pipeId, hwSensorW, hwSensorH);
+    if (ret != NO_ERROR) {
+        CLOGE("m_setSensorSize(pipeId(%d), hwSensorW(%d), hwSensorH(%d)) fail", pipeId, hwSensorW, hwSensorH);
+        return ret;
+    }
+
+    /* FLITE */
+    nodeType = getNodeType(PIPE_FLITE);
+
+    /* set v4l2 buffer size */
+    tempRect.fullW = 32;
+    tempRect.fullH = 64;
+    tempRect.colorFormat = bayerFormat;
+
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = bufferCount;
+
+    /* Set output node default info */
+    SET_OUTPUT_DEVICE_BASIC_INFO(PERFRAME_INFO_FLITE);
+
+    /* BAYER */
+    nodeType = getNodeType(PIPE_VC0);
+    perFramePos = PERFRAME_BACK_VC0_POS;
+
+    /* set v4l2 buffer size */
+    tempRect.fullW = hwSensorW;
+    tempRect.fullH = hwSensorH;
+    tempRect.colorFormat = bayerFormat;
+
+    /* set v4l2 video node bytes per plane */
+    pipeInfo[nodeType].bytesPerPlane[0] = getBayerLineSize(tempRect.fullW, bayerFormat);
+
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = bufferCount;
+
+    /* Set capture node default info */
+    SET_CAPTURE_DEVICE_BASIC_INFO();
+
+    ret = m_pipes[pipeId]->setupPipe(pipeInfo, m_sensorIds[pipeId]);
+    if (ret != NO_ERROR) {
+        CLOGE("Flite setupPipe fail, ret(%d)", ret);
         /* TODO: exception handling */
         return INVALID_OPERATION;
     }
@@ -194,16 +272,7 @@ status_t ExynosCameraFrameFactoryVision::initPipes(void)
 
 status_t ExynosCameraFrameFactoryVision::preparePipes(void)
 {
-    int ret = 0;
-
     CLOGI("");
-
-    ret = m_pipes[INDEX(PIPE_FLITE)]->prepare();
-    if (ret < 0) {
-        CLOGE("FLITE prepare fail, ret(%d)", ret);
-        /* TODO: exception handling */
-        return INVALID_OPERATION;
-    }
 
     return NO_ERROR;
 }
@@ -221,6 +290,13 @@ status_t ExynosCameraFrameFactoryVision::startPipes(void)
         return INVALID_OPERATION;
     }
 
+    ret = m_pipes[INDEX(PIPE_FLITE)]->prepare();
+    if (ret < 0) {
+        CLOGE("FLITE prepare fail, ret(%d)", ret);
+        /* TODO: exception handling */
+        return INVALID_OPERATION;
+    }
+
     ret = m_pipes[INDEX(PIPE_FLITE)]->sensorStream(true);
     if (ret < 0) {
         CLOGE("FLITE sensorStream on fail, ret(%d)", ret);
@@ -231,6 +307,14 @@ status_t ExynosCameraFrameFactoryVision::startPipes(void)
     CLOGI("Starting Front [FLITE] Success!");
 
     return NO_ERROR;
+}
+
+status_t ExynosCameraFrameFactoryVision::startSensor3AAPipe(void)
+{
+    android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Not supported API",
+            __FUNCTION__, __LINE__);
+
+    return INVALID_OPERATION;
 }
 
 status_t ExynosCameraFrameFactoryVision::startInitialThreads(void)
@@ -264,9 +348,26 @@ status_t ExynosCameraFrameFactoryVision::stopPipes(void)
 
     CLOGI("");
 
+    if (m_pipes[PIPE_FLITE]->isThreadRunning() == true) {
+        ret = m_pipes[PIPE_FLITE]->stopThread();
+        if (ret != NO_ERROR) {
+            CLOGE("PIPE_FLITE stopThread fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            funcRet |= ret;
+        }
+    }
+
     ret = m_pipes[INDEX(PIPE_FLITE)]->sensorStream(false);
     if (ret < 0) {
         CLOGE("FLITE sensorStream fail, ret(%d)", ret);
+        /* TODO: exception handling */
+        funcRet |= ret;
+    }
+
+    /* PIPE_FLITE force done */
+    ret = m_pipes[INDEX(PIPE_FLITE)]->forceDone(V4L2_CID_IS_FORCE_DONE, 0x1000);
+    if (ret != NO_ERROR) {
+        CLOGE("PIPE_FLITE force done fail, ret(%d)", ret);
         /* TODO: exception handling */
         funcRet |= ret;
     }
@@ -296,12 +397,13 @@ void ExynosCameraFrameFactoryVision::m_init(void)
     memset(m_sensorIds, -1, sizeof(m_sensorIds));
 
     /* This seems all need to set 0 */
+    m_requestVC0 = 1;
     m_request3AP = 0;
     m_request3AC = 0;
-    m_requestISP = 1;
+    m_requestISP = 0;
     m_requestSCC = 0;
     m_requestDIS = 0;
-    m_requestSCP = 1;
+    m_requestSCP = 0;
 
     m_supportReprocessing = false;
     m_flagFlite3aaOTF = false;
@@ -315,52 +417,47 @@ status_t ExynosCameraFrameFactoryVision::m_setupConfig(void)
 {
     CLOGI("");
 
-    int32_t *nodeNums = NULL;
-    int32_t *controlId = NULL;
-    int32_t *prevNode = NULL;
     bool enableSecure = false;
+    int pipeId = -1;
+    enum NODE_TYPE nodeType = INVALID_NODE;
+    bool flagStreamLeader = true;
+    bool flagReprocessing = false;
+    int sensorScenario = 0;
+
+    m_initDeviceInfo(PIPE_FLITE);
 
     if (m_cameraId == CAMERA_ID_SECURE)
         enableSecure = true;
     
-    nodeNums = m_nodeNums[INDEX(PIPE_FLITE)];
-    nodeNums[OUTPUT_NODE] = -1;
+    pipeId = PIPE_FLITE;
+    nodeType = getNodeType(PIPE_FLITE);
+    m_deviceInfo[pipeId].pipeId[nodeType]  = PIPE_FLITE;
     if (m_cameraId == CAMERA_ID_SECURE) {
-        nodeNums[CAPTURE_NODE_1] = SECURE_CAMERA_FLITE_NUM;
+        m_deviceInfo[pipeId].nodeNum[nodeType] = SECURE_CAMERA_FLITE_NUM;
     } else {
-        nodeNums[CAPTURE_NODE_1] = VISION_CAMERA_FLITE_NUM;
+        m_deviceInfo[pipeId].nodeNum[nodeType] = VISION_CAMERA_FLITE_NUM;
     }
-    nodeNums[CAPTURE_NODE_2] = -1;
-    controlId = m_sensorIds[INDEX(PIPE_FLITE)];
-    controlId[CAPTURE_NODE_1] = m_getSensorId(nodeNums[CAPTURE_NODE_1], enableSecure);
-    prevNode = nodeNums;
+    m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
+    strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "FLITE", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+
+     if (enableSecure == true)
+        sensorScenario = SENSOR_SCENARIO_SECURE;
+     else
+        sensorScenario = SENSOR_SCENARIO_VISION;
+
+    m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[nodeType], false, flagStreamLeader, flagReprocessing, sensorScenario);
+
+    flagStreamLeader = false;
+
+    /* VC0 for bayer */
+    nodeType = getNodeType(PIPE_VC0);
+    m_deviceInfo[pipeId].pipeId[nodeType]  = PIPE_VC0;
+    m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
+    m_deviceInfo[pipeId].nodeNum[nodeType] = getFliteCaptureNodenum(m_cameraId, m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_FLITE)]);
+    strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "BAYER", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+    m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_FLITE)], false, flagStreamLeader, flagReprocessing, sensorScenario);
 
     return NO_ERROR;
 }
 
-int ExynosCameraFrameFactoryVision::m_getSensorId(__unused unsigned int nodeNum, bool enableSecure)
-{
-    unsigned int scenarioBit = 0;
-    unsigned int nodeNumBit = 0;
-    unsigned int sensorIdBit = 0;
-    unsigned int sensorId = getSensorId(m_cameraId);
-
-    if (enableSecure == true)
-        scenarioBit = (SENSOR_SCENARIO_SECURE << SCENARIO_SHIFT);
-    else
-        scenarioBit = (SENSOR_SCENARIO_VISION << SCENARIO_SHIFT);
-    /*
-     * hack
-     * nodeNum - FIMC_IS_VIDEO_BAS_NUM is proper.
-     * but, historically, FIMC_IS_VIDEO_SS0_NUM - FIMC_IS_VIDEO_SS0_NUM is worked properly
-     */
-    //nodeNumBit = ((nodeNum - FIMC_IS_VIDEO_BAS_NUM) << SSX_VINDEX_SHIFT);
-    nodeNumBit = ((FIMC_IS_VIDEO_SS0_NUM - FIMC_IS_VIDEO_SS0_NUM) << SSX_VINDEX_SHIFT);
-
-    sensorIdBit = (sensorId << 0);
-
-    return (scenarioBit) |
-           (nodeNumBit) |
-           (sensorIdBit);
-}
 }; /* namespace android */

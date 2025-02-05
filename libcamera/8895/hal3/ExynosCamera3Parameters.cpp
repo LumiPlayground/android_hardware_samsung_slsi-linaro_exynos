@@ -69,7 +69,6 @@ ExynosCamera3Parameters::ExynosCamera3Parameters(int cameraId, bool flagCompanio
     m_romReadThreadDone = false;
     m_use_companion = flagCompanion;
 #endif
-    m_fastFpsMode = 0;
     m_previewSizeChanged = false;
     m_flagRestartPreviewChecked = false;
     m_flagRestartPreview = false;
@@ -88,7 +87,10 @@ ExynosCamera3Parameters::ExynosCamera3Parameters(int cameraId, bool flagCompanio
     m_flagOISCaptureOn = false;
 #endif
 #ifdef USE_BINNING_MODE
-    m_binningProperty = checkProperty(false);
+    m_binningProperty = checkBinningProperty();
+#endif
+#ifdef USE_LIMITATION_FOR_THIRD_PARTY
+    m_fpsProperty = checkFpsProperty();
 #endif
 
     m_flagCheckRecordingHint = false;
@@ -122,9 +124,6 @@ ExynosCamera3Parameters::ExynosCamera3Parameters(int cameraId, bool flagCompanio
 #endif
 
     m_enabledMsgType = 0;
-
-    m_previewBufferCount = NUM_PREVIEW_BUFFERS;
-
     m_dvfsLock = false;
 
 #ifdef SAMSUNG_DOF
@@ -139,16 +138,17 @@ ExynosCamera3Parameters::ExynosCamera3Parameters(int cameraId, bool flagCompanio
     m_llsValue = 0;
 #endif
 #endif
-    m_zoom_activated = false;
 
 #ifdef SUPPORT_DEPTH_MAP
     m_flaguseDepthMap = false;
 #endif
 
     for (int i = 0; i < this->getYuvStreamMaxNum(); i++) {
-        m_yuvBufferCount[i] = 1;
+        m_yuvBufferCount[i] = 1; //YUV
+        m_yuvBufferCount[i + YUV_MAX] = 1; //YUV_STALL
 #ifdef USE_BDS_2_0_480P_YUV
-        m_yuvSizeSetup[i] = false;
+        m_yuvSizeSetup[i] = false; //YUV
+        m_yuvSizeSetup[i + YUV_MAX] = false; //YUV_STALL
 #endif
     }
 
@@ -170,9 +170,9 @@ ExynosCamera3Parameters::~ExynosCamera3Parameters()
         m_activityControl = NULL;
     }
 
-    for(int i = 0; i < mDebugInfo.num_of_appmarker; i++) {
-        if(mDebugInfo.debugData[mDebugInfo.idx[i][0]])
-                delete mDebugInfo.debugData[mDebugInfo.idx[i][0]];
+    for (int i = 0; i < mDebugInfo.num_of_appmarker; i++) {
+        if (mDebugInfo.debugData[mDebugInfo.idx[i][0]])
+            delete[] mDebugInfo.debugData[mDebugInfo.idx[i][0]];
         mDebugInfo.debugData[mDebugInfo.idx[i][0]] = NULL;
         mDebugInfo.debugSize[mDebugInfo.idx[i][0]] = 0;
     }
@@ -184,12 +184,12 @@ ExynosCamera3Parameters::~ExynosCamera3Parameters()
     }
 
     if (m_exifInfo.maker_note) {
-        delete m_exifInfo.maker_note;
+        delete[] m_exifInfo.maker_note;
         m_exifInfo.maker_note = NULL;
     }
 
     if (m_exifInfo.user_comment) {
-        delete m_exifInfo.user_comment;
+        delete[] m_exifInfo.user_comment;
         m_exifInfo.user_comment = NULL;
     }
 }
@@ -205,8 +205,12 @@ void ExynosCamera3Parameters::setDefaultCameraInfo(void)
 
     m_setHwSensorSize(m_staticInfo->maxSensorW, m_staticInfo->maxSensorH);
     for (int i = 0; i < this->getYuvStreamMaxNum(); i++) {
+        /* YUV */
         m_setYuvSize(m_staticInfo->maxPreviewW, m_staticInfo->maxPreviewH, i);
         m_setYuvFormat(V4L2_PIX_FMT_NV21, i);
+        /* YUV_STALL */
+        m_setYuvSize(m_staticInfo->maxPreviewW, m_staticInfo->maxPreviewH, i + YUV_MAX);
+        m_setYuvFormat(V4L2_PIX_FMT_NV21, i + YUV_MAX);
     }
 
     m_setHwPictureSize(m_staticInfo->maxPictureW, m_staticInfo->maxPictureH);
@@ -220,7 +224,6 @@ void ExynosCamera3Parameters::setDefaultCameraInfo(void)
 
     m_setRecordingHint(false);
     setDualMode(false);
-    m_setEffectHint(0);
 }
 
 status_t ExynosCamera3Parameters::m_setIntelligentMode(int intelligentMode)
@@ -286,12 +289,6 @@ void ExynosCamera3Parameters::m_setRecordingHint(bool hint)
 {
     m_cameraInfo.recordingHint = hint;
 
-    if (hint) {
-        setMetaVideoMode(&m_metadata, AA_VIDEOMODE_ON);
-    } else if (!hint && !getDualRecordingHint() && !getEffectRecordingHint()) {
-        setMetaVideoMode(&m_metadata, AA_VIDEOMODE_OFF);
-    }
-
     /* RecordingHint is confirmed */
     m_flagCheckRecordingHint = true;
 }
@@ -327,30 +324,9 @@ bool ExynosCamera3Parameters::getDualMode(void)
     return m_cameraInfo.dualMode;
 }
 
-void ExynosCamera3Parameters::m_setDualRecordingHint(bool hint)
-{
-    m_cameraInfo.dualRecordingHint = hint;
-
-    if (hint) {
-        setMetaVideoMode(&m_metadata, AA_VIDEOMODE_ON);
-    } else if (!hint && !getRecordingHint() && !getEffectRecordingHint()) {
-        setMetaVideoMode(&m_metadata, AA_VIDEOMODE_OFF);
-    }
-}
-
 bool ExynosCamera3Parameters::getDualRecordingHint(void)
 {
     return m_cameraInfo.dualRecordingHint;
-}
-
-void ExynosCamera3Parameters::m_setEffectHint(bool hint)
-{
-    m_cameraInfo.effectHint = hint;
-}
-
-bool ExynosCamera3Parameters::getEffectHint(void)
-{
-    return m_cameraInfo.effectHint;
 }
 
 bool ExynosCamera3Parameters::getEffectRecordingHint(void)
@@ -364,10 +340,59 @@ status_t ExynosCamera3Parameters::checkPreviewFpsRange(uint32_t minFps, uint32_t
     uint32_t curMinFps = 0, curMaxFps = 0;
 
     getPreviewFpsRange(&curMinFps, &curMaxFps);
-    if (curMinFps != minFps || curMaxFps != maxFps)
+
+    if (m_adjustPreviewFpsRange(minFps, maxFps) != NO_ERROR) {
+        CLOGE("Fails to adjust preview fps range");
+        return INVALID_OPERATION;
+    }
+
+    if (curMinFps != minFps || curMaxFps != maxFps) {
         m_setPreviewFpsRange(minFps, maxFps);
+#ifdef USE_LIMITATION_FOR_THIRD_PARTY
+        if (m_fpsProperty != 0) {
+            CLOGI("INFO(%s): set to %d fps depends on fps property", __FUNCTION__, m_fpsProperty/1000);
+        }
+#endif
+    }
 
     return ret;
+}
+
+status_t ExynosCamera3Parameters::m_adjustPreviewFpsRange(uint32_t &newMinFps, uint32_t &newMaxFps)
+{
+    bool flagSpecialMode = false;
+
+    if (getDualMode() == true) {
+        flagSpecialMode = true;
+        CLOGV("DEBUG(%s[%d]):dualMode(true), newMaxFps=%d", __FUNCTION__, __LINE__, newMaxFps);
+    }
+
+    if (getDualRecordingHint() == true) {
+        flagSpecialMode = true;
+        CLOGV("DEBUG(%s[%d]):dualRecordingHint(true), newMaxFps=%d", __FUNCTION__, __LINE__, newMaxFps);
+    }
+
+    if (getRecordingHint() == true) {
+        flagSpecialMode = true;
+        CLOGV("DEBUG(%s[%d]):RecordingHint(true),newMinFps=%d,newMaxFps=%d", __FUNCTION__, __LINE__, newMinFps, newMaxFps);
+    }
+
+#ifdef USE_LIMITATION_FOR_THIRD_PARTY
+    if (getSamsungCamera() == false && !flagSpecialMode) {
+        switch(m_fpsProperty) {
+        case 30000:
+        case 15000:
+            newMinFps = m_fpsProperty / 1000;
+            newMaxFps = m_fpsProperty / 1000;
+            break;
+        default:
+            /* Don't use to set fixed fps in the hal side. */
+            break;
+        }
+    }
+#endif
+
+    return NO_ERROR;
 }
 
 void ExynosCamera3Parameters::m_setPreviewFpsRange(uint32_t min, uint32_t max)
@@ -570,16 +595,6 @@ bool ExynosCamera3Parameters::setReallocBuffer(bool enable) {
     return m_reallocBuffer;
 }
 
-void ExynosCamera3Parameters::setFastFpsMode(int fpsMode)
-{
-    m_fastFpsMode = fpsMode;
-}
-
-int ExynosCamera3Parameters::getFastFpsMode(void)
-{
-    return m_fastFpsMode;
-}
-
 void ExynosCamera3Parameters::m_setHighSpeedRecording(bool highSpeed)
 {
     m_cameraInfo.highSpeedRecording = highSpeed;
@@ -592,26 +607,26 @@ bool ExynosCamera3Parameters::getHighSpeedRecording(void)
 
 void ExynosCamera3Parameters::m_setRestartPreviewChecked(bool restart)
 {
-    CLOGD("setRestartPreviewChecked(during SetParameters) %s", restart ? "true" : "false");
     Mutex::Autolock lock(m_parameterLock);
-
     m_flagRestartPreviewChecked = restart;
 }
 
 bool ExynosCamera3Parameters::m_getRestartPreviewChecked(void)
 {
     Mutex::Autolock lock(m_parameterLock);
-
     return m_flagRestartPreviewChecked;
 }
 
 void ExynosCamera3Parameters::m_setRestartPreview(bool restart)
 {
-    CLOGD("setRestartPreview %s", restart ? "true" : "false");
     Mutex::Autolock lock(m_parameterLock);
-
     m_flagRestartPreview = restart;
+}
 
+bool ExynosCamera3Parameters::m_getRestartPreview()
+{
+    Mutex::Autolock lock(m_parameterLock);
+    return m_flagRestartPreview;
 }
 
 void ExynosCamera3Parameters::m_setVideoStabilization(bool stabilization)
@@ -655,24 +670,6 @@ bool ExynosCamera3Parameters::isSWVdisMode(void)
 
     int nPreviewW, nPreviewH;
     getPreviewSize(&nPreviewW, &nPreviewH);
-
-    if ((getRecordingHint() == true) &&
-        (getCameraId() == CAMERA_ID_BACK) &&
-        (getHighSpeedRecording() == false) &&
-        (use3DNR_dmaout == false) &&
-        (getSWVdisUIMode() == true) &&
-        ((nPreviewW == 1920 && nPreviewH == 1080) || (nPreviewW == 1280 && nPreviewH == 720)))
-    {
-        swVDIS_mode = true;
-    }
-
-    return swVDIS_mode;
-}
-
-bool ExynosCamera3Parameters::isSWVdisModeWithParam(int nPreviewW, int nPreviewH)
-{
-    bool swVDIS_mode = false;
-    bool use3DNR_dmaout = false;
 
     if ((getRecordingHint() == true) &&
         (getCameraId() == CAMERA_ID_BACK) &&
@@ -732,81 +729,14 @@ int ExynosCamera3Parameters::getHWVdisFormat(void)
     return V4L2_PIX_FMT_YUYV;
 }
 
-void ExynosCamera3Parameters::m_setSWVdisMode(bool swVdis)
-{
-    m_cameraInfo.swVdisMode = swVdis;
-}
-
 bool ExynosCamera3Parameters::getSWVdisMode(void)
 {
     return m_cameraInfo.swVdisMode;
 }
 
-void ExynosCamera3Parameters::m_setSWVdisUIMode(bool swVdisUI)
-{
-    m_cameraInfo.swVdisUIMode = swVdisUI;
-}
-
 bool ExynosCamera3Parameters::getSWVdisUIMode(void)
 {
     return m_cameraInfo.swVdisUIMode;
-}
-
-status_t ExynosCamera3Parameters::checkPreviewSize(int previewW, int previewH)
-{
-    /* preview size */
-    int newPreviewW = 0;
-    int newPreviewH = 0;
-    int newCalHwPreviewW = 0;
-    int newCalHwPreviewH = 0;
-
-    int curPreviewW = 0;
-    int curPreviewH = 0;
-    int curHwPreviewW = 0;
-    int curHwPreviewH = 0;
-
-    getPreviewSize(&curPreviewW, &curPreviewH);
-    getHwPreviewSize(&curHwPreviewW, &curHwPreviewH);
-
-    newPreviewW = previewW;
-    newPreviewH = previewH;
-    if (m_adjustPreviewSize(&newPreviewW, &newPreviewH, &newCalHwPreviewW, &newCalHwPreviewH) != OK) {
-        CLOGE("[Parameters] adjustPreviewSize fail, newPreviewSize(%dx%d)", newPreviewW, newPreviewH);
-        return BAD_VALUE;
-    }
-
-    if (m_isSupportedPreviewSize(newPreviewW, newPreviewH) == false) {
-        CLOGE("[Parameters] new preview size is invalid(%dx%d)", newPreviewW, newPreviewH);
-        return BAD_VALUE;
-    }
-
-    CLOGI("[setParameters]Cur Preview size(%dx%d)", curPreviewW, curPreviewH);
-    CLOGI("[setParameters]Cur HwPreview size(%dx%d)", curHwPreviewW, curHwPreviewH);
-    CLOGI("[setParameters]param.preview size(%dx%d)", previewW, previewH);
-    CLOGI("[setParameters]Adjust Preview size(%dx%d), ratioId(%d)", newPreviewW, newPreviewH, m_cameraInfo.previewSizeRatioId);
-    CLOGI("[setParameters]Calibrated HwPreview size(%dx%d)", newCalHwPreviewW, newCalHwPreviewH);
-
-    if (curPreviewW != newPreviewW || curPreviewH != newPreviewH ||
-        curHwPreviewW != newCalHwPreviewW || curHwPreviewH != newCalHwPreviewH ||
-        getHighResolutionCallbackMode() == true) {
-        m_setPreviewSize(newPreviewW, newPreviewH);
-        m_setHwPreviewSize(newCalHwPreviewW, newCalHwPreviewH);
-
-        if (getHighResolutionCallbackMode() == true) {
-            m_previewSizeChanged = false;
-        } else {
-            CLOGD("setRestartPreviewChecked true");
-            m_setRestartPreviewChecked(true);
-            m_previewSizeChanged = true;
-        }
-    } else {
-        m_previewSizeChanged = false;
-    }
-
-    updateBinningScaleRatio();
-    updateBnsScaleRatio();
-
-    return NO_ERROR;
 }
 
 status_t ExynosCamera3Parameters::checkYuvSize(const int width, const int height, const int outputPortId)
@@ -831,25 +761,40 @@ status_t ExynosCamera3Parameters::checkYuvSize(const int width, const int height
 #ifdef USE_BDS_2_0_480P_YUV
         m_yuvSizeSetup[outputPortId] = true;
 #endif
-
-        CLOGD("setRestartPreviewChecked true");
-        m_setRestartPreviewChecked(true);
         m_previewSizeChanged = true;
     } else {
         m_previewSizeChanged = false;
     }
 
-    /* Update minimum YUV size */
-    if(m_minYuvW == 0) {
-        m_minYuvW = width;
-    } else if (width < m_minYuvW) {
-        m_minYuvW = width;
-    }
+    if (outputPortId < ExynosCamera3Parameters::YUV_MAX) {
+        /* Update minimum YUV size */
+        if(m_minYuvW == 0) {
+            m_minYuvW = width;
+        } else if (width < m_minYuvW) {
+            m_minYuvW = width;
+        }
 
-    if(m_minYuvH == 0) {
-        m_minYuvH = height;
-    } else if (height < m_minYuvH) {
-        m_minYuvH = height;
+        if(m_minYuvH == 0) {
+            m_minYuvH = height;
+        } else if (height < m_minYuvH) {
+            m_minYuvH = height;
+        }
+
+        /* Update maximum YUV size */
+        if(m_maxYuvW == 0) {
+            m_maxYuvW = width;
+        } else if (width > m_maxYuvW) {
+            m_maxYuvW = width;
+        }
+
+        if(m_maxYuvH == 0) {
+            m_maxYuvH = height;
+        } else if (height > m_maxYuvH) {
+            m_maxYuvH = height;
+        }
+
+        CLOGV("m_minYuvW(%d) m_minYuvH(%d) m_maxYuvW(%d) m_maxYuvH(%d)",
+                m_minYuvW, m_minYuvH, m_maxYuvW, m_maxYuvH);
     }
 
 #ifdef SUPPORT_DEPTH_MAP
@@ -896,8 +841,12 @@ status_t ExynosCamera3Parameters::initYuvSizes() {
     for(int outputPort = 0; outputPort < getYuvStreamMaxNum(); outputPort++) {
         CLOGV("Port[%d] Idx[%d], Size(%d x %d) / true"
             , outputPort, lastIdx, sizeList[lastIdx][0], sizeList[lastIdx][1]);
+        /* YUV */
         m_setYuvSize(sizeList[lastIdx][0], sizeList[lastIdx][1], outputPort);
         m_setYuvFormat(V4L2_PIX_FMT_NV21, outputPort);
+        /* YUV_STALL*/
+        m_setYuvSize(sizeList[lastIdx][0], sizeList[lastIdx][1], outputPort + YUV_MAX);
+        m_setYuvFormat(V4L2_PIX_FMT_NV21, outputPort + YUV_MAX);
     }
 
     return NO_ERROR;
@@ -1165,7 +1114,7 @@ status_t ExynosCamera3Parameters::checkYuvFormat(const int format, const int out
     return ret;
 }
 
-void ExynosCamera3Parameters::m_setPreviewSize(int w, int h)
+void ExynosCamera3Parameters::setPreviewSize(int w, int h)
 {
     m_cameraInfo.previewW = w;
     m_cameraInfo.previewH = h;
@@ -1179,12 +1128,36 @@ void ExynosCamera3Parameters::getPreviewSize(int *w, int *h)
 
 void ExynosCamera3Parameters::m_setYuvSize(const int width, const int height, const int index)
 {
+    int yuvWidthLength = sizeof(m_cameraInfo.yuvWidth) / sizeof(m_cameraInfo.yuvWidth[0]);
+    int yuvHeightLength = sizeof(m_cameraInfo.yuvHeight) / sizeof(m_cameraInfo.yuvHeight[0]);
+
+    if (yuvWidthLength != YUV_OUTPUT_PORT_ID_MAX
+        || yuvHeightLength != YUV_OUTPUT_PORT_ID_MAX) {
+        android_printAssert(NULL, LOG_TAG, "ASSERT:Invalid yuvSize array length %dx%d."\
+                            " YUV_OUTPUT_PORT_ID_MAX %d",
+                            yuvWidthLength, yuvHeightLength,
+                            YUV_OUTPUT_PORT_ID_MAX);
+        return;
+    }
+
     m_cameraInfo.yuvWidth[index] = width;
     m_cameraInfo.yuvHeight[index] = height;
 }
 
-void ExynosCamera3Parameters::getYuvSize(int *width, int *height, const int index)
+void ExynosCamera3Parameters::getYuvSize(int *width, int *height, int index)
 {
+    int yuvWidthLength = sizeof(m_cameraInfo.yuvWidth)/sizeof(m_cameraInfo.yuvWidth[0]);
+    int yuvHeightLength = sizeof(m_cameraInfo.yuvHeight)/sizeof(m_cameraInfo.yuvHeight[0]);
+
+    if (yuvWidthLength != YUV_OUTPUT_PORT_ID_MAX
+            || yuvHeightLength != YUV_OUTPUT_PORT_ID_MAX) {
+        android_printAssert(NULL, LOG_TAG, "ASSERT:Invalid yuvSize array length %dx%d."\
+                " YUV_OUTPUT_PORT_ID_MAX %d",
+                yuvWidthLength, yuvHeightLength,
+                YUV_OUTPUT_PORT_ID_MAX);
+        return;
+    }
+
     *width = m_cameraInfo.yuvWidth[index];
     *height = m_cameraInfo.yuvHeight[index];
 }
@@ -1340,8 +1313,6 @@ void ExynosCamera3Parameters::updateHwSensorSize(void)
         newHwSensorW = sizeList[SENSOR_W];
         newHwSensorH = sizeList[SENSOR_H];
 #endif
-    } else if (getScalableSensorMode() == true) {
-        m_getScalableSensorSize(&newHwSensorW, &newHwSensorH);
     } else {
         getBnsSize(&newHwSensorW, &newHwSensorH);
     }
@@ -1362,27 +1333,22 @@ void ExynosCamera3Parameters::m_setHwSensorSize(int w, int h)
 
 void ExynosCamera3Parameters::getHwSensorSize(int *w, int *h)
 {
-    CLOGV("getScalableSensorMode()(%d)", getScalableSensorMode());
     int width  = 0;
     int height = 0;
     int sizeList[SIZE_LUT_INDEX_END];
 
-    if (m_cameraInfo.scalableSensorMode != true) {
-        /* matched ratio LUT is not existed, use equation */
-        if (m_useSizeTable == true
-            && m_staticInfo->previewSizeLut != NULL
-            && m_cameraInfo.previewSizeRatioId < m_staticInfo->previewSizeLutMax
-            && m_getPreviewSizeList(sizeList) == NO_ERROR) {
+    /* matched ratio LUT is not existed, use equation */
+    if (m_useSizeTable == true
+        && m_staticInfo->previewSizeLut != NULL
+        && m_cameraInfo.previewSizeRatioId < m_staticInfo->previewSizeLutMax
+        && m_getPreviewSizeList(sizeList) == NO_ERROR) {
 
-            width = sizeList[SENSOR_W];
-            height = sizeList[SENSOR_H];
+        width = sizeList[SENSOR_W];
+        height = sizeList[SENSOR_H];
 
-        } else {
-            width  = m_cameraInfo.hwSensorW;
-            height = m_cameraInfo.hwSensorH;
-        }
     } else {
-        m_getScalableSensorSize(&width, &height);
+        width  = m_cameraInfo.hwSensorW;
+        height = m_cameraInfo.hwSensorH;
     }
 
     *w = width;
@@ -1501,18 +1467,17 @@ void ExynosCamera3Parameters::updateBinningScaleRatio(void)
 
     if ((getRecordingHint() == true)
         && (getHighSpeedRecording() == true)) {
-        int fpsmode = 0;
-        fpsmode = getFastFpsMode();
-        switch (fpsmode) {
-        case 1: /* 60 fps */
+        int configMode = getConfigMode();
+        switch (configMode) {
+        case CONFIG_MODE::HIGHSPEED_60:
             binningRatio = 2000;
             break;
-        case 2: /* 120 fps */
-        case 3: /* 240 fps */
+        case CONFIG_MODE::HIGHSPEED_120:
+        case CONFIG_MODE::HIGHSPEED_240:
             binningRatio = 4000;
             break;
         default:
-            CLOGE(" Invalide FastFpsMode(%d)", fpsmode);
+            CLOGE("Invalide configMode(%d)", configMode);
         }
     }
 #ifdef USE_BINNING_MODE
@@ -1771,8 +1736,6 @@ void ExynosCamera3Parameters::m_setHwPictureFormat(int fmt)
 
 int ExynosCamera3Parameters::getHwPictureFormat(void)
 {
-    CLOGE("m_cameraInfo.pictureFormat(%d)", m_cameraInfo.hwPictureFormat);
-
     return m_cameraInfo.hwPictureFormat;
 }
 
@@ -1925,6 +1888,93 @@ bool ExynosCamera3Parameters::getTpuEnabledMode(void)
     return false;
 }
 
+#ifdef USE_VRA_GROUP
+void ExynosCamera3Parameters::getHwVraInputSize(int *w, int *h)
+{
+#if defined(MAX_VRA_INPUT_SIZE_WIDTH) && defined(MAX_VRA_INPUT_SIZE_HEIGHT)
+    int vraWidth = MAX_VRA_INPUT_WIDTH;
+    int vraHeight = MAX_VRA_INPUT_HEIGHT;
+#else
+    int vraWidth = 640;
+    int vraHeight = 480;
+#endif
+    float vraRatio = ROUND_OFF(((float)vraWidth / (float)vraHeight), 2);
+
+    switch (m_cameraInfo.previewSizeRatioId) {
+    case SIZE_RATIO_16_9:
+        *w = vraWidth;
+        *h = ALIGN_UP((vraWidth / 16) * 9, 2);
+        break;
+    case SIZE_RATIO_4_3:
+        *w = ALIGN_UP((vraHeight / 3) * 4, CAMERA_16PX_ALIGN);
+        *h = vraHeight;
+        break;
+    case SIZE_RATIO_1_1:
+        *w = vraHeight;
+        *h = vraHeight;
+        break;
+    case SIZE_RATIO_3_2:
+        if (vraRatio == 1.33f) { /* 4:3 */
+            *w = vraWidth;
+            *h = ALIGN_UP((vraWidth / 3) * 2, 2);
+        } else if (vraRatio == 1.77f) { /* 16:9 */
+            *w = ALIGN_UP((vraHeight / 2) * 3, CAMERA_16PX_ALIGN);
+            *h = vraHeight;
+        } else {
+            *w = vraWidth;
+            *h = vraHeight;
+        }
+        break;
+    case SIZE_RATIO_5_4:
+        *w = ALIGN_UP((vraHeight / 4) * 5, CAMERA_16PX_ALIGN);
+        *h = vraHeight;
+        break;
+    case SIZE_RATIO_5_3:
+        if (vraRatio == 1.33f) { /* 4:3 */
+            *w = vraWidth;
+            *h = ALIGN_UP((vraWidth / 5) * 3, 2);
+        } else if (vraRatio == 1.77f) { /* 16:9 */
+            *w = ALIGN_UP((vraHeight / 3) * 5, CAMERA_16PX_ALIGN);
+            *h = vraHeight;
+        } else {
+            *w = vraWidth;
+            *h = vraHeight;
+        }
+        break;
+    case SIZE_RATIO_11_9:
+        *w = ALIGN_UP((vraHeight / 9) * 11, CAMERA_16PX_ALIGN);
+        *h = vraHeight;
+        break;
+    default:
+        CLOGW("WARN(%s[%d]):Invalid size ratio(%d)",
+                __FUNCTION__, __LINE__, m_cameraInfo.previewSizeRatioId);
+
+        *w = vraWidth;
+        *h = vraHeight;
+        break;
+    }
+}
+
+int ExynosCamera3Parameters::getHwVraInputFormat(void)
+{
+#if defined(CAMERA_VRA_INPUT_FORMAT)
+    return CAMERA_VRA_INPUT_FORMAT;
+#else
+    return V4L2_PIX_FMT_NV16;
+#endif
+}
+
+void ExynosCamera3Parameters::setDsInputPortId(int dsInputPortId)
+{
+    m_dsInputPortId = dsInputPortId;
+}
+
+int ExynosCamera3Parameters::getDsInputPortId(void)
+{
+    return m_dsInputPortId;
+}
+#endif
+
 status_t ExynosCamera3Parameters::setZoomLevel(int zoom)
 {
     int srcW = 0;
@@ -2006,17 +2056,6 @@ int ExynosCamera3Parameters::getZoomLevel(void)
     return m_cameraInfo.zoom;
 }
 
-void ExynosCamera3Parameters::m_setRotation(int rotation)
-{
-    m_cameraInfo.rotation = rotation;
-}
-
-int ExynosCamera3Parameters::getRotation(void)
-{
-    return m_cameraInfo.rotation;
-}
-
-
 int ExynosCamera3Parameters::getFocusMode(void)
 {
     return m_cameraInfo.focusMode;
@@ -2070,14 +2109,14 @@ void ExynosCamera3Parameters::m_setExifFixedAttribute(void)
 
     /* 3 Maker note */
     if (m_exifInfo.maker_note)
-        delete m_exifInfo.maker_note;
+        delete[] m_exifInfo.maker_note;
 
     m_exifInfo.maker_note_size = 98;
     m_exifInfo.maker_note = new unsigned char[m_exifInfo.maker_note_size];
     memset((void *)m_exifInfo.maker_note, 0, m_exifInfo.maker_note_size);
     /* 3 User Comments */
     if (m_exifInfo.user_comment)
-        delete m_exifInfo.user_comment;
+        delete[] m_exifInfo.user_comment;
 
     m_exifInfo.user_comment_size = sizeof("user comment");
     m_exifInfo.user_comment = new unsigned char[m_exifInfo.user_comment_size + 8];
@@ -2106,7 +2145,8 @@ void ExynosCamera3Parameters::m_setExifFixedAttribute(void)
 void ExynosCamera3Parameters::setExifChangedAttribute(exif_attribute_t   *exifInfo,
                                                      ExynosRect         *pictureRect,
                                                      ExynosRect         *thumbnailRect,
-                                                     camera2_shot_t     *shot)
+                                                     camera2_shot_t     *shot,
+                                                     bool               useDebugInfo2)
 {
     m_setExifChangedAttribute(exifInfo, pictureRect, thumbnailRect, shot);
 }
@@ -2443,75 +2483,6 @@ status_t ExynosCamera3Parameters::getFixedExifInfo(exif_attribute_t *exifInfo)
     return NO_ERROR;
 }
 
-#ifdef SAMSUNG_OIS
-void ExynosCamera3Parameters::m_setOIS(enum  optical_stabilization_mode ois)
-{
-    m_cameraInfo.oisMode = ois;
-
-    if(getZoomActiveOn()) {
-        CLOGD("[setParameters]zoom moving..");
-        return;
-    }
-
-#if 0 // Host controlled OIS Factory Mode
-    if(m_oisNode) {
-        setOISMode();
-    } else {
-        CLOGD("Ois node is not prepared yet(%s[%d]) !!!!");
-        m_setOISmodeSetting = true;
-    }
-#else
-    setOISMode();
-#endif
-}
-
-enum optical_stabilization_mode ExynosCamera3Parameters::getOIS(void)
-{
-    return m_cameraInfo.oisMode;
-}
-
-void ExynosCamera3Parameters::setOISNode(ExynosCameraNode *node)
-{
-    m_oisNode = node;
-}
-
-void ExynosCamera3Parameters::setOISModeSetting(bool enable)
-{
-    m_setOISmodeSetting = enable;
-}
-
-int ExynosCamera3Parameters::getOISModeSetting(void)
-{
-    return m_setOISmodeSetting;
-}
-
-void ExynosCamera3Parameters::setOISMode(void)
-{
-    int ret = 0;
-
-    CLOGD("set OIS Mode = %d", m_cameraInfo.oisMode);
-
-#ifdef SAMSUNG_OIS
-    setMetaCtlOIS(&m_metadata, m_cameraInfo.oisMode);
-#endif
-
-#if 0 // Host controlled OIS Factory Mode
-    if (m_cameraInfo.oisMode == OPTICAL_STABILIZATION_MODE_SINE_X && m_oisNode != NULL) {
-        ret = m_oisNode->setControl(V4L2_CID_CAMERA_OIS_SINE_MODE, OPTICAL_STABILIZATION_MODE_SINE_X);
-        if (ret < 0) {
-            CLOGE("FLITE setControl fail, ret(%d)", ret);
-        }
-    } else if (m_cameraInfo.oisMode == OPTICAL_STABILIZATION_MODE_SINE_Y && m_oisNode != NULL) {
-        ret = m_oisNode->setControl(V4L2_CID_CAMERA_OIS_SINE_MODE, OPTICAL_STABILIZATION_MODE_SINE_Y);
-        if (ret < 0) {
-            CLOGE("FLITE setControl fail, ret(%d)", ret);
-        }
-    }
-#endif
-}
-
-#endif
-
 #ifdef SAMSUNG_COMPANION
 enum companion_drc_mode ExynosCamera3Parameters::getRTDrc(void)
 {
@@ -2551,8 +2522,12 @@ enum companion_wdr_mode ExynosCamera3Parameters::getRTHdr(void)
 
     return mode;
 }
-#endif
 
+void ExynosCamera3Parameters::setRTHdr(enum companion_wdr_mode rtHdrMode)
+{
+    setMetaCtlRTHdr(&m_metadata, rtHdrMode);
+}
+#endif
 
 void ExynosCamera3Parameters::m_setHdrMode(bool hdr)
 {
@@ -2715,22 +2690,6 @@ void ExynosCamera3Parameters::m_setShotMode(int shotMode)
         setMetaCtlSceneMode(&m_metadata, mode, sceneMode);
 }
 
-int ExynosCamera3Parameters::getPreviewBufferCount(void)
-{
-    CLOGV("[setParameters]getPreviewBufferCount %d", m_previewBufferCount);
-
-    return m_previewBufferCount;
-}
-
-void ExynosCamera3Parameters::setPreviewBufferCount(int previewBufferCount)
-{
-    m_previewBufferCount = previewBufferCount;
-
-    CLOGV("[setParameters]setPreviewBufferCount %d", m_previewBufferCount);
-
-    return;
-}
-
 int ExynosCamera3Parameters::getShotMode(void)
 {
     return m_cameraInfo.shotMode;
@@ -2746,83 +2705,6 @@ void ExynosCamera3Parameters::m_setVtMode(int vtMode)
 int ExynosCamera3Parameters::getVtMode(void)
 {
     return m_cameraInfo.vtMode;
-}
-
-bool ExynosCamera3Parameters::isScalableSensorSupported(void)
-{
-    return m_staticInfo->scalableSensorSupport;
-}
-
-bool ExynosCamera3Parameters::m_adjustScalableSensorMode(const int scaleMode)
-{
-    bool adjustedScaleMode = false;
-    int pictureW = 0;
-    int pictureH = 0;
-    float pictureRatio = 0;
-    uint32_t minFps = 0;
-    uint32_t maxFps = 0;
-
-    /* If scale_mode is 1 or dual camera, scalable sensor turn on */
-    if (scaleMode == 1)
-        adjustedScaleMode = true;
-
-    if (getDualMode() == true)
-        adjustedScaleMode = true;
-
-    /*
-     * scalable sensor only support     24     fps for 4:3  - picture size
-     * scalable sensor only support 15, 24, 30 fps for 16:9 - picture size
-     */
-    getPreviewFpsRange(&minFps, &maxFps);
-    getPictureSize(&pictureW, &pictureH);
-
-    pictureRatio = ROUND_OFF(((float)pictureW / (float)pictureH), 2);
-
-    if (pictureRatio == 1.33f) { /* 4:3 */
-        if (maxFps != 24)
-            adjustedScaleMode = false;
-    } else if (pictureRatio == 1.77f) { /* 16:9 */
-        if ((maxFps != 15) && (maxFps != 24) && (maxFps != 30))
-            adjustedScaleMode = false;
-    } else {
-        adjustedScaleMode = false;
-    }
-
-    if (scaleMode == 1 && adjustedScaleMode == false) {
-        CLOGW("pictureRatio(%f, %d, %d) fps(%d, %d) is not proper for scalable",
-                pictureRatio, pictureW, pictureH, minFps, maxFps);
-    }
-
-    return adjustedScaleMode;
-}
-
-void ExynosCamera3Parameters::setScalableSensorMode(bool scaleMode)
-{
-    m_cameraInfo.scalableSensorMode = scaleMode;
-}
-
-bool ExynosCamera3Parameters::getScalableSensorMode(void)
-{
-    return m_cameraInfo.scalableSensorMode;
-}
-
-void ExynosCamera3Parameters::m_getScalableSensorSize(int *newSensorW, int *newSensorH)
-{
-    int previewW = 0;
-    int previewH = 0;
-
-    *newSensorW = 1920;
-    *newSensorH = 1080;
-
-    /* default scalable sensor size is 1920x1080(16:9) */
-    getPreviewSize(&previewW, &previewH);
-
-    /* when preview size is 1440x1080(4:3), return sensor size(1920x1440) */
-    /* if (previewW == 1440 && previewH == 1080) { */
-    if ((previewW * 3 / 4) == previewH) {
-        *newSensorW  = 1920;
-        *newSensorH = 1440;
-    }
 }
 
 status_t ExynosCamera3Parameters::m_setImageUniqueId(const char *uniqueId)
@@ -2948,11 +2830,6 @@ char *ExynosCamera3Parameters::getSeriesShotFilePath(void)
 int ExynosCamera3Parameters::getSeriesShotMode(void)
 {
     return m_cameraInfo.seriesShotMode;
-}
-
-void ExynosCamera3Parameters::m_setSeriesShotCount(int seriesShotCount)
-{
-    m_cameraInfo.seriesShotCount = seriesShotCount;
 }
 
 int ExynosCamera3Parameters::getSeriesShotCount(void)
@@ -3224,6 +3101,34 @@ void ExynosCamera3Parameters::m_initMetadata(void)
     m_metadata.fd_bypass  = 1;
 }
 
+status_t ExynosCamera3Parameters::initMetadata(void)
+{
+    status_t ret;
+
+#ifdef USE_BDS_2_0_480P_YUV
+    clearYuvSizeSetupFlag();
+#endif
+
+#ifdef HAL3_YUVSIZE_BASED_BDS
+    /* Reset all the YUV output sizes to smallest one
+    To make sure the prior output setting do not affect current session.
+    */
+    ret = initYuvSizes();
+    if (ret < 0) {
+        CLOGE("clearYuvSizes() failed!! status(%d)", ret);
+    }
+#endif
+
+    /* To find the minimum sized YUV stream in stream configuration, reset the old data */
+    resetMinYuvSize();
+
+    setPreviewSize(0,0);
+
+    m_initMetadata();
+
+    return OK;
+}
+
 status_t ExynosCamera3Parameters::duplicateCtrlMetadata(void *buf)
 {
     if (buf == NULL) {
@@ -3234,8 +3139,9 @@ status_t ExynosCamera3Parameters::duplicateCtrlMetadata(void *buf)
     struct camera2_shot_ext *meta_shot_ext = (struct camera2_shot_ext *)buf;
     memcpy(&meta_shot_ext->shot.ctl, &m_metadata.shot.ctl, sizeof(struct camera2_ctl));
 #ifdef SAMSUNG_COMPANION
-    meta_shot_ext->shot.uctl.companionUd.wdr_mode = getRTHdr();
-    meta_shot_ext->shot.uctl.companionUd.paf_mode = getPaf();
+    memcpy(&meta_shot_ext->shot.uctl.companionUd,
+                  &m_metadata.shot.uctl.companionUd,
+                  sizeof(struct camera2_companion_uctl));
 #endif
 
 #ifdef SAMSUNG_DOF
@@ -3249,27 +3155,6 @@ status_t ExynosCamera3Parameters::duplicateCtrlMetadata(void *buf)
 
     return NO_ERROR;
 }
-
-status_t ExynosCamera3Parameters::setFrameSkipCount(int count)
-{
-    m_frameSkipCounter.setCount(count);
-
-    return NO_ERROR;
-}
-
-status_t ExynosCamera3Parameters::getFrameSkipCount(int *count)
-{
-    *count = m_frameSkipCounter.getCount();
-    m_frameSkipCounter.decCount();
-
-    return NO_ERROR;
-}
-
-int ExynosCamera3Parameters::getFrameSkipCount(void)
-{
-    return m_frameSkipCounter.getCount();
-}
-
 
 ExynosCameraActivityControl *ExynosCamera3Parameters::getActivityControl(void)
 {
@@ -3777,51 +3662,49 @@ void ExynosCamera3Parameters::m_getSetfileYuvRange(bool flagReprocessing, int *s
             stateReg |= STATE_REG_RECORDINGHINT;
     }
 
-    if (flagReprocessing == true)
+    if (flagReprocessing == true) {
         stateReg |= STATE_REG_FLAG_REPROCESSING;
 
 #ifdef SET_LLS_CAPTURE_SETFILE
-    if (getLLSCaptureOn())
-        stateReg |= STATE_REG_NEED_LLS;
-#endif
-
-#ifdef USE_BINNING_MODE
-    if (m_cameraId == CAMERA_ID_BACK && flagReprocessing == false
-        && getBinningMode() == true) {
-        stateReg |= STATE_REG_BINNING_MODE;
-    }
+        if (getLLSCaptureOn())
+            stateReg |= STATE_REG_NEED_LLS;
 #endif
 
 #ifdef SR_CAPTURE
-    int zoomLevel = getZoomLevel();
-    float zoomRatio = getZoomRatio(zoomLevel) / 1000;
-
-    if (getRecordingHint() == false && flagReprocessing == true
+        if (getRecordingHint() == false
 #ifdef SET_LLS_CAPTURE_SETFILE
-        && !getLLSCaptureOn()
+            && !getLLSCaptureOn()
 #endif
-        ) {
-        if (zoomRatio >= 3.0f && zoomRatio < 4.0f) {
-            stateReg |= STATE_REG_ZOOM;
-            CLOGV("currentSetfile zoom");
-        } else if (zoomRatio >= 4.0f) {
-            if (getSROn()) {
-                stateReg |= STATE_REG_ZOOM_OUTDOOR;
-                CLOGV("currentSetfile zoomoutdoor");
-            } else {
-                stateReg |= STATE_REG_ZOOM_INDOOR;
-                CLOGV("currentSetfile zoomindoor");
+            ) {
+            int zoomLevel = getZoomLevel();
+            float zoomRatio = getZoomRatio(zoomLevel) / 1000;
+
+            if (zoomRatio >= 3.0f && zoomRatio < 4.0f) {
+                stateReg |= STATE_REG_ZOOM;
+                CLOGV("currentSetfile zoom");
+            } else if (zoomRatio >= 4.0f) {
+                if (getSROn()) {
+                    stateReg |= STATE_REG_ZOOM_OUTDOOR;
+                    CLOGV("currentSetfile zoomoutdoor");
+                } else {
+                    stateReg |= STATE_REG_ZOOM_INDOOR;
+                    CLOGV("currentSetfile zoomindoor");
+                }
             }
         }
-    }
 #endif
-
-    if ((stateReg & STATE_REG_RECORDINGHINT)||
-        (stateReg & STATE_REG_UHD_RECORDING)||
-        (stateReg & STATE_REG_DUAL_RECORDINGHINT)) {
-        if (flagReprocessing == false) {
+    } else {
+        if ((stateReg & STATE_REG_RECORDINGHINT)
+            || (stateReg & STATE_REG_UHD_RECORDING)
+            || (stateReg & STATE_REG_DUAL_RECORDINGHINT)) {
             flagYUVRange = YUV_LIMITED_RANGE;
         }
+
+#ifdef USE_BINNING_MODE
+        if (getBinningMode() == true) {
+            stateReg |= STATE_REG_BINNING_MODE;
+        }
+#endif
     }
 
     if (m_cameraId == CAMERA_ID_FRONT) {
@@ -3927,6 +3810,17 @@ void ExynosCamera3Parameters::m_getSetfileYuvRange(bool flagReprocessing, int *s
                     currentSetfile = ISS_SUB_SCENARIO_UHD_30FPS;
                     break;
 
+                case STATE_STILL_BINNING_PREVIEW:
+                case STATE_VIDEO_BINNING:
+                case STATE_DUAL_VIDEO_BINNING:
+                case STATE_DUAL_STILL_BINING_PREVIEW:
+#if defined(USE_BINNING_MODE) && defined(SET_PREVIEW_BINNING_SETFILE)
+                    currentSetfile = ISS_SUB_SCENARIO_FRONT_STILL_PREVIEW_BINNING;
+#else
+                    currentSetfile = ISS_SUB_SCENARIO_FRONT_STILL_PREVIEW_BINNING;
+#endif
+                    break;
+
                 default:
                     CLOGD("can't define senario of setfile.(0x%4x)", stateReg);
                     break;
@@ -3935,10 +3829,7 @@ void ExynosCamera3Parameters::m_getSetfileYuvRange(bool flagReprocessing, int *s
     } else {
         switch(stateReg) {
             case STATE_STILL_PREVIEW:
-                if (getHighSpeedRecording() == true)
-                    currentSetfile = ISS_SUB_SCENARIO_VIDEO_HIGH_SPEED;
-                else
-                    currentSetfile = ISS_SUB_SCENARIO_STILL_PREVIEW;
+                currentSetfile = ISS_SUB_SCENARIO_STILL_PREVIEW;
                 break;
 
             case STATE_STILL_PREVIEW_WDR_ON:
@@ -3976,7 +3867,11 @@ void ExynosCamera3Parameters::m_getSetfileYuvRange(bool flagReprocessing, int *s
             case STATE_VIDEO_BINNING:
             case STATE_DUAL_VIDEO_BINNING:
             case STATE_DUAL_STILL_BINING_PREVIEW:
-                currentSetfile = ISS_SUB_SCENARIO_FHD_60FPS;
+#if defined(USE_BINNING_MODE) && defined(SET_PREVIEW_BINNING_SETFILE)
+                currentSetfile = ISS_SUB_SCENARIO_STILL_PREVIEW_BINNING;
+#else
+                currentSetfile = BINNING_SETFILE_INDEX;
+#endif
                 break;
 
             case STATE_VIDEO:
@@ -4197,6 +4092,17 @@ void ExynosCamera3Parameters::setUseFastenAeStable(bool enable)
 bool ExynosCamera3Parameters::getUseFastenAeStable(void)
 {
     return m_useFastenAeStable;
+}
+
+void ExynosCamera3Parameters::setFastenAeStableOn(bool enable)
+{
+    /* dummy function */
+}
+
+bool ExynosCamera3Parameters::getFastenAeStableOn(void)
+{
+    /* dummy function */
+    return false;
 }
 
 #ifdef SAMSUNG_LLV
@@ -4505,8 +4411,8 @@ status_t ExynosCamera3Parameters::getPreviewBayerCropSize(ExynosRect *srcRect, E
     /* 1. Scale down the crop region to adjust with the bcrop input size */
     scaleRatioX = (float) hwBnsW / (float) maxSensorW;
     scaleRatioY = (float) hwBnsH / (float) maxSensorH;
-    cropRegionX = (int) (cropRegionX * scaleRatioX);
-    cropRegionY = (int) (cropRegionY * scaleRatioY);
+    cropRegionX = ALIGN_DOWN((int) (cropRegionX * scaleRatioX), 2);
+    cropRegionY = ALIGN_DOWN((int) (cropRegionY * scaleRatioY),2);
     cropRegionW = (int) (cropRegionW * scaleRatioX);
     cropRegionH = (int) (cropRegionH * scaleRatioY);
 
@@ -4535,8 +4441,17 @@ status_t ExynosCamera3Parameters::getPreviewBayerCropSize(ExynosRect *srcRect, E
     /* 3. Compensate the crop size to satisfy Max Scale Up Ratio */
     if (dstRect->w * SCALER_MAX_SCALE_UP_RATIO < hwBnsW
         || dstRect->h * SCALER_MAX_SCALE_UP_RATIO < hwBnsH) {
-        dstRect->w = ALIGN_UP((int)ceil((float)hwBnsW / SCALER_MAX_SCALE_UP_RATIO), CAMERA_BCROP_ALIGN);
-        dstRect->h = ALIGN_UP((int)ceil((float)hwBnsH / SCALER_MAX_SCALE_UP_RATIO), CAMERA_BCROP_ALIGN);
+        int newW = ALIGN_UP((int)ceil((float)hwBnsW / SCALER_MAX_SCALE_UP_RATIO), CAMERA_BCROP_ALIGN);
+        int newH = ALIGN_UP((int)ceil((float)hwBnsH / SCALER_MAX_SCALE_UP_RATIO), CAMERA_BCROP_ALIGN);
+
+        CLOGW("dstRect->w(%d) * SCALER_MAX_SCALE_UP_RATIO(%d) = %d < hwBnsW(%d). it cannot handle by mcsc. so, calibrate to %d",
+                dstRect->w, SCALER_MAX_SCALE_UP_RATIO, dstRect->w * SCALER_MAX_SCALE_UP_RATIO, hwBnsW, newW);
+
+        CLOGW("dstRect->h(%d) * SCALER_MAX_SCALE_UP_RATIO(%d) = %d < hwBnsH(%d). it cannot handle by mcsc. so, calibrate to %d",
+                dstRect->h, SCALER_MAX_SCALE_UP_RATIO, dstRect->h * SCALER_MAX_SCALE_UP_RATIO, hwBnsH, newH);
+
+        dstRect->w = newW;
+        dstRect->h = newH;
     }
 
     /* 4. Compensate the crop size to satisfy Max Scale Up Ratio on reprocessing path */
@@ -4758,6 +4673,26 @@ status_t ExynosCamera3Parameters::calcPreviewDzoomCropSize(ExynosRect *srcRect, 
     CLOGV("DST cropX = %d, cropY = %d, cropW = %d, cropH = %d, zoom = %d ratio = %f", dstRect->x, dstRect->y, dstRect->w, dstRect->h, zoomLevel, zoomRatio);
 
     return NO_ERROR;
+}
+
+void ExynosCamera3Parameters::setCheckRestartStream(__unused bool checkRestartFlag)
+{
+    m_setRestartPreviewChecked(checkRestartFlag);
+}
+
+bool ExynosCamera3Parameters::getCheckRestartStream(void)
+{
+    return m_getRestartPreviewChecked();
+}
+
+void ExynosCamera3Parameters::setRestartStream(bool restart)
+{
+    m_setRestartPreview(restart);
+}
+
+bool ExynosCamera3Parameters::getRestartStream(void)
+{
+    return m_getRestartPreview();
 }
 
 status_t ExynosCamera3Parameters::getPictureBayerCropSize(ExynosRect *srcRect, ExynosRect *dstRect)
@@ -5392,26 +5327,26 @@ status_t ExynosCamera3Parameters::getPictureYuvCropSize(ExynosRect *yuvCropSize)
 }
 
 
-status_t ExynosCamera3Parameters::getFastenAeStableSensorSize(int *hwSensorW, int *hwSensorH)
+status_t ExynosCamera3Parameters::getFastenAeStableSensorSize(int *hwSensorW, int *hwSensorH, int index)
 {
-    *hwSensorW = m_staticInfo->fastAeStableLut[0][SENSOR_W];
-    *hwSensorH = m_staticInfo->fastAeStableLut[0][SENSOR_H];
+    *hwSensorW = m_staticInfo->fastAeStableLut[index][SENSOR_W];
+    *hwSensorH = m_staticInfo->fastAeStableLut[index][SENSOR_H];
 
     return NO_ERROR;
 }
 
-status_t ExynosCamera3Parameters::getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH)
+status_t ExynosCamera3Parameters::getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH, int index)
 {
-    *hwBcropW = m_staticInfo->fastAeStableLut[0][BCROP_W];
-    *hwBcropH = m_staticInfo->fastAeStableLut[0][BCROP_H];
+    *hwBcropW = m_staticInfo->fastAeStableLut[index][BCROP_W];
+    *hwBcropH = m_staticInfo->fastAeStableLut[index][BCROP_H];
 
     return NO_ERROR;
 }
 
-status_t ExynosCamera3Parameters::getFastenAeStableBdsSize(int *hwBdsW, int *hwBdsH)
+status_t ExynosCamera3Parameters::getFastenAeStableBdsSize(int *hwBdsW, int *hwBdsH, int index)
 {
-    *hwBdsW = m_staticInfo->fastAeStableLut[0][BDS_W];
-    *hwBdsH = m_staticInfo->fastAeStableLut[0][BDS_H];
+    *hwBdsW = m_staticInfo->fastAeStableLut[index][BDS_W];
+    *hwBdsH = m_staticInfo->fastAeStableLut[index][BDS_H];
 
     return NO_ERROR;
 }
@@ -5457,6 +5392,58 @@ status_t ExynosCamera3Parameters::checkUseDepthMap(void)
              depthMapW, depthMapH, getUseDepthMap());
 
     return NO_ERROR;
+}
+#endif
+
+#ifdef USE_VRA_GROUP
+bool ExynosCamera3Parameters::checkFaceDetectMeta(struct camera2_shot_ext *shot_ext)
+{
+    Mutex::Autolock lock(m_faceDetectMetaLock);
+    bool ret = false;
+
+    if (shot_ext->shot.ctl.stats.faceDetectMode > FACEDETECT_MODE_OFF) {
+        if (shot_ext->shot.dm.stats.faceDetectMode > FACEDETECT_MODE_OFF
+            && m_metadata.shot.dm.request.frameCount < shot_ext->shot.dm.request.frameCount) {
+
+            m_metadata.shot.dm.request.frameCount = shot_ext->shot.dm.request.frameCount;
+            m_metadata.shot.dm.stats.faceDetectMode = shot_ext->shot.dm.stats.faceDetectMode;
+
+            for (int i = 0; i < CAMERA2_MAX_FACES; i++) {
+                m_metadata.shot.dm.stats.faceIds[i] = shot_ext->shot.dm.stats.faceIds[i];
+                m_metadata.shot.dm.stats.faceScores[i] = shot_ext->shot.dm.stats.faceScores[i];
+                for (int j = 0; j < 6; j++) {
+                    m_metadata.shot.dm.stats.faceLandmarks[i][j] = shot_ext->shot.dm.stats.faceLandmarks[i][j];
+                }
+                for (int j = 0; j < 4; j++) {
+                    m_metadata.shot.dm.stats.faceRectangles[i][j] = shot_ext->shot.dm.stats.faceRectangles[i][j];
+                }
+            }
+
+            for (int i = 0; i < CAMERA2_MAX_FACES-2; i++) {
+                m_metadata.shot.dm.stats.faces[i] = shot_ext->shot.dm.stats.faces[i];
+            }
+        } else if (shot_ext->shot.dm.stats.faceDetectMode <= FACEDETECT_MODE_OFF) {
+            shot_ext->shot.dm.stats.faceDetectMode = m_metadata.shot.dm.stats.faceDetectMode;
+
+            for (int i = 0; i < CAMERA2_MAX_FACES; i++) {
+                shot_ext->shot.dm.stats.faceIds[i] = m_metadata.shot.dm.stats.faceIds[i];
+                shot_ext->shot.dm.stats.faceScores[i] = m_metadata.shot.dm.stats.faceScores[i];
+                for (int j = 0; j < 6; j++) {
+                    shot_ext->shot.dm.stats.faceLandmarks[i][j] = m_metadata.shot.dm.stats.faceLandmarks[i][j];
+                }
+                for (int j = 0; j < 4; j++) {
+                    shot_ext->shot.dm.stats.faceRectangles[i][j] = m_metadata.shot.dm.stats.faceRectangles[i][j];
+                }
+            }
+
+            for (int i = 0; i < CAMERA2_MAX_FACES-2; i++) {
+                m_metadata.shot.dm.stats.faces[i] = shot_ext->shot.dm.stats.faces[i];
+            }
+            ret = true;
+        }
+    }
+
+    return ret;
 }
 #endif
 
@@ -5803,16 +5790,6 @@ int ExynosCamera3Parameters::getConfigMode()
     return ret;
 }
 
-void ExynosCamera3Parameters::setZoomActiveOn(bool enable)
-{
-    m_zoom_activated = enable;
-}
-
-bool ExynosCamera3Parameters::getZoomActiveOn(void)
-{
-    return m_zoom_activated;
-}
-
 status_t ExynosCamera3Parameters::setMarkingOfExifFlash(int flag)
 {
     m_firing_flash_marking = flag;
@@ -6117,6 +6094,46 @@ bool ExynosCamera3Parameters::isTpuMcscOtf(void)
         }
     }
 
+    return ret;
+}
+
+bool ExynosCamera3Parameters::isMcscVraOtf(void)
+{
+    bool ret = true;
+#ifdef USE_VRA_GROUP
+    int cameraId = getCameraId();
+    bool flagPIP = getDualMode();
+
+    if (cameraId == CAMERA_ID_BACK) {
+        if (flagPIP == true) {
+#ifdef MAIN_CAMERA_DUAL_MCSC_VRA_OTF
+            ret = MAIN_CAMERA_DUAL_MCSC_VRA_OTF;
+#else
+            CLOGW(" MAIN_CAMERA_DUAL_MCSC_VRA_OTF is not defined");
+#endif
+        } else {
+#ifdef MAIN_CAMERA_SINGLE_MCSC_VRA_OTF
+            ret = MAIN_CAMERA_SINGLE_MCSC_VRA_OTF;
+#else
+            CLOGW(" MAIN_CAMERA_SINGLE_TPU_MCSC_OTF is not defined");
+#endif
+        }
+    } else {
+        if (flagPIP == true) {
+#ifdef FRONT_CAMERA_DUAL_MCSC_VRA_OTF
+            ret = FRONT_CAMERA_DUAL_MCSC_VRA_OTF;
+#else
+            CLOGW(" FRONT_CAMERA_DUAL_TPU_MCSC_OTF is not defined");
+#endif
+        } else {
+#ifdef FRONT_CAMERA_SINGLE_MCSC_VRA_OTF
+            ret = FRONT_CAMERA_SINGLE_MCSC_VRA_OTF;
+#else
+            CLOGW(" FRONT_CAMERA_SINGLE_TPU_MCSC_OTF is not defined");
+#endif
+        }
+    }
+#endif
     return ret;
 }
 
@@ -6512,94 +6529,98 @@ int32_t ExynosCamera3Parameters::getYuvStreamMaxNum(void)
     return yuvStreamMaxNum;
 }
 
-status_t ExynosCamera3Parameters::setYuvBufferCount(const int count, const int index)
+status_t ExynosCamera3Parameters::setYuvBufferCount(const int count, const int outputPortId)
 {
     if (count < 0 || count > VIDEO_MAX_FRAME
-            || index < 0 || index > m_staticInfo->maxNumOutputStreams[PROCESSED]) {
-        CLOGE("Invalid argument. count %d index %d",
-                 count, index);
-
+            || outputPortId < 0 || outputPortId >= YUV_OUTPUT_PORT_ID_MAX) {
+        CLOGE("Invalid argument. count %d outputPortId %d",
+                 count, outputPortId);
         return BAD_VALUE;
     }
 
-    m_yuvBufferCount[index] = count;
+    m_yuvBufferCount[outputPortId] = count;
 
     return NO_ERROR;
 }
 
-int ExynosCamera3Parameters::getYuvBufferCount(const int index)
+int ExynosCamera3Parameters::getYuvBufferCount(const int outputPortId)
 {
-    if (index < 0 || index > m_staticInfo->maxNumOutputStreams[PROCESSED]) {
+    if (outputPortId < 0 || outputPortId >= YUV_OUTPUT_PORT_ID_MAX) {
         CLOGE("Invalid index %d",
-                 index);
+                 outputPortId);
         return 0;
     }
 
-    return m_yuvBufferCount[index];
-}
-
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-void ExynosCamera3Parameters::setDualCameraMode(bool toggle)
-{
-    android_printAssert(NULL, LOG_TAG, "Not yet supported, assert!!!!");
+    return m_yuvBufferCount[outputPortId];
 }
 
 bool ExynosCamera3Parameters::getDualCameraMode(void)
 {
-    android_printAssert(NULL, LOG_TAG, "Not yet supported, assert!!!!");
-
+    /* not supported */
     return false;
+}
+
+#ifdef USE_DUAL_CAMERA
+void ExynosCamera3Parameters::setDualCameraMode(bool toggle)
+{
+    /* not supported */
 }
 
 bool ExynosCamera3Parameters::isFusionEnabled(void)
 {
-    android_printAssert(NULL, LOG_TAG, "Not yet supported, assert!!!!");
-
+    /* not supported */
     return false;
 }
 
 status_t ExynosCamera3Parameters::getFusionSize(int w, int h, ExynosRect *srcRect, ExynosRect *dstRect)
 {
-    android_printAssert(NULL, LOG_TAG, "Not yet supported, assert!!!!");
-
+    /* not supported */
     return NO_ERROR;
 }
 
 status_t ExynosCamera3Parameters::setFusionInfo(camera2_shot_ext *shot_ext)
 {
-    android_printAssert(NULL, LOG_TAG, "Not yet supported, assert!!!!");
-
+    /* not supported */
     return NO_ERROR;
 }
 
 DOF *ExynosCamera3Parameters::getDOF(void)
 {
-    android_printAssert(NULL, LOG_TAG, "Not yet supported, assert!!!!");
-
+    /* not supported */
     return NULL;
 }
+
+ExynosCameraParameters::dual_standby_mode_t  ExynosCamera3Parameters::getDualStandbyMode(void)
+{
+    return DUAL_STANDBY_MODE_INACTIVE;
+}
+
+void ExynosCamera3Parameters::setDualStandbyMode(ExynosCameraParameters::dual_standby_mode_t dualStandbyMode)
+{
+    /* not supported */
+    return;
+}
+
 
 #ifdef USE_CP_FUSION_LIB
 char * ExynosCamera3Parameters::readFusionCalData(int *readSize)
 {
-    android_printAssert(NULL, LOG_TAG, "Not yet supported, assert!!!!");
-
+    /* not supported */
     return NULL;
 }
 
 void ExynosCamera3Parameters::setFusionCalData(char *addr, int size)
 {
-    android_printAssert(NULL, LOG_TAG, "Not yet supported, assert!!!!");
+    /* not supported */
 }
 
 char *ExynosCamera3Parameters::getFusionCalData(int *size)
 {
-    android_printAssert(NULL, LOG_TAG, "Not yet supported, assert!!!!");
-
+    /* not supported */
     return NULL;
 }
 #endif // USE_CP_FUSION_LIB
-#endif // BOARD_CAMERA_USES_DUAL_CAMERA
+#endif // USE_DUAL_CAMERA
 
 
 void ExynosCamera3Parameters::setHighSpeedMode(uint32_t mode)
@@ -6624,6 +6645,80 @@ void ExynosCamera3Parameters::setHighSpeedMode(uint32_t mode)
 void ExynosCamera3Parameters::clearYuvSizeSetupFlag(void)
 {
     memset(&m_yuvSizeSetup, 0x00, sizeof(m_yuvSizeSetup));
+}
+#endif
+
+#ifdef USE_CSC_FEATURE
+bool ExynosCamera3Parameters::m_isLatinOpenCSC()
+{
+    char sales_code[PROPERTY_VALUE_MAX] = {0};
+
+    property_get("ro.csc.sales_code", sales_code, "");
+    if (strstr(sales_code,"TFG") || strstr(sales_code,"TPA")
+        || strstr(sales_code,"TTT") || strstr(sales_code,"JDI") || strstr(sales_code,"PCI") )
+        return true;
+    else
+        return false;
+}
+
+int ExynosCamera3Parameters::m_getAntiBandingFromLatinMCC()
+{
+    char value[PROPERTY_VALUE_MAX];
+    char country_value[10];
+    int antibanding = 60;
+
+    memset(value, 0x00, sizeof(value));
+    memset(country_value, 0x00, sizeof(country_value));
+
+    if (!property_get("gsm.operator.numeric", value,"")) {
+        return antibanding;
+    }
+
+    memcpy(country_value, value, 3);
+
+    /** MCC Info. Jamaica : 338 / Argentina : 722 / Chile : 730 / Paraguay : 744 / Uruguay : 748  **/
+    if (strstr(country_value,"338") || strstr(country_value,"722")
+        || strstr(country_value,"730") || strstr(country_value,"744") || strstr(country_value,"748"))
+        antibanding = 50;
+    else
+        antibanding = 60;
+
+    return antibanding;
+}
+
+int ExynosCamera3Parameters::getAntibanding()
+{
+    enum aa_ae_antibanding_mode newAntibanding = AA_AE_ANTIBANDING_AUTO_50HZ;
+
+    if (m_isLatinOpenCSC()) {
+        if (m_getAntiBandingFromLatinMCC() == 60) {
+            newAntibanding = AA_AE_ANTIBANDING_AUTO_60HZ;
+        } else {
+            newAntibanding = AA_AE_ANTIBANDING_AUTO_50HZ;
+        }
+    } else {
+        char *CSCstr = NULL;
+        CSCstr = (char *)SecNativeFeature::getInstance()->getString("CscFeature_Camera_CameraFlicker");
+        if (CSCstr == NULL|| strlen(CSCstr) == 0) {
+            newAntibanding = AA_AE_ANTIBANDING_AUTO_50HZ;
+        } else {
+            if (!strcmp(CSCstr, "50hz"))
+                newAntibanding = AA_AE_ANTIBANDING_AUTO_50HZ;
+            else if (!strcmp(CSCstr, "60hz"))
+                newAntibanding = AA_AE_ANTIBANDING_AUTO_60HZ;
+            else if (!strcmp(CSCstr, "auto"))
+                newAntibanding = AA_AE_ANTIBANDING_AUTO;
+            else if (!strcmp(CSCstr, "off"))
+                newAntibanding = AA_AE_ANTIBANDING_OFF;
+        }
+    }
+
+    return newAntibanding;
+}
+#else
+int ExynosCamera3Parameters::getAntibanding()
+{
+    return AA_AE_ANTIBANDING_AUTO;
 }
 #endif
 }; /* namespace android */

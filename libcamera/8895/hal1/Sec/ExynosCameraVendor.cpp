@@ -20,13 +20,12 @@
 #include <cutils/log.h>
 
 #include "ExynosCamera.h"
+#include "ExynosCameraTimeLogger.h"
 #ifdef SAMSUNG_LENS_DC
-#if defined(GRACE_CAMERA)
-#include "LDC_Map_Grace.h"
-#else
 #include "LDC_Map.h"
 #endif
-#endif
+
+#include "ExynosCameraFrameReprocessingFactoryRemosaic.h"
 
 namespace android {
 
@@ -34,6 +33,10 @@ namespace android {
     (((_FACTORY->getNodeType(_PIPE) >= OUTPUT_NODE) \
         && (_FACTORY->getNodeType(_PIPE) < MAX_OUTPUT_NODE)) ? true:false)
 
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+extern ExynosCameraTimeLogger g_timeLoggerLaunch;
+extern int g_timeLoggerLaunchIndex;
+#endif
 void ExynosCamera::initializeVision()
 {
     CLOGI(" -IN-");
@@ -55,6 +58,8 @@ void ExynosCamera::initializeVision()
     /* Frame manager */
     m_frameMgr = NULL;
 
+    /* Group leader buffer */
+    m_createInternalBufferManager(&m_3aaBufferMgr, "3AS_IN_BUF");
     /* Preview CB buffer: Output buffer of MCSC1(Preview CB) */
     m_createInternalBufferManager(&m_previewCallbackBufferMgr, "PREVIEW_CB_BUF");
     /* Bayer buffer: Output buffer of Flite or 3AC */
@@ -63,7 +68,17 @@ void ExynosCamera::initializeVision()
     m_pipeFrameVisionDoneQ = new frame_queue_t;
     m_pipeFrameVisionDoneQ->setWaitTime(2000000000);
 
+    /* Create Internal Queue */
+    for(int i = 0 ; i < MAX_NUM_PIPES ; i++ ) {
+        m_mainSetupQ[i] = new frame_queue_t;
+        m_mainSetupQ[i]->setWaitTime(550000000);
+    }
+
+#ifdef USE_LIB_ION_LEGACY
     m_ionClient = ion_open();
+#else
+    m_ionClient = exynos_ion_open();
+#endif
     if (m_ionClient < 0) {
         CLOGE("m_ionClient ion_open() fail");
         m_ionClient = -1;
@@ -74,7 +89,6 @@ void ExynosCamera::initializeVision()
     m_previewWindow = NULL;
     m_previewEnabled = false;
 
-    m_fliteFrameCount = 0;
     m_displayPreviewToggle = 0;
 
     m_visionFps = 0;
@@ -121,6 +135,10 @@ void ExynosCamera::releaseVision()
         CLOGD("Parameters(Id=%d) destroyed", m_cameraId);
     }
 
+    if (m_3aaBufferMgr != NULL) {
+        m_3aaBufferMgr->deinit();
+    }
+
     if (m_bayerBufferMgr != NULL) {
         m_bayerBufferMgr->deinit();
     }
@@ -130,10 +148,14 @@ void ExynosCamera::releaseVision()
     }
 
     if (m_ionClient >= 0) {
+#ifdef USE_LIB_ION_LEGACY
         ion_close(m_ionClient);
+#else
+        exynos_ion_close(m_ionClient);
+#endif
         m_ionClient = -1;
     }
-    
+
     if (m_ionAllocator != NULL) {
         delete m_ionAllocator;
         m_ionAllocator = NULL;
@@ -148,6 +170,19 @@ void ExynosCamera::releaseVision()
     if (m_pipeFrameVisionDoneQ != NULL) {
         delete m_pipeFrameVisionDoneQ;
         m_pipeFrameVisionDoneQ = NULL;
+    }
+
+    for(int i = 0 ; i < MAX_NUM_PIPES ; i++ ) {
+        if (m_mainSetupQ[i] != NULL) {
+            delete m_mainSetupQ[i];
+            m_mainSetupQ[i] = NULL;
+        }
+    }
+
+    if (m_3aaBufferMgr != NULL) {
+        delete m_3aaBufferMgr;
+        m_3aaBufferMgr = NULL;
+        CLOGD("BufferManager(m_3aaBufferMgr) destroyed");
     }
 
     if (m_bayerBufferMgr != NULL) {
@@ -214,7 +249,7 @@ status_t ExynosCamera::setPreviewWindow(preview_stream_ops *w)
         bufferType = BUFFER_MANAGER_GRALLOC_TYPE;
         m_parameters->getHwPreviewSize(&width, &height);
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         if (m_parameters->getDualCameraMode() == true) {
             int previewW = 0, previewH = 0;
             ExynosRect fusionSrcRect;
@@ -233,7 +268,7 @@ status_t ExynosCamera::setPreviewWindow(preview_stream_ops *w)
 #endif
 
         if (m_grAllocator == NULL)
-            m_grAllocator = new ExynosCameraGrallocAllocator();
+            m_grAllocator = new ExynosCameraGrallocAllocator(m_cameraId);
 
 #ifdef RESERVED_MEMORY_FOR_GRALLOC_ENABLE
         if (m_parameters->getRecordingHint() == false
@@ -299,7 +334,7 @@ status_t ExynosCamera::startPreview()
     int ret = 0;
     int32_t skipFrameCount = INITIAL_SKIP_FRAME;
     int32_t skipFdFrameCount = 0;
-    unsigned int fdCallbackSize = 0;
+    size_t fdCallbackSize = 0;
 #ifdef SR_CAPTURE
     unsigned int srCallbackSize = 0;
 #endif
@@ -309,6 +344,12 @@ status_t ExynosCamera::startPreview()
     /* setup frame thread */
     int pipeId = PIPE_3AA;
 
+#ifdef USE_DUAL_CAMERA
+    int masterCameraId, slaveCameraId;
+    getDualCameraId(&masterCameraId, &slaveCameraId);
+#else
+    m_parameters->setMasterCamera(m_cameraId);
+#endif
 
     m_flagAFDone = false;
     m_hdrSkipedFcount = 0;
@@ -321,16 +362,37 @@ status_t ExynosCamera::startPreview()
 #ifndef CAMERA_FAST_ENTRANCE_V1
     m_checkFirstFrameLux = false;
 #endif
-
-    if ((m_parameters == NULL) || (m_frameMgr == NULL)) {
-        CLOGE("create parameter frameMgr failed");
-        return INVALID_OPERATION;
-    }
-
     m_parameters->setIsThumbnailCallbackOn(false);
     m_stopLongExposure = false;
+    m_preLongExposureTime = 0;
+    m_previewCallbackToggle = 0;
+    m_disablePreviewCB = false;
 
     int controlPipeId = m_getBayerPipeId();
+
+#ifdef SAMSUNG_DUAL_SOLUTION
+    if (m_parameters->getCameraId() == CAMERA_ID_BACK && m_parameters->getDualCameraMode() == true) {
+        int maxSensorW, maxSensorH;
+        m_parameters->getHwSensorSize(&maxSensorW, &maxSensorH);
+        int previewW, previewH;
+        int captureW, captureH;
+        m_parameters->getPreviewSize(&previewW, &previewH);
+        m_parameters->getPictureSize(&captureW, &captureH);
+        ExynosRect fusionSrcRect;
+        ExynosRect fusionDstRect;
+        m_parameters->getFusionSize(previewW, previewH, &fusionSrcRect, &fusionDstRect);
+
+        int *zoomList;
+        int maxZoomLevel;
+        m_parameters->getZoomList(&zoomList, &maxZoomLevel);
+        m_fusionPreviewWrapper->m_initDualSolution(m_cameraId, maxSensorW, maxSensorH,
+                                            fusionDstRect.w, fusionDstRect.h, zoomList, maxZoomLevel);
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+        m_fusionCaptureWrapper->m_initDualSolution(m_cameraId, maxSensorW, maxSensorH, captureW, captureH,
+                                            zoomList, maxZoomLevel);
+#endif
+    }
+#endif /* SAMSUNG_DUAL_SOLUTION */
 
 #ifdef FIRST_PREVIEW_TIME_CHECK
     if (m_flagFirstPreviewTimerOn == false) {
@@ -351,6 +413,17 @@ status_t ExynosCamera::startPreview()
         ret = startPreviewVision();
         return ret;
     }
+
+#ifdef SAMSUNG_FIXED_FACE_FOCUS
+    if (m_parameters->getFocusMode() ==  FOCUS_MODE_FIXED_FACE) {
+        ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
+        if (autoFocusMgr->flagAutofocusStart() == true &&
+            autoFocusMgr->flagLockAutofocus() == false) {
+            autoFocusMgr->stopAutofocus();
+            autoFocusMgr->startAutofocus();
+        }
+    }
+#endif
 
 #if defined(OIS_CAPTURE) || defined(RAWDUMP_CAPTURE)
     ExynosCameraActivitySpecialCapture *sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
@@ -387,7 +460,7 @@ status_t ExynosCamera::startPreview()
         if (m_getMemoryCb != NULL) {
             m_fdCallbackHeap = m_getMemoryCb(-1, fdCallbackSize, 1, m_callbackCookie);
             if (!m_fdCallbackHeap || m_fdCallbackHeap->data == MAP_FAILED) {
-                CLOGE("m_getMemoryCb(%d) fail", fdCallbackSize);
+                CLOGE("m_getMemoryCb(%zu) fail", fdCallbackSize);
                 m_fdCallbackHeap = NULL;
                 goto err;
             }
@@ -424,10 +497,35 @@ status_t ExynosCamera::startPreview()
         }
 
 #ifdef SUPPORT_SW_VDIS
-        m_swVDIS_Mode = false;
-        if(m_parameters->isSWVdisMode()) {
+        //Initalize vdis mode/vdis dual mode (dual mode true & wide case or dual false case)
+
+        if ((m_parameters->getDualCameraMode() == false ||
+            (m_parameters->getDualCameraMode() == true && getCameraIdInternal() != CAMERA_ID_BACK_1))) {
+            m_swVDIS_Mode = false;
+            m_swVDIS_ModeDual = false;
+            CLOGD("VDIS_HAL: m_swVDIS_Mode init");
+        }
+
+        if (m_parameters->getDualCameraMode()) {
+            m_swVDIS_ModeDual = true;
+        }
+
+        if (m_parameters->isSWVdisMode() && (m_swVDIS_ModeDual == false ||
+            (m_swVDIS_ModeDual == true && getCameraIdInternal() != CAMERA_ID_BACK_1))) {
             m_swVDIS_InW = m_swVDIS_InH = 0;
             m_parameters->getHwPreviewSize(&m_swVDIS_InW, &m_swVDIS_InH);
+#ifdef SAMSUNG_DUAL_SOLUTION
+            if (m_parameters->getDualCameraMode() == true) {
+                ExynosRect fusionSrcRect;
+                ExynosRect fusionDstRect;
+                int previewW = 0, previewH = 0;
+                m_parameters->getPreviewSize(&previewW, &previewH);
+                m_parameters->getFusionSize(previewW, previewH, &fusionSrcRect, &fusionDstRect);
+
+                m_swVDIS_InW = fusionDstRect.w;
+                m_swVDIS_InH = fusionDstRect.h;
+            }
+#endif
             m_parameters->getPreviewFpsRange(&m_swVDIS_MinFps, &m_swVDIS_MaxFps);
             m_swVDIS_DeviceOrientation = m_parameters->getDeviceOrientation();
             m_swVDIS_CameraID = getCameraIdInternal();
@@ -435,13 +533,20 @@ status_t ExynosCamera::startPreview()
             m_swVDIS_APType = UNI_PLUGIN_AP_TYPE_SLSI;
 #ifdef SAMSUNG_OIS_VDIS
             m_swVDIS_OISMode = UNI_PLUGIN_OIS_MODE_VDIS;
+            m_swVDIS_OISGain = m_parameters->getOISGain();
             m_OISvdisMode = UNI_PLUGIN_OIS_MODE_END;
 #endif
             m_swVDIS_init();
 
-            m_parameters->setPreviewBufferCount(NUM_VDIS_BUFFERS);
-            m_exynosconfig->current->bufInfo.num_preview_buffers = NUM_VDIS_BUFFERS;
-            VDIS_LOG("VDIS_HAL: Preview Buffer Count Change to %d", NUM_VDIS_BUFFERS);
+            if (m_swVDIS_UHD) {
+                m_parameters->setPreviewBufferCount(NUM_VDIS_UHD_BUFFERS);
+                m_exynosconfig->current->bufInfo.num_preview_buffers = NUM_VDIS_UHD_BUFFERS;
+                VDIS_LOG("VDIS_HAL: Preview Buffer Count Change to %d", NUM_VDIS_UHD_BUFFERS);
+            } else {
+                m_parameters->setPreviewBufferCount(NUM_VDIS_BUFFERS);
+                m_exynosconfig->current->bufInfo.num_preview_buffers = NUM_VDIS_BUFFERS;
+                VDIS_LOG("VDIS_HAL: Preview Buffer Count Change to %d", NUM_VDIS_BUFFERS);
+            }
         }
 #endif /*SUPPORT_SW_VDIS*/
 
@@ -463,7 +568,12 @@ status_t ExynosCamera::startPreview()
 #ifdef SAMSUNG_QUICK_SWITCH
     if (m_isQuickSwitchState == QUICK_SWITCH_STBY) {
         CLOGD(" start quick switching");
-        ret = m_previewFrameFactory->setControl(V4L2_CID_IS_DVFS_CLUSTER1, BIG_CORE_MAX_LOCK, PIPE_3AA);
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == false ||
+                (m_parameters->getDualCameraMode() == true &&
+                 m_cameraId == masterCameraId))
+#endif
+            ret = m_previewFrameFactory->setControl(V4L2_CID_IS_DVFS_CLUSTER1, BIG_CORE_MAX_LOCK, PIPE_3AA);
         if (ret < 0)
             CLOGE("V4L2_CID_IS_DVFS_CLUSTER1 setControl fail, ret(%d)", ret);
         goto quick_switching_in_startpreview;
@@ -495,6 +605,9 @@ status_t ExynosCamera::startPreview()
     else
 #endif
     {
+        /* update frameMgr parameter */
+        m_setFrameManagerInfo();
+
         /* frame manager start */
         m_frameMgr->start();
 
@@ -502,8 +615,14 @@ status_t ExynosCamera::startPreview()
          * This is for updating parameter value at once.
          * This must be just before making factory
          */
-        m_parameters->updateTpuParameters();
+        m_parameters->updateParameters();
     }
+
+
+
+#ifdef USE_DUAL_CAMERA
+    m_parameters->updateDualCameraFusionMode();
+#endif
 
     if ((m_parameters->getRestartPreview() == true) ||
         m_previewBufferCount != m_parameters->getPreviewBufferCount()) {
@@ -518,7 +637,25 @@ status_t ExynosCamera::startPreview()
 
 #ifdef CAMERA_FAST_ENTRANCE_V1
     if (m_fastEntrance == true) {
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+        if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+        {
+            TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_START_PREVIEW_START, false);
+            TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_SET_BUFFER_START, true);
+        }
+#endif
         ret = m_setBuffers();
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+        if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+        {
+            TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_SET_BUFFER_START, false);
+            TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_SET_BUFFER_END, true);
+        }
+#endif
         if (ret < 0) {
             CLOGE("m_setBuffers failed, releaseBuffer");
             m_isSuccessedBufferAllocation = false;
@@ -544,11 +681,28 @@ status_t ExynosCamera::startPreview()
         if (m_parameters->isReprocessing() == true)
             bufMgr = m_bayerBufferMgr;
 
-        m_captureSelector = new ExynosCameraFrameSelector(m_cameraId, m_parameters, bufMgr, m_frameMgr
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true) {
+            m_captureSelector = new ExynosCameraSyncFrameSelector(m_cameraId, m_parameters, bufMgr, m_frameMgr
 #ifdef SUPPORT_DEPTH_MAP
-                                                        , m_depthCallbackQ, m_depthMapBufferMgr
+                    , m_depthCallbackQ, m_depthMapBufferMgr
 #endif
-                                                        );
+#if defined(SAMSUNG_DNG_DIRTY_BAYER) || defined(DEBUG_RAWDUMP_DIRTY_BAYER)
+                    , m_fliteBufferMgr
+#endif
+                    );
+        } else
+#endif /* USE_DUAL_CAMERA */
+        {
+            m_captureSelector = new ExynosCameraFrameSelector(m_cameraId, m_parameters, bufMgr, m_frameMgr
+#ifdef SUPPORT_DEPTH_MAP
+                    , m_depthCallbackQ, m_depthMapBufferMgr
+#endif
+#if defined(SAMSUNG_DNG_DIRTY_BAYER) || defined(DEBUG_RAWDUMP_DIRTY_BAYER)
+                    , m_fliteBufferMgr
+#endif
+                    );
+        }
 
         if (m_parameters->isReprocessing() == true) {
             ret = m_captureSelector->setFrameHoldCount(REPROCESSING_BAYER_HOLD_COUNT);
@@ -564,7 +718,14 @@ status_t ExynosCamera::startPreview()
             /* TODO: Dynamic select buffer manager for capture */
             bufMgr = m_sccBufferMgr;
         }
-        m_sccCaptureSelector = new ExynosCameraFrameSelector(m_cameraId, m_parameters, bufMgr, m_frameMgr);
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true) {
+            m_sccCaptureSelector = new ExynosCameraSyncFrameSelector(m_cameraId, m_parameters, bufMgr, m_frameMgr);
+        } else
+#endif /* USE_DUAL_CAMERA */
+        {
+            m_sccCaptureSelector = new ExynosCameraFrameSelector(m_cameraId, m_parameters, bufMgr, m_frameMgr);
+        }
     }
 
     if (m_captureSelector != NULL)
@@ -607,13 +768,17 @@ status_t ExynosCamera::startPreview()
              */
             Mutex::Autolock lock(ExynosCameraStreamMutex::getInstance()->getStreamMutex());
 
+            /*
+             * companion thread(front eeprom) and fastAE thread(front AF) use same i2c port.
+             * so, companion thread should be finished before fastAE thread in DICO system.
+             */
+            m_waitCompanionThreadEnd();
+
             ret = m_previewFrameFactory->precreate();
             if (ret < 0) {
                 CLOGE("m_previewFrameFactory->precreate() failed");
                 goto err;
             }
-
-            m_waitCompanionThreadEnd();
 
             ret = m_previewFrameFactory->postcreate();
             if (ret < 0) {
@@ -644,7 +809,25 @@ status_t ExynosCamera::startPreview()
 
 #ifdef CAMERA_FAST_ENTRANCE_V1
     if (m_fastEntrance == true) {
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+        if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+        {
+            TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_SET_BUFFER_END, false);
+            TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FASTAE_THREAD_WAIT_START, true);
+        }
+#endif
         m_waitFastenAeThreadEnd();
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+        if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+        {
+            TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FASTAE_THREAD_WAIT_START, false);
+            TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FASTAE_THREAD_WAIT_END, true);
+        }
+#endif
         if (m_fastenAeThreadResult < 0) {
             CLOGE("fastenAeThread exit with error");
             ret = m_fastenAeThreadResult;
@@ -654,14 +837,30 @@ status_t ExynosCamera::startPreview()
 #endif
     {
 #ifdef USE_QOS_SETTING
-        ret = m_previewFrameFactory->setControl(V4L2_CID_IS_DVFS_CLUSTER1, BIG_CORE_MAX_LOCK, PIPE_3AA);
-        if (ret < 0)
-            CLOGE("V4L2_CID_IS_DVFS_CLUSTER1 setControl fail, ret(%d)", ret);
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == false ||
+                (m_parameters->getDualCameraMode() == true &&
+                 m_cameraId == masterCameraId)) {
+#endif
+            ret = m_previewFrameFactory->setControl(V4L2_CID_IS_DVFS_CLUSTER1, BIG_CORE_MAX_LOCK, PIPE_3AA);
+            if (ret < 0)
+                CLOGE("V4L2_CID_IS_DVFS_CLUSTER1 setControl fail, ret(%d)", ret);
+
+            ret = m_previewFrameFactory->setControl(V4L2_CID_IS_DVFS_CLUSTER0, LITTLE_CORE_MIN_LOCK, PIPE_3AA);
+            if (ret < 0)
+                CLOGE("V4L2_CID_IS_DVFS_CLUSTER0 setControl fail, ret(%d)", ret);
+#ifdef USE_DUAL_CAMERA
+        }
+#endif
 #endif
 
         if (m_parameters->getUseFastenAeStable() == true &&
-                m_parameters->getDualMode() == false &&
-                m_isFirstStart == true) {
+#ifdef USE_DUAL_CAMERA
+            m_parameters->isFastenAeStableEnable() &&
+#else
+            m_parameters->getDualMode() == false &&
+#endif
+            m_isFirstStart == true) {
 
             ret = m_fastenAeStable();
             if (ret < 0) {
@@ -673,7 +872,11 @@ status_t ExynosCamera::startPreview()
                 skipFdFrameCount = 0;
                 m_parameters->setUseFastenAeStable(false);
             }
-        } else if (m_parameters->getDualMode() == true) {
+        } else if (m_parameters->getDualMode() == true
+#ifdef USE_DUAL_CAMERA
+                   && m_parameters->getDualCameraMode() == false
+#endif
+        ) {
             skipFrameCount = INITIAL_SKIP_FRAME + 2;
             skipFdFrameCount = 0;
         } else if (m_isFirstStart == false) {
@@ -789,6 +992,7 @@ status_t ExynosCamera::startPreview()
 #endif
         {
             CLOGE("m_setBuffersThread() failed");
+            ret = INVALID_OPERATION;
             goto err;
         }
     }
@@ -812,7 +1016,11 @@ quick_switching_in_startpreview:
         }
 
         if (m_parameters->getUseFastenAeStable() == true
+#ifdef USE_DUAL_CAMERA
+            && m_parameters->isFastenAeStableEnable()
+#else
             && m_parameters->getDualMode() == false
+#endif
             && m_isFirstStart == true) {
             ret = m_fastenAeStable();
             if (ret < 0) {
@@ -829,6 +1037,9 @@ quick_switching_in_startpreview:
             m_fdFrameSkipCount = INITIAL_SKIP_FD_FRAME;
         }
 
+        /* update frameMgr parameter */
+        m_setFrameManagerInfo();
+
         m_frameMgr->start();
     } else {
         m_isQuickSwitchState = QUICK_SWITCH_MAIN;
@@ -837,8 +1048,13 @@ quick_switching_in_startpreview:
 #ifdef START_PICTURE_THREAD
     if (m_parameters->isReprocessing() == true
         && m_parameters->checkEnablePicture() == true
+#ifdef USE_DUAL_CAMERA
+        && !(m_parameters->getDualCameraMode() == false &&
+            && m_parameters->getDualMode() == true)
+#else
         && m_parameters->getDualMode() != true
-    ) {
+#endif
+       ) {
         m_preStartPictureInternalThread->run();
         CLOGD(" m_preStartPictureInternalThread starts");
     }
@@ -846,7 +1062,7 @@ quick_switching_in_startpreview:
 #endif
     /* FD-AE is always on */
 #ifdef USE_FD_AE
-    m_enableFaceDetection(m_parameters->getFaceDetectionMode());
+    m_enableFaceDetection(m_parameters->getFaceDetectionMode(false));
 #endif
 
     ret = m_startPreviewInternal();
@@ -857,7 +1073,13 @@ quick_switching_in_startpreview:
 
     if (m_parameters->isReprocessing() == true && m_parameters->checkEnablePicture() == true) {
 #ifdef START_PICTURE_THREAD
-        if (m_parameters->getDualMode() != true) {
+#ifdef USE_DUAL_CAMERA
+        if (!(m_parameters->getDualCameraMode() == false &&
+            m_parameters->getDualMode() == true))
+#else
+        if (m_parameters->getDualMode() != true)
+#endif
+        {
 #ifdef SAMSUNG_QUICK_SWITCH
             m_preStartPictureInternalThread->join();
 #endif
@@ -880,7 +1102,7 @@ quick_switching_in_startpreview:
         m_previewWindow->set_timestamp(m_previewWindow, systemTime(SYSTEM_TIME_MONOTONIC));
 
 #ifdef RAWDUMP_CAPTURE
-    CLOGD("setupThread Thread start pipeId(%d)", PIPE_3AA);
+    CLOGD("[RAWDUMP_CAP] setupThread Thread start pipeId(%d)", PIPE_3AA);
     m_mainSetupQThread[INDEX(PIPE_3AA)]->run(PRIORITY_URGENT_DISPLAY);
 #else
     /* setup frame thread */
@@ -892,24 +1114,26 @@ quick_switching_in_startpreview:
     m_mainSetupQThread[INDEX(pipeId)]->run(PRIORITY_URGENT_DISPLAY);
 #endif
 
-    if (m_facedetectThread->isRunning() == false)
-        m_facedetectThread->run();
-
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-    int masterCameraId, slaveCameraId;
-    getDualCameraId(&masterCameraId, &slaveCameraId);
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == false ||
            (m_parameters->getDualCameraMode() == true &&
             m_cameraId == masterCameraId)) {
         /* don't start previewThread in slave camera for dual camera */
 #endif
+    if (m_facedetectThread->isRunning() == false)
+        m_facedetectThread->run();
+
     m_previewThread->run(PRIORITY_DISPLAY);
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     }
 #endif
 
     m_mainThread->run(PRIORITY_DEFAULT);
-    if(m_parameters->getCameraId() == CAMERA_ID_BACK) {
+
+#ifndef SUPPORT_FRONT_AF
+    if (m_parameters->getCameraId() == CAMERA_ID_BACK)
+#endif
+    {
         m_autoFocusContinousThread->run(PRIORITY_DEFAULT);
     }
     m_monitorThread->run(PRIORITY_DEFAULT);
@@ -987,8 +1211,86 @@ quick_switching_in_startpreview:
     }
 #endif
 
+#ifdef SAMSUNG_STR_CAPTURE
+    if (getCameraIdInternal() == CAMERA_ID_FRONT && m_STRCapturePluginHandle != NULL) {
+        ret = uni_plugin_init(m_STRCapturePluginHandle);
+        if (ret < 0) {
+            CLOGE("[STR_CAPTURE] STR_CAPTURE Plugin init failed!!");
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_STR_PREVIEW
+    if (getCameraIdInternal() == CAMERA_ID_FRONT && m_STRPreviewPluginHandle != NULL) {
+        ret = uni_plugin_init(m_STRPreviewPluginHandle);
+        if (ret < 0) {
+            CLOGE("[STR_PREVIEW] STR_PREVIEW Plugin init failed!!");
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_HIFI_LLS
+    if (m_parameters->checkHiFiLLSEnable() == true && m_LLSpluginHandle != NULL) {
+        int powerCtrl = 1;
+        ret = uni_plugin_set(m_LLSpluginHandle,
+                HIFI_LLS_PLUGIN_NAME, UNI_PLUGIN_INDEX_POWER_CONTROL, &powerCtrl);
+        if (ret < 0) {
+            CLOGE("[LLS_MBR] LLS Plugin set UNI_PLUGIN_INDEX_POWER_CONTROL failed!! ret(%d)", ret);
+        }
+        m_hifiLLSEnabled = true;
+    }
+#endif
+
+#ifdef SUPPORT_DEPTH_MAP
+#ifdef SAMSUNG_FOCUS_PEAKING
+    if (getCameraIdInternal() == CAMERA_ID_BACK
+        && m_parameters->getRecordingHint() == false
+        && m_FocusPeakingPluginHandle != NULL) {
+        ret = uni_plugin_init(m_FocusPeakingPluginHandle);
+        if (ret < 0) {
+            CLOGE("[FocusPeaking] FocusPeaking Plugin init failed!!");
+        }
+        m_flagFocusPeakingStarted = false;
+    }
+#endif
+#endif
+
+#ifdef SAMSUNG_IDDQD
+    if (m_parameters->getRecordingHint() == false
+        && m_IDDQDPluginHandle != NULL) {
+        ret = uni_plugin_init(m_IDDQDPluginHandle);
+        if (ret < 0) {
+            CLOGE("[IDDQD] IDDQD Plugin init failed!!");
+        } else {
+            UniPluginCameraInfo_t cameraInfo;
+            cameraInfo.CameraType = (UNI_PLUGIN_CAMERA_TYPE)getCameraIdInternal();
+            cameraInfo.SensorType = (UNI_PLUGIN_SENSOR_TYPE)m_cameraSensorId;
+            ret = uni_plugin_set(m_IDDQDPluginHandle, IDDQD_PLUGIN_NAME, UNI_PLUGIN_INDEX_CAMERA_INFO, &cameraInfo);
+            if (ret < 0) {
+                CLOGE("[IDDQD] IDDQD Plugin set camera info failed!! (%d, %d)",
+                    cameraInfo.CameraType, cameraInfo.SensorType);
+            }
+        }
+    }
+#endif
+
 #ifdef CAMERA_FAST_ENTRANCE_V1
     m_fastEntrance = false;
+#endif
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+    if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+    {
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FACTORY_START_END, false);
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_START_PREVIEW_END, true);
+        if (m_previewWindow == NULL) {
+            TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_START_PREVIEW_END, false);
+            TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_TOTAL_TIME, false);
+            if (g_timeLoggerLaunchIndex % TIME_LOGGER_LAUNCH_COUNT == 0)
+                TIME_LOGGER_SAVE_BASE(&g_timeLoggerLaunch, m_cameraId);
+        }
+    }
 #endif
 
     return NO_ERROR;
@@ -1064,7 +1366,15 @@ err:
         sensor_listener_disable_sensor(m_accelerometerHandle, ST_ACCELEROMETER);
         sensor_listener_unload(&m_accelerometerHandle);
         m_accelerometerHandle = NULL;
-}
+    }
+#endif
+
+#ifdef SAMSUNG_ROTATION
+    if (m_rotationHandle != NULL) {
+        sensor_listener_disable_sensor(m_rotationHandle, ST_ROTATION);
+        sensor_listener_unload(&m_rotationHandle);
+        m_rotationHandle = NULL;
+    }
 #endif
 #endif /* SAMSUNG_SENSOR_LISTENER */
 
@@ -1087,6 +1397,10 @@ status_t ExynosCamera::startPreviewVision()
 {
     CLOGI(" ");
     int ret = 0;
+    int pipeId = PIPE_FLITE;
+
+    /* update frameMgr parameter */
+    m_setFrameManagerInfo();
 
     /* frame manager start */
     m_frameMgr->start();
@@ -1095,7 +1409,7 @@ status_t ExynosCamera::startPreviewVision()
      * This is for updating parameter value at once.
      * This must be just before making factory
      */
-    m_parameters->updateTpuParameters();
+    m_parameters->updateParameters();
 
     ret = m_setVisionBuffers();
     if (ret < 0) {
@@ -1134,7 +1448,11 @@ status_t ExynosCamera::startPreviewVision()
         return ret;
     }
 
+    CLOGD("VisionThread Thread start");
     m_visionThread->run(PRIORITY_DEFAULT);
+
+    CLOGD("setupThread Thread start pipeId(%d)", pipeId);
+    m_mainSetupQThread[INDEX(pipeId)]->run(PRIORITY_URGENT_DISPLAY);
 
     return NO_ERROR;
 }
@@ -1148,6 +1466,11 @@ void ExynosCamera::stopPreview()
         stopPreviewVision();
         return;
     }
+
+#ifdef USE_DUAL_CAMERA
+    int masterCameraId, slaveCameraId;
+    getDualCameraId(&masterCameraId, &slaveCameraId);
+#endif
 
 #ifdef SAMSUNG_QUICK_SWITCH
     if (m_isQuickSwitchState == QUICK_SWITCH_STBY
@@ -1206,6 +1529,7 @@ void ExynosCamera::stopPreview()
     }
 
     m_stopLongExposure = true;
+    m_preLongExposureTime = 0;
 
     if (m_pictureEnabled == true) {
         CLOGW("m_pictureEnabled == true (picture is not finished)");
@@ -1224,12 +1548,27 @@ void ExynosCamera::stopPreview()
     if (m_previewFrameFactory == NULL) {
         CLOGW("m_previewFrameFactory is NULL. so, skip setControl(V4L2_CID_IS_DVFS_CLUSTER1)");
     } else {
-        ret = m_previewFrameFactory->setControl(V4L2_CID_IS_DVFS_CLUSTER1, 0, PIPE_3AA);
-        if (ret < 0) {
-            CLOGE("V4L2_CID_IS_DVFS_CLUSTER1 setControl fail, ret(%d)", ret);
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == false ||
+                (m_parameters->getDualCameraMode() == true &&
+                 m_cameraId == masterCameraId)) {
+#endif
+            ret = m_previewFrameFactory->setControl(V4L2_CID_IS_DVFS_CLUSTER1, 0, PIPE_3AA);
+            if (ret < 0) {
+                CLOGE("V4L2_CID_IS_DVFS_CLUSTER1 setControl fail, ret(%d)", ret);
+            }
+
+            ret = m_previewFrameFactory->setControl(V4L2_CID_IS_DVFS_CLUSTER0, 0, PIPE_3AA);
+            if (ret < 0) {
+                CLOGE("V4L2_CID_IS_DVFS_CLUSTER0 setControl fail, ret(%d)", ret);
+            }
+#ifdef USE_DUAL_CAMERA
         }
+#endif
     }
 #endif
+    storeSsrmCameraInfo(m_parameters->getCameraId(), 0, 0, 0, 0);
+
     m_startPictureInternalThread->join();
 
     m_startPictureBufferThread->join();
@@ -1287,9 +1626,15 @@ void ExynosCamera::stopPreview()
 
     m_flashMgr->setNeedFlashOffDelay(false);
 
-    m_previewFrameFactory->setStopFlag();
-    if (m_parameters->isReprocessing() == true && m_reprocessingFrameFactory->isCreated() == true)
-        m_reprocessingFrameFactory->setStopFlag();
+    if (m_previewFrameFactory != NULL) {
+        m_previewFrameFactory->setStopFlag();
+    }
+
+    for (int i = 0; i < m_getNumOfReprocessingInstance(); i++) {
+        if (m_parameters->isReprocessing() == true && m_pReprocessingFrameFactories[i]->isCreated() == true)
+            m_pReprocessingFrameFactories[i]->setStopFlag();
+    }
+
     m_flagThreadStop = true;
 
     m_takePictureCounter.clearCount();
@@ -1297,15 +1642,12 @@ void ExynosCamera::stopPreview()
     m_pictureCounter.clearCount();
     m_jpegCounter.clearCount();
     m_yuvcallbackCounter.clearCount();
-    if (m_captureSelector != NULL) {
-        m_captureSelector->cancelPicture();
-    }
+    m_captureSelector->cancelPicture();
 
     if ((m_parameters->getHighResolutionCallbackMode() == true) &&
         (m_highResolutionCallbackRunning == true)) {
         m_skipReprocessing = false;
         m_highResolutionCallbackRunning = false;
-        m_parameters->setOutPutFormatNV21Enable(false);
 
         CLOGD("High resolution preview callback stop");
         if(getCameraIdInternal() == CAMERA_ID_FRONT || getCameraIdInternal() == CAMERA_ID_BACK_1) {
@@ -1315,6 +1657,7 @@ void ExynosCamera::stopPreview()
         }
 
         m_prePictureThread->requestExitAndWait();
+        m_parameters->setOutPutFormatNV21Enable(false);
         m_highResolutionCallbackQ->release();
     }
 
@@ -1332,9 +1675,7 @@ void ExynosCamera::stopPreview()
     }
 
     m_zoomPreviwWithCscThread->stop();
-    if (m_zoomPreviwWithCscQ != NULL) {
-        m_zoomPreviwWithCscQ->sendCmd(WAKE_UP);
-    }
+    m_zoomPreviwWithCscQ->sendCmd(WAKE_UP);
     m_zoomPreviwWithCscThread->requestExitAndWait();
 
     m_pipeFrameDoneQ->sendCmd(WAKE_UP);
@@ -1348,6 +1689,14 @@ void ExynosCamera::stopPreview()
         m_previewQ->sendCmd(WAKE_UP);
     }
     m_previewThread->requestExitAndWait();
+
+    if (m_previewCallbackThread->isRunning()) {
+        m_previewCallbackThread->stop();
+        if (m_previewCallbackQ != NULL) {
+            m_previewCallbackQ->sendCmd(WAKE_UP);
+        }
+        m_previewCallbackThread->requestExitAndWait();
+    }
 
     if (m_parameters->isFlite3aaOtf() == true) {
         m_mainSetupQThread[INDEX(PIPE_FLITE)]->stop();
@@ -1393,7 +1742,9 @@ void ExynosCamera::stopPreview()
 #ifdef SUPPORT_DEPTH_MAP
     ExynosCameraBuffer depthCallbackBuffer;
 
-    m_previewFrameFactory->setRequest(PIPE_VC1, false);
+    if (m_previewFrameFactory != NULL) {
+        m_previewFrameFactory->setRequest(PIPE_VC1, false);
+    }
     m_parameters->setDepthCallbackOnCapture(false);
     m_parameters->setDepthCallbackOnPreview(false);
     //m_parameters->setDisparityMode(COMPANION_DISPARITY_OFF); /* temp*/
@@ -1412,6 +1763,10 @@ void ExynosCamera::stopPreview()
          m_clearList(m_previewQ);
     }
 
+    if (m_previewCallbackQ != NULL) {
+        m_clearList(m_previewCallbackQ);
+    }
+
     if (m_zoomPreviwWithCscQ != NULL) {
          m_zoomPreviwWithCscQ->release();
     }
@@ -1425,7 +1780,8 @@ void ExynosCamera::stopPreview()
         CLOGE("m_stopPreviewInternal fail");
 
 #ifdef SUPPORT_SW_VDIS
-    if(m_swVDIS_Mode) {
+    int cameraId = getCameraIdInternal();
+    if (m_swVDIS_Mode && (m_swVDIS_ModeDual == false || (m_swVDIS_ModeDual == true && cameraId != CAMERA_ID_BACK_1))) {
         m_swVDIS_deinit();
         for (int bufIndex = 0; bufIndex < m_sw_VDIS_OutBufferNum; bufIndex++) {
             m_putBuffers(m_swVDIS_BufferMgr, bufIndex);
@@ -1483,22 +1839,19 @@ void ExynosCamera::stopPreview()
     if (m_bayerBufferMgr != NULL) {
         m_bayerBufferMgr->resetBuffers();
     }
-#ifdef DEBUG_RAWDUMP
-    if (m_parameters->getUsePureBayerReprocessing() == false) {
-        if (m_fliteBufferMgr != NULL) {
-            m_fliteBufferMgr->resetBuffers();
-        }
-    }
-#endif
 #ifdef SUPPORT_DEPTH_MAP
     if (m_depthMapBufferMgr != NULL) {
         m_depthMapBufferMgr->deinit();
     }
 #endif
-#ifdef DEBUG_RAWDUMP
+#if defined(SAMSUNG_DNG_DIRTY_BAYER) || defined(DEBUG_RAWDUMP_DIRTY_BAYER)
     if (m_parameters->getUsePureBayerReprocessing() == false) {
         if (m_fliteBufferMgr != NULL) {
+#if defined(SAMSUNG_DNG_DIRTY_BAYER)
+            m_fliteBufferMgr->deinit();
+#else
             m_fliteBufferMgr->resetBuffers();
+#endif
         }
     }
 #endif
@@ -1520,17 +1873,25 @@ void ExynosCamera::stopPreview()
 #endif
     }
 
+    if (m_vraBufferMgr != NULL) {
+        m_vraBufferMgr->deinit();
+    }
+
     /* realloc reprocessing buffer for change burst panorama <-> normal mode */
     if (m_ispReprocessingBufferMgr != NULL) {
         m_ispReprocessingBufferMgr->resetBuffers();
     }
     if (m_sccReprocessingBufferMgr != NULL) {
-        m_sccReprocessingBufferMgr->deinit();
+        m_sccReprocessingBufferMgr->deinit(m_cameraId);
     }
     if (m_thumbnailBufferMgr != NULL) {
-        m_thumbnailBufferMgr->resetBuffers();
+        m_thumbnailBufferMgr->deinit();
     }
-
+#ifdef USE_MSC_CAPTURE
+    if (m_mscBufferMgr != NULL) {
+        m_mscBufferMgr->deinit();
+    }
+#endif
     /* realloc callback buffers */
     if (m_scpBufferMgr != NULL) {
         m_scpBufferMgr->deinit();
@@ -1539,7 +1900,7 @@ void ExynosCamera::stopPreview()
     if (m_zoomScalerBufferMgr != NULL) {
         m_zoomScalerBufferMgr->deinit();
     }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     if (m_fusionBufferMgr != NULL) {
         m_fusionBufferMgr->deinit();
     }
@@ -1560,7 +1921,7 @@ void ExynosCamera::stopPreview()
     }
 
     if (m_postPictureBufferMgr != NULL) {
-        m_postPictureBufferMgr->deinit();
+        m_postPictureBufferMgr->deinit(m_cameraId);
     }
 
 #ifdef SAMSUNG_LENS_DC
@@ -1569,8 +1930,14 @@ void ExynosCamera::stopPreview()
     }
 #endif
 
+#ifdef SAMSUNG_STR_CAPTURE
+    if (m_strCaptureBufferMgr != NULL) {
+        m_strCaptureBufferMgr->deinit();
+    }
+#endif
+
     if (m_thumbnailGscBufferMgr != NULL) {
-        m_thumbnailGscBufferMgr->deinit();
+        m_thumbnailGscBufferMgr->deinit(m_cameraId);
     }
 
 #ifdef SAMSUNG_LBP
@@ -1580,7 +1947,7 @@ void ExynosCamera::stopPreview()
 #endif
 
     if (m_jpegBufferMgr != NULL) {
-        m_jpegBufferMgr->deinit();
+        m_jpegBufferMgr->deinit(m_cameraId);
     }
 
     if (m_recordingBufferMgr != NULL) {
@@ -1600,6 +1967,21 @@ void ExynosCamera::stopPreview()
         m_sccCaptureSelector->release();
     }
 
+#ifdef USE_DUAL_CAMERA
+    /* free all buffers cause of not using dual camera */
+    if (m_bayerBufferMgr != NULL) {
+        m_bayerBufferMgr->deinit();
+    }
+    if (m_3aaBufferMgr != NULL) {
+        m_3aaBufferMgr->deinit();
+    }
+    if (m_ispBufferMgr != NULL) {
+        m_ispBufferMgr->deinit();
+    }
+    if (m_hwDisBufferMgr != NULL) {
+        m_hwDisBufferMgr->deinit();
+    }
+#else
 #if 0
     /* skip to free and reallocate buffers : flite / 3aa / isp / ispReprocessing */
     CLOGE(" m_setBuffers free all buffers");
@@ -1615,6 +1997,7 @@ void ExynosCamera::stopPreview()
     if (m_hwDisBufferMgr != NULL) {
         m_hwDisBufferMgr->deinit();
     }
+#endif
 #endif
     /* frame manager stop */
     m_frameMgr->stop();
@@ -1633,6 +2016,7 @@ void ExynosCamera::stopPreview()
     m_isTryStopFlash= false;
     m_exitAutoFocusThread = false;
     m_isNeedAllocPictureBuffer = false;
+    m_previewCallbackToggle = 0;
 
 #ifdef CAMERA_FAST_ENTRANCE_V1
     m_fastEntrance = false;
@@ -1686,8 +2070,19 @@ void ExynosCamera::stopPreview()
     }
 #endif
 
+#ifdef SAMSUNG_DUAL_SOLUTION
+    if (m_parameters->getCameraId() == CAMERA_ID_BACK) {
+        if (m_fusionPreviewWrapper->m_getIsInit() == true)
+            m_fusionPreviewWrapper->m_deinitDualSolution(getCameraId());
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+        if (m_fusionCaptureWrapper->m_getIsInit() == true)
+            m_fusionCaptureWrapper->m_deinitDualSolution(getCameraId());
+#endif
+    }
+#endif /* SAMSUNG_DUAL_SOLUTION */
+
 #ifdef SAMSUNG_LENS_DC
-    if (m_DCpluginHandle != NULL) {
+    if (m_DCpluginHandle != NULL && m_parameters->getLensDCMode()) {
         m_skipLensDC = true;
         m_LensDCIndex = -1;
         ret = uni_plugin_deinit(m_DCpluginHandle);
@@ -1702,6 +2097,59 @@ void ExynosCamera::stopPreview()
         ret = uni_plugin_deinit(m_JQpluginHandle);
         if(ret < 0) {
             CLOGE("[JQ] Plugin deinit failed!!");
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_STR_CAPTURE
+    if (getCameraIdInternal() == CAMERA_ID_FRONT && m_STRCapturePluginHandle != NULL) {
+        ret = uni_plugin_deinit(m_STRCapturePluginHandle);
+        if (ret < 0) {
+            CLOGE("[STR_CAPTURE] STR_CAPTURE Plugin deinit failed!!");
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_STR_PREVIEW
+    if (getCameraIdInternal() == CAMERA_ID_FRONT && m_STRPreviewPluginHandle != NULL) {
+        ret = uni_plugin_deinit(m_STRPreviewPluginHandle);
+        if (ret < 0) {
+            CLOGE("[STR_PRVIEW] STR_PREVIEW Plugin deinit failed!!");
+        }
+    }
+#endif
+
+#ifdef SAMSUNG_HIFI_LLS
+    if (m_hifiLLSEnabled == true && m_LLSpluginHandle != NULL) {
+        int powerCtrl = 0;
+        ret = uni_plugin_set(m_LLSpluginHandle,
+                HIFI_LLS_PLUGIN_NAME, UNI_PLUGIN_INDEX_POWER_CONTROL, &powerCtrl);
+        if (ret < 0) {
+            CLOGE("[LLS_MBR] LLS Plugin set UNI_PLUGIN_INDEX_POWER_CONTROL failed!! ret(%d)", ret);
+        }
+        m_hifiLLSEnabled = false;
+    }
+#endif
+
+#ifdef SUPPORT_DEPTH_MAP
+#ifdef SAMSUNG_FOCUS_PEAKING
+    if (getCameraIdInternal() == CAMERA_ID_BACK
+        && m_parameters->getRecordingHint() == false
+        && m_FocusPeakingPluginHandle != NULL) {
+        ret = uni_plugin_deinit(m_FocusPeakingPluginHandle);
+        if (ret < 0) {
+            CLOGE("[FocusPeaking] FocusPeaking Plugin deinit failed!!");
+        }
+        m_flagFocusPeakingStarted = false;
+    }
+#endif
+#endif
+
+#ifdef SAMSUNG_IDDQD
+    if (m_IDDQDPluginHandle != NULL) {
+        ret = uni_plugin_deinit(m_IDDQDPluginHandle);
+        if (ret < 0) {
+            CLOGE("[IDDQD] IDDQD Plugin deinit failed!!");
         }
     }
 #endif
@@ -1765,6 +2213,7 @@ void ExynosCamera::stopPreviewVision()
     CLOGI(" ");
     char previewMode[100] = {0};
     int ret = 0;
+    int pipeId = PIPE_FLITE;
 
     property_get("persist.sys.camera.preview", previewMode, "");
 
@@ -1777,12 +2226,21 @@ void ExynosCamera::stopPreviewVision()
         return;
     }
 
+    m_mainSetupQThread[INDEX(pipeId)]->stop();
+    m_mainSetupQ[INDEX(pipeId)]->sendCmd(WAKE_UP);
+    m_mainSetupQThread[INDEX(pipeId)]->requestExitAndWait();
+
     m_visionFrameFactory->setStopFlag();
     m_pipeFrameVisionDoneQ->sendCmd(WAKE_UP);
     m_visionThread->requestExitAndWait();
+
     ret = m_stopVisionInternal();
     if (ret < 0)
         CLOGE("m_stopVisionInternal fail");
+
+    if (m_3aaBufferMgr != NULL) {
+        m_3aaBufferMgr->resetBuffers();
+    }
 
     if (m_bayerBufferMgr != NULL) {
         m_bayerBufferMgr->resetBuffers();
@@ -1811,6 +2269,8 @@ status_t ExynosCamera::startRecording()
     uint32_t curMinFps = 0, curMaxFps = 0;
 #endif
 
+    TIME_LOGGER_INIT(m_cameraId);
+
     if (m_parameters != NULL) {
         if (m_parameters->getVisionMode() == true) {
             CLOGW(" / does not support");
@@ -1833,7 +2293,7 @@ status_t ExynosCamera::startRecording()
 
 #ifdef USE_FD_AE
     if (m_parameters != NULL) {
-        if (m_parameters->getFaceDetectionMode() == false) {
+        if (m_parameters->getFaceDetectionMode(false) == false) {
             m_enableFaceDetection(false);
         } else {
             /* stay current fd mode */
@@ -1887,6 +2347,7 @@ status_t ExynosCamera::startRecording()
     if (m_HLV == NULL
         && curVideoW <= 1920 && curVideoH <= 1080
         && curMinFps <= 60 && curMaxFps <= 60
+        && m_parameters->getSamsungCamera()
 #ifdef USE_LIVE_BROADCAST
         && m_parameters->getPLBMode() == false
 #endif
@@ -1945,10 +2406,10 @@ status_t ExynosCamera::startRecording()
 
 #ifdef SUPPORT_SW_VDIS
         /* VDIS uses MCSC0 only */
-        if (m_swVDIS_Mode == false)
+        if (m_swVDIS_Mode == true)
             useMCSC2Pipe = false;
 #endif
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         /* If dual camera, use libcsc only */
         if (m_parameters->getDualCameraMode() == true)
             useMCSC2Pipe = false;
@@ -1979,6 +2440,8 @@ void ExynosCamera::stopRecording()
         CLOGE("m_parameters is NULL!");
         return;
     }
+
+    TIME_LOGGER_SAVE(m_cameraId);
 
     if (m_parameters->getVisionMode() == true) {
         CLOGW(" Vision mode does not support");
@@ -2051,9 +2514,64 @@ status_t ExynosCamera::takePicture()
     ExynosCameraActivityFlash *flashMgr = m_exynosCameraActivityControl->getFlashMgr();
     ExynosCameraActivitySpecialCapture *sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     int masterCameraId, slaveCameraId;
     getDualCameraId(&masterCameraId, &slaveCameraId);
+    if (m_parameters->getDualCameraMode() == true) {
+        /* lock syncType during takePicture */
+        m_parameters->lockDualCameraSyncType(true);
+
+#ifdef SAMSUNG_DUAL_SOLUTION
+        CLOGI("takePicture standbyMode(%d), syncType(%d) forceWide(%d), fusionCapture(%d)",
+                m_parameters->getDualStandbyMode(),
+                m_parameters->getDualCameraReprocessingSyncType(),
+                m_parameters->getForceWide(),
+                m_parameters->getFusionCaptureMode(m_cameraId, true));
+#else
+        CLOGI("takePicture standbyMode(%d), syncType(%d)",
+                m_parameters->getDualStandbyMode(),
+                m_parameters->getDualCameraReprocessingSyncType());
+#endif
+
+        switch (m_parameters->getDualCameraReprocessingSyncType()) {
+        case SYNC_TYPE_BYPASS:
+            if (m_cameraId == slaveCameraId) {
+                CLOGI("takePicture will be skipped(%d)(syncType:%d)",
+                        m_parameters->getDualStandbyMode(),
+                        m_parameters->getDualCameraReprocessingSyncType());
+                return NO_ERROR;
+            }
+            break;
+        case SYNC_TYPE_SWITCH:
+            if (m_cameraId == masterCameraId) {
+                CLOGI("takePicture will be skipped(%d)(syncType:%d)",
+                        m_parameters->getDualStandbyMode(),
+                        m_parameters->getDualCameraReprocessingSyncType());
+                return NO_ERROR;
+            }
+            break;
+        case SYNC_TYPE_SYNC:
+            /* takePicture will be running in only master for burst mode / flash */
+            if ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST) ||
+                (m_parameters->getFlashMode() == FLASH_MODE_ON) ||
+                (flashMgr->getNeedCaptureFlash() == true && m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_NONE)
+#ifdef SAMSUNG_DUAL_SOLUTION
+                || (m_parameters->getForceWide() == true)
+                || (m_parameters->getFusionCaptureMode(m_cameraId, true) == false)
+#endif
+            ) {
+                if (m_cameraId == slaveCameraId) {
+                    CLOGI("takePicture will be skipped(%d)(syncType:%d)",
+                            m_parameters->getDualStandbyMode(),
+                            m_parameters->getDualCameraReprocessingSyncType());
+                    return NO_ERROR;
+                }
+            }
+            break;
+        default:
+            break;
+        }
+    }
 #endif
 
     if (m_previewEnabled == false) {
@@ -2069,23 +2587,20 @@ status_t ExynosCamera::takePicture()
     while (m_longExposureCaptureState != LONG_EXPOSURE_PREVIEW) {
         m_parameters->setPreviewExposureTime();
 
-        uint64_t delay = 0;
-        if (m_parameters->getCaptureExposureTime() <= 33333)
-            delay = 30000;
-        else if (m_parameters->getCaptureExposureTime() > CAMERA_EXPOSURE_TIME_MAX)
-            delay = CAMERA_EXPOSURE_TIME_MAX;
-        else
-            delay = m_parameters->getCaptureExposureTime();
+        if(m_preLongExposureTime == 0)
+            break;
 
-        usleep(delay);
+        usleep(m_preLongExposureTime);
 
         if (++retryCount > 7) {
-            CLOGE("HAL can't set preview exposure time.");
+            CLOGE("DEBUG(%s[%d]):HAL can't set preview exposure time.", __FUNCTION__, __LINE__);
+            m_preLongExposureTime = 0;
             return INVALID_OPERATION;
         }
     }
 
     retryCount = 0;
+    m_preLongExposureTime = 0;
 
 #ifdef SAMSUNG_DNG
     m_parameters->setIsUsefulDngInfo(false);
@@ -2144,7 +2659,8 @@ status_t ExynosCamera::takePicture()
 
         /* Check other shot(OIS, HDR without companion, FLASH) launching */
 #ifdef OIS_CAPTURE
-        if(getCameraIdInternal() == CAMERA_ID_BACK && currentSeriesShotMode != SERIES_SHOT_MODE_BURST) {
+        if((getCameraIdInternal() == CAMERA_ID_BACK || getCameraIdInternal() == CAMERA_ID_BACK_1) &&
+            currentSeriesShotMode != SERIES_SHOT_MODE_BURST) {
             sCaptureMgr->resetOISCaptureFcount();
             m_parameters->checkOISCaptureMode();
 #ifdef SAMSUNG_LLS_DEBLUR
@@ -2156,7 +2672,8 @@ status_t ExynosCamera::takePicture()
         if (m_hdrEnabled == true
             || m_parameters->getShotMode() == SHOT_MODE_OUTFOCUS
             || m_parameters->getFlashMode() == FLASH_MODE_ON
-            || (getCameraIdInternal() == CAMERA_ID_BACK && m_parameters->getOISCaptureModeOn() == true)
+            || ((getCameraIdInternal() == CAMERA_ID_BACK || getCameraIdInternal() == CAMERA_ID_BACK_1)
+                    && m_parameters->getOISCaptureModeOn() == true)
             || (flashMgr->getNeedCaptureFlash() == true && currentSeriesShotMode == SERIES_SHOT_MODE_NONE)
             || m_parameters->getCaptureExposureTime() != 0
 #ifdef SAMSUNG_LLS_DEBLUR
@@ -2328,16 +2845,10 @@ status_t ExynosCamera::takePicture()
 
     /* TODO: Dynamic bayer capture, currently support only single shot */
     if (reprocessingBayerMode == REPROCESSING_BAYER_MODE_PURE_DYNAMIC) {
-        int buffercount = 1;
-        ExynosCameraBufferManager *fliteBufferMgr = m_bayerBufferMgr;
+        m_captureSelector->clearList(pipeId, false, m_previewFrameFactory->getNodeType(PIPE_VC0));
 
-        m_captureSelector->clearList(pipeId, false);
+        m_previewFrameFactory->setRequestBayer(true);
 
-        /*
-         * after increase number here,
-         * m_mainThreadQSetup3AA() will request the bayer's buffer, amount of m_dynamicBayerCount.
-         */
-        m_dynamicBayerCount = buffercount;
     } else if (reprocessingBayerMode == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC) {
         /* Comment out, because it included 3AA, it always running */
         /*
@@ -2375,6 +2886,7 @@ status_t ExynosCamera::takePicture()
     }
 
 #ifdef DEBUG_RAWDUMP
+    CLOGD("[RAWDUMP] increase m_dynamicBayerCount. pureBayerReproc = %d", m_parameters->getUsePureBayerReprocessing());
     if (m_parameters->getUsePureBayerReprocessing() == false) {
         int buffercount = 1;
         m_dynamicBayerCount += buffercount;
@@ -2427,6 +2939,7 @@ status_t ExynosCamera::takePicture()
         CLOGI(" takePicture enabled, takePictureCount(%d)",
                  m_takePictureCounter.getCount());
         m_pictureEnabled = true;
+
         m_takePictureCounter.decCount();
         m_isNeedAllocPictureBuffer = true;
 
@@ -2458,7 +2971,7 @@ status_t ExynosCamera::takePicture()
                     addCount = (allocCount <= NUM_BURST_GSC_JPEG_INIT_BUFFER)?(NUM_BURST_GSC_JPEG_INIT_BUFFER-allocCount):0;
                     if( addCount > 0 ){
                         m_sccReprocessingBufferMgr->increase(addCount);
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
                         if (m_parameters->getDualCameraMode() == true) {
                             m_fusionReprocessingBufferMgr->increase(addCount);
                         }
@@ -2480,25 +2993,26 @@ status_t ExynosCamera::takePicture()
              currentSeriesShotMode, flashMgr->getNeedCaptureFlash());
 
 #ifdef RAWDUMP_CAPTURE
-        if(m_use_companion == true) {
+        CLOGD("[RAWDUMP_CAP] set RAW capture mode, Bypass companion. m_use_companion = %d", m_use_companion);
+        sCaptureMgr->resetRawCaptureFcount();
+        sCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_RAW);
+        m_parameters->setRawCaptureModeOn(true);
+        enum aa_capture_intent captureIntent = AA_CAPTRUE_INTENT_STILL_CAPTURE_RAWDUMP;
+        if (m_use_companion == true) {
             CLOGD(" start set Raw Capture mode");
-            sCaptureMgr->resetRawCaptureFcount();
-            sCaptureMgr->setCaptureMode(ExynosCameraActivitySpecialCapture::SCAPTURE_MODE_RAW);
-
-            m_parameters->setRawCaptureModeOn(true);
-
-            enum aa_capture_intent captureIntent = AA_CAPTRUE_INTENT_STILL_CAPTURE_COMP_BYPASS;
-
-            ret = m_previewFrameFactory->setControl(V4L2_CID_IS_INTENT, captureIntent, PIPE_3AA);
-            if (ret < 0) {
-                CLOGE("setControl(STILL_CAPTURE_RAW) fail. ret(%d) intent(%d)",
-                 ret, captureIntent);
-            }
-            sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_START);
+            captureIntent = AA_CAPTRUE_INTENT_STILL_CAPTURE_COMP_BYPASS;
+        } else {
+            CLOGD(" start set Raw Capture mode(NON-C3)");
         }
+        ret = m_previewFrameFactory->setControl(V4L2_CID_IS_INTENT, captureIntent, PIPE_3AA);
+        if (ret < 0) {
+            CLOGE("setControl(STILL_CAPTURE_RAW) fail. ret(%d) intent(%d)",
+             ret, captureIntent);
+        }
+        sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_START);
 #else
 #ifdef OIS_CAPTURE
-        if (getCameraIdInternal() == CAMERA_ID_BACK
+        if ((getCameraIdInternal() == CAMERA_ID_BACK || getCameraIdInternal() == CAMERA_ID_BACK_1)
             && m_getRecordingEnabled() == false
 #ifdef ONE_SECOND_BURST_CAPTURE
             && currentSeriesShotMode != SERIES_SHOT_MODE_ONE_SECOND_BURST
@@ -2538,6 +3052,17 @@ status_t ExynosCamera::takePicture()
         }
 #endif
 
+#ifdef SAMSUNG_STR_CAPTURE
+        if (m_parameters->checkSTRCaptureMode() && m_STRCapturePluginHandle != NULL) {
+            m_parameters->setOutPutFormatNV21Enable(true);
+            m_parameters->setSTRCaptureEnable(true);
+            CLOGD("[STR_CAPTURE] Set STR Capture, getSTRCaptureEnable(%d)",
+                     m_parameters->getSTRCaptureEnable());
+        } else {
+            m_parameters->setSTRCaptureEnable(false);
+        }
+#endif
+
 #ifdef SAMSUNG_LLS_DEBLUR
         if (getCameraIdInternal() == CAMERA_ID_FRONT
             && currentSeriesShotMode == SERIES_SHOT_MODE_NONE
@@ -2550,12 +3075,28 @@ status_t ExynosCamera::takePicture()
 #endif
 
 #ifdef LLS_STUNR
-		CLOGE("STUNR before checking stunr mode");
+        CLOGE("STUNR before checking stunr mode");
         m_parameters->checkLLSStunrMode();
+#endif
+
+#ifdef USE_ODC_CAPTURE
+        if (m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST
+#ifdef CAMERA_GED_FEATURE
+            || (m_parameters->getSeriesShotCount() > 1)
+#endif
+#ifdef SAMSUNG_LENS_DC
+            || m_parameters->getLensDCEnable()
+#endif
+        ) {
+            m_parameters->setODCCaptureEnable(false);
+        } else {
+            m_parameters->setODCCaptureEnable(m_parameters->getODCCaptureMode());
+        }
 #endif
 
         if (m_parameters->getCaptureExposureTime() != 0) {
             m_longExposureRemainCount = m_parameters->getLongExposureShotCount();
+            m_preLongExposureTime = m_parameters->getLongExposureTime();
             CLOGD(" m_longExposureRemainCount(%d)",
                 m_longExposureRemainCount);
         }
@@ -2611,12 +3152,24 @@ status_t ExynosCamera::takePicture()
         }
 #endif
 
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+        enum ExynosCameraActivityFlash::FLASH_STEP curFlashStep = ExynosCameraActivityFlash::FLASH_STEP_OFF;
+        if (getCameraIdInternal() == CAMERA_ID_FRONT) {
+            flashMgr->getFlashStep(&curFlashStep);
+        }
+#endif
+
         if (m_hdrEnabled == true) {
             seriesShotCount = HDR_REPROCESSING_COUNT;
             sCaptureMgr->setCaptureStep(ExynosCameraActivitySpecialCapture::SCAPTURE_STEP_START);
             sCaptureMgr->resetHdrStartFcount();
             m_parameters->setFrameSkipCount(13);
-        } else if (flashMgr->getNeedCaptureFlash() == true && currentSeriesShotMode == SERIES_SHOT_MODE_NONE) {
+        } else if (currentSeriesShotMode == SERIES_SHOT_MODE_NONE
+                    && (flashMgr->getNeedCaptureFlash() == true
+#ifdef SAMSUNG_FRONT_LCD_FLASH
+                        || curFlashStep == ExynosCameraActivityFlash::FLASH_STEP_PRE_LCD_ON
+#endif
+            )) {
             if (m_parameters->getCaptureExposureTime() != 0) {
                 m_stopLongExposure = false;
                 flashMgr->setManualExposureTime(m_parameters->getLongExposureTime() * 1000);
@@ -2626,10 +3179,8 @@ status_t ExynosCamera::takePicture()
 
 #ifdef SAMSUNG_FRONT_LCD_FLASH
             if (getCameraIdInternal() == CAMERA_ID_FRONT) {
-                enum ExynosCameraActivityFlash::FLASH_STEP curFlashStep;
-                flashMgr->getFlashStep(&curFlashStep);
-
                 if (curFlashStep == ExynosCameraActivityFlash::FLASH_STEP_PRE_LCD_ON) {
+                    CLOGD("DEBUG(%s[%d]) : FLASH_STEP_LCD_ON", __FUNCTION__, __LINE__);
                     flashMgr->resetShotFcount();
                     flashMgr->setFlashStep(ExynosCameraActivityFlash::FLASH_STEP_LCD_ON);
                 }
@@ -2651,7 +3202,7 @@ status_t ExynosCamera::takePicture()
         }
 #ifdef OIS_CAPTURE
         else if (m_parameters->getOISCaptureModeOn() == true
-                 && getCameraIdInternal() == CAMERA_ID_BACK) {
+                 && (getCameraIdInternal() == CAMERA_ID_BACK || getCameraIdInternal() == CAMERA_ID_BACK_1)) {
             CLOGD(" start set zsl-like mode");
 
             unsigned int captureIntent = AA_CAPTURE_INTENT_STILL_CAPTURE_OIS_SINGLE;
@@ -2692,11 +3243,20 @@ status_t ExynosCamera::takePicture()
                     captureCount = m_parameters->getLDCaptureCount();
                     unsigned int mask = 0;
 
-                    if (m_parameters->getLDCaptureLLSValue() >= LLS_LEVEL_MULTI_MERGE_INDICATOR_LOW_2
-                        && m_parameters->getLDCaptureLLSValue() <= LLS_LEVEL_MULTI_MERGE_INDICATOR_LOW_4) {
-                        captureIntent = AA_CAPTRUE_INTENT_STILL_CAPTURE_OIS_DYNAMIC_SHOT;
-                    } else {
-                        captureIntent = AA_CAPTRUE_INTENT_STILL_CAPTURE_DEBLUR_DYNAMIC_SHOT;
+                    switch (m_parameters->getLDCaptureLLSValue()) {
+                        case LLS_LEVEL_MULTI_MERGE_INDICATOR_LOW_2:
+                        case LLS_LEVEL_MULTI_MERGE_INDICATOR_LOW_3:
+                        case LLS_LEVEL_MULTI_MERGE_INDICATOR_LOW_4:
+#ifdef SUPPORT_ZSL_MULTIFRAME
+                        case LLS_LEVEL_MULTI_MERGE_LOW_2:
+                        case LLS_LEVEL_MULTI_MERGE_LOW_3:
+                        case LLS_LEVEL_MULTI_MERGE_LOW_4:
+#endif
+                            captureIntent = AA_CAPTRUE_INTENT_STILL_CAPTURE_OIS_DYNAMIC_SHOT;
+                            break;
+                        default:
+                            captureIntent = AA_CAPTRUE_INTENT_STILL_CAPTURE_DEBLUR_DYNAMIC_SHOT;
+                            break;
                     }
 
                     mask = (((captureIntent << 16) & 0xFFFF0000) | ((captureCount << 0) & 0x0000FFFF));
@@ -2735,7 +3295,7 @@ status_t ExynosCamera::takePicture()
 
                 CLOGD("setExtControl intent:%d, count:%d, exposuretime:%d",
                         captureCtrl.capture_intent, captureCtrl.capture_count, captureCtrl.capture_exposureTime);
-                
+
                 ret = m_previewFrameFactory->setExtControl(&extCtrls, PIPE_3AA);
                 if (ret != NO_ERROR) {
                     CLOGE("Failed to setExtControl to 3AA");
@@ -2835,7 +3395,7 @@ status_t ExynosCamera::takePicture()
         }
 
 #ifdef SET_LLS_CAPTURE_SETFILE
-        if(getCameraIdInternal() == CAMERA_ID_BACK && currentSeriesShotMode == SERIES_SHOT_MODE_LLS
+        if(currentSeriesShotMode == SERIES_SHOT_MODE_LLS
 #ifdef SR_CAPTURE
             && m_parameters->getSROn() == false
 #endif
@@ -2884,13 +3444,21 @@ status_t ExynosCamera::takePicture()
 #ifdef SAMSUNG_LENS_DC
             && !m_parameters->getLensDCEnable()
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+            && !m_parameters->getSTRCaptureEnable()
+#endif
            ) {
             int thumbnailW = 0, thumbnailH = 0;
             m_parameters->getThumbnailSize(&thumbnailW, &thumbnailH);
 
             if ((thumbnailW > 0 && thumbnailH > 0)
                 && !m_parameters->getRecordingHint()
+#ifdef USE_DUAL_CAMERA
+                && !(m_parameters->getDualCameraMode() == false &&
+                    m_parameters->getDualMode())
+#else
                 && !m_parameters->getDualMode()
+#endif
                 && currentSeriesShotMode != SERIES_SHOT_MODE_LLS
 #ifdef SAMSUNG_MAGICSHOT
                 && m_parameters->getShotMode() != SHOT_MODE_MAGIC
@@ -2907,6 +3475,7 @@ status_t ExynosCamera::takePicture()
 
         if (m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21) {
             m_parameters->setOutPutFormatNV21Enable(true);
+            m_nv21CaptureEnabled = true;
         }
 
 #ifdef SAMSUNG_LLS_DEBLUR
@@ -2961,18 +3530,13 @@ status_t ExynosCamera::takePicture()
             }
         }
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-        /* only in case of master camera, it can control jpeg */
-        if ((m_parameters->getDualCameraMode() == false) ||
-            (m_parameters->getDualCameraMode() == true &&
-                m_cameraId == masterCameraId)) {
-#endif
         /* HDR, LLS, SIS should make YUV callback data. so don't use jpeg thread */
         if (!(m_hdrEnabled == true ||
                 currentSeriesShotMode == SERIES_SHOT_MODE_LLS ||
                 currentSeriesShotMode == SERIES_SHOT_MODE_SIS ||
-                m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21 ||
+                m_nv21CaptureEnabled ||
                 m_parameters->getShotMode() == SHOT_MODE_FRONT_PANORAMA)) {
+            m_yuvcallbackCounter.setCount(0);
             m_jpegCallbackThread->join();
             if (m_parameters->getCaptureExposureTime() <= CAMERA_PREVIEW_EXPOSURE_TIME_LIMIT) {
                 ret = m_jpegCallbackThread->run();
@@ -2982,22 +3546,13 @@ status_t ExynosCamera::takePicture()
                 }
             }
         }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-        }
-#endif
     } else {
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-        /* only in case of master camera, it can control jpeg */
-        if ((m_parameters->getDualCameraMode() == false) ||
-            (m_parameters->getDualCameraMode() == true &&
-                m_cameraId == masterCameraId)) {
-#endif
         /* HDR, LLS, SIS should make YUV callback data. so don't use jpeg thread */
         /* One second burst capture launching jpegCallbackThread automatically */
         if (!(m_hdrEnabled == true ||
                 currentSeriesShotMode == SERIES_SHOT_MODE_LLS ||
                 currentSeriesShotMode == SERIES_SHOT_MODE_SIS ||
-                m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21 ||
+                m_nv21CaptureEnabled ||
 #ifdef ONE_SECOND_BURST_CAPTURE
                 currentSeriesShotMode == SERIES_SHOT_MODE_ONE_SECOND_BURST ||
 #endif
@@ -3010,9 +3565,6 @@ status_t ExynosCamera::takePicture()
                 return INVALID_OPERATION;
             }
         }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-        }
-#endif
 
         CLOGI(" series shot takePicture, takePictureCount(%d)",
                  m_takePictureCounter.getCount());
@@ -3129,8 +3681,10 @@ status_t ExynosCamera::cancelAutoFocus()
         ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
         autoFocusMgr->setStartLensMove(false);
         m_lensmoveCount = 0;
-        m_parameters->setMoveLensCount(m_lensmoveCount);
-        m_parameters->setMoveLensTotal(m_lensmoveCount);
+        if (m_parameters != NULL) {
+            m_parameters->setMoveLensCount(m_lensmoveCount);
+            m_parameters->setMoveLensTotal(m_lensmoveCount);
+    }
     }
 #endif
 
@@ -3204,17 +3758,55 @@ status_t ExynosCamera::setParameters(const CameraParameters& params)
         ret = m_parameters->setParameters(params);
     }
 
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    if (m_parameters->getUseDNGCapture() == true) {
+        if(m_parameters->getDNGCaptureModeOn() == true)
+            m_previewFrameFactory->setRequestBayer(true);
+        else
+            m_previewFrameFactory->setRequestBayer(false);
+    }
+#endif
+#if defined(DEBUG_RAWDUMP_DIRTY_BAYER)
+    m_previewFrameFactory->setRequestBayer(true);
+#endif
+
 #ifdef CAMERA_FAST_ENTRANCE_V1
     if (m_isFirstParametersSet == false
+#ifdef USE_DUAL_CAMERA
+        && m_parameters->isFastenAeStableEnable()
+#else
         && m_parameters->getDualMode() == false
+#endif
+#ifndef CAMERA_GED_FEATURE
         && m_parameters->getSamsungCamera() == true
+#endif
         && m_parameters->getVisionMode() == false
 #ifdef SAMSUNG_QUICK_SWITCH
-        && (m_isQuickSwitchState == QUICK_SWITCH_IDLE
-        && m_use_companion == true)
+        && (m_isQuickSwitchState == QUICK_SWITCH_IDLE)
 #endif
+        && m_previewEnabled == false
         ) {
         CLOGD("1st setParameters");
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+        if (m_parameters->getDualCameraMode()) {
+            debug_attribute_t *debuginfo;
+            debuginfo = m_parameters->getDebugAttribute();
+            debuginfo->debugSize[APP_MARKER_4] += (sizeof(struct camera2_udm) + sizeof(struct ois_exif_data));
+            if (debuginfo->debugData[APP_MARKER_4]) {
+                delete [] debuginfo->debugData[APP_MARKER_4];
+                debuginfo->debugData[APP_MARKER_4] = new char[debuginfo->debugSize[APP_MARKER_4]];
+                memset((void *)debuginfo->debugData[APP_MARKER_4], 0, debuginfo->debugSize[APP_MARKER_4]);
+            }
+
+            debuginfo = m_parameters->getDebug2Attribute();
+            debuginfo->debugSize[APP_MARKER_4] += (sizeof(struct camera2_udm) + sizeof(struct ois_exif_data));
+            if (debuginfo->debugData[APP_MARKER_4]) {
+                delete [] debuginfo->debugData[APP_MARKER_4];
+                debuginfo->debugData[APP_MARKER_4] = new char[debuginfo->debugSize[APP_MARKER_4]];
+                memset((void *)debuginfo->debugData[APP_MARKER_4], 0, debuginfo->debugSize[APP_MARKER_4]);
+            }
+        }
+#endif
         m_fastEntrance = true;
         m_isFirstParametersSet = true;
         m_fastenAeThread->run();
@@ -3282,8 +3874,17 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
         autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
         if (m_OTpluginHandle == NULL) {
             CLOGE("[OBTR] HAL_OBJECT_TRACKING_STARTSTOP is called but handle is null !!");
+#ifdef SAMSUNG_DUAL_SOLUTION
+            if (m_parameters->getDualCameraMode() == true) {
+                if (arg1) {
+                    autoFocusMgr->setObjectTrackingStart(true);
+                } else {
+                    autoFocusMgr->setObjectTrackingStart(false);
+                }
+            }
+#endif
             break;
-        }		
+        }
         CLOGD("HAL_OBJECT_TRACKING_STARTSTOP(%d) is called!", arg1);
         if (arg1) {
             /* Start case */
@@ -3383,7 +3984,7 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
         m_takePictureCounter.setCount(0);
 
 #ifdef OIS_CAPTURE
-        if (getCameraIdInternal() == CAMERA_ID_BACK) {
+        if (getCameraIdInternal() == CAMERA_ID_BACK || getCameraIdInternal() == CAMERA_ID_BACK_1) {
             ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
             if (m_parameters->getOISCaptureModeOn()) {
                 /* setMultiCaptureMode flag will be disabled in SCAPTURE_STEP_END in case of OIS capture */
@@ -3469,7 +4070,7 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
         m_parameters->setLLSCaptureOn(false);
 #endif
 #ifdef OIS_CAPTURE
-        if (getCameraIdInternal() == CAMERA_ID_BACK
+        if ((getCameraIdInternal() == CAMERA_ID_BACK || getCameraIdInternal() == CAMERA_ID_BACK_1)
             && m_parameters->getOISCaptureModeOn() == false) {
             ExynosCameraActivitySpecialCapture *m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
             m_sCaptureMgr->setMultiCaptureMode(false);
@@ -3528,11 +4129,11 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
 
             CLOGD("LCD_FLASH is called!%d", arg1);
             if (arg1) {
-                setHighBrightnessModeOfLCD(1, m_prevHBM, m_prevAutoHBM);
+                /* setHighBrightnessModeOfLCD(1, m_prevHBM, m_prevAutoHBM); */
                 flashMgr->setFlashStep(ExynosCameraActivityFlash::FLASH_STEP_PRE_LCD_ON);
             } else {
                 flashMgr->setFlashStep(ExynosCameraActivityFlash::FLASH_STEP_LCD_OFF);
-                setHighBrightnessModeOfLCD(0, m_prevHBM, m_prevAutoHBM);
+                /* setHighBrightnessModeOfLCD(0, m_prevHBM, m_prevAutoHBM); */
             }
         }
         break;
@@ -3568,6 +4169,7 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
         CLOGD("CAMERA_CMD_SET_FLIP is called!%d", arg1);
         m_parameters->setFlipHorizontal(arg1);
         break;
+#ifndef SAMSUNG_ROTATION
     /* 1521: CAMERA_CMD_DEVICE_ORIENTATION */
     case 1521:
         CLOGD("CAMERA_CMD_DEVICE_ORIENTATION is called!%d", arg1);
@@ -3576,6 +4178,7 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
         if (uctlMgr != NULL)
             uctlMgr->setDeviceRotation(m_parameters->getFdOrientation());
         break;
+#endif
     /*1641: CAMERA_CMD_ADVANCED_MACRO_FOCUS*/
     case 1641:
         CLOGD("CAMERA_CMD_ADVANCED_MACRO_FOCUS is called!%d", arg1);
@@ -3678,6 +4281,11 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
         m_parameters->setQuickSwitchCmd(QUICK_SWITCH_CMD_MAIN_TO_STBY);
         break;
 #endif
+        /* For CTS ISSUE-testPreviewPictureSizesCombination */
+    case 1814: /*  START PREVIEW NOTIFY */
+        CLOGD("START PREVIEW NOTIFY");
+        m_disablePreviewCB = false;
+        break;
     case 1821: /* SAMSUNG NATIVE APP Based on SecCamera*/
         CLOGD(" SAMSUNG NATIVE APP ON!! (%d/%d)", arg1, arg2);
         break;
@@ -3689,6 +4297,20 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
             m_flagBrightnessValue = false;
         }
         break;
+#ifdef SUPPORT_DEPTH_MAP
+#ifdef SAMSUNG_FOCUS_PEAKING
+    case 1841: /* HAL_SET_FOCUS_PEAKING */
+        CLOGD("[FocusPeaking] HAL_SET_FOCUS_PEAKING is called!(%d)", arg1);
+        if (arg1) {
+            m_parameters->m_setFocusPeakingMode(true);
+            m_enableDepthMap();
+        } else {
+            m_parameters->m_setFocusPeakingMode(false);
+            m_disableDepthMap();
+        }
+        break;
+#endif
+#endif
     default:
         CLOGV("unexpectect command(%d)", command);
         break;
@@ -3697,18 +4319,17 @@ status_t ExynosCamera::sendCommand(int32_t command, int32_t arg1, __unused int32
     return NO_ERROR;
 }
 
-void ExynosCamera::m_handleFaceDetectionFrame(ExynosCameraFrameSP_sptr_t previewFrame, ExynosCameraBuffer *previewBuffer)
+void ExynosCamera::m_handleFaceDetectionFrame(ExynosCameraFrameSP_sptr_t previewFrame, __unused ExynosCameraBuffer *previewBuffer)
 {
     int ratio = 1;
     uint32_t minFps = 0, maxFps = 0;
-    uint32_t dispFps = EXYNOS_CAMERA_PREVIEW_FPS_REFERENCE;
     bool skipFdMetaCallback = false;
     ExynosCameraFrameSP_sptr_t fdFrame = NULL;
 
     /* Face detection */
-    if (!(m_parameters->getHighSpeedRecording() == true && m_getRecordingEnabled() == true)
+    if (!(m_parameters->getFastFpsMode() > 1 && m_getRecordingEnabled() == true)
             && (previewFrame->getFrameState() != FRAME_STATE_SKIPPED)) {
-#ifdef SR_CAPTURE
+#if defined(SR_CAPTURE)
         if(m_isCopySrMdeta) {
             previewFrame->getDynamicMeta(&m_srShotMeta);
             m_isCopySrMdeta = false;
@@ -3720,9 +4341,13 @@ void ExynosCamera::m_handleFaceDetectionFrame(ExynosCameraFrameSP_sptr_t preview
                 && m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_METADATA) == true) {
             previewFrame->getFpsRange(&minFps, &maxFps);
 
-            /* limit maximum FD callback fps to 60fps */
-            if (maxFps > 60) {
-                ratio = (int)((maxFps * 10 / dispFps) / previewBuffer->batchSize / 10);
+            /* limit maximum FD callback fps to 15fps due to performance issue*/
+            if (maxFps >= 60) {
+                if (m_getRecordingEnabled() == true) {
+                    ratio = (int)((maxFps * 40 / 60) / 10);
+                } else {
+                    ratio = (int)((maxFps * 10 / 60) / 10);
+                }
                 m_fdCallbackToggle = (m_fdCallbackToggle + 1) % ratio;
                 skipFdMetaCallback = (m_fdCallbackToggle == 0) ? false : true;
             }
@@ -3734,6 +4359,11 @@ void ExynosCamera::m_handleFaceDetectionFrame(ExynosCameraFrameSP_sptr_t preview
 #else
                 fdFrame = m_frameMgr->createFrame(m_parameters, previewFrame->getFrameCount());
 #endif
+                if (fdFrame == NULL) {
+                    CLOGE("[F%d]Failed to createFrame.", previewFrame->getFrameCount());
+                    return;
+                }
+
                 m_copyMetaFrameToFrame(previewFrame, fdFrame, true, true);
                 m_facedetectQ->pushProcessQ(&fdFrame);
             }
@@ -3756,12 +4386,9 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
     int ratio = 1;
     uint32_t minFps = 0, maxFps = 0;
     uint32_t dispFps = EXYNOS_CAMERA_PREVIEW_FPS_REFERENCE;
-    uint32_t skipCount = 0;
-    struct camera2_stream *shot_stream = NULL;
     ExynosCameraBuffer resultBuffer;
-    camera2_node_group node_group_info_isp;
     int32_t reprocessingBayerMode = m_parameters->getReprocessingBayerMode();
-    int ispDstBufferIndex = -1;
+    entity_buffer_state_t bufferState = ENTITY_BUFFER_STATE_INVALID;
 
     uint32_t frameCnt = 0;
 #ifdef SAMSUNG_LBP
@@ -3775,6 +4402,11 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
 #endif
 #ifdef SAMSUNG_HYPER_MOTION
     int hyperMotion_BufIndex = -1;
+#endif
+
+#ifdef USE_DUAL_CAMERA
+    int masterCameraId, slaveCameraId;
+    getDualCameraId(&masterCameraId, &slaveCameraId);
 #endif
 
     entity = frame->getFrameDoneFirstEntity();
@@ -3830,6 +4462,7 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
             m_previewFrameFactory->stopThread(pipeId);
 
             if (buffer.index >= 0) {
+                CLOGD("[RAWDUMP] BayerDumpEnabled = %d.", m_parameters->checkBayerDumpEnable());
                 if (m_parameters->checkBayerDumpEnable()) {
                     int sensorMaxW, sensorMaxH;
                     int sensorMarginW, sensorMarginH;
@@ -3845,7 +4478,7 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                         m_parameters->getMaxPictureSize(&sensorMaxW, &sensorMaxH);
                     }
 
-                    CLOGE(" Sensor (%d x %d) frame(%d)", \
+                    CLOGD("[RAWDUMP] Sensor (%d x %d) frame(%d)", \
                              sensorMaxW, sensorMaxH, frame->getFrameCount());
 
                     bRet = dumpToFile((char *)filePath,
@@ -3875,11 +4508,13 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
         */
 
         /* Trigger CAF thread */
-        if (getCameraIdInternal() == CAMERA_ID_BACK) {
+#ifndef SUPPORT_FRONT_AF
+        if (getCameraIdInternal() == CAMERA_ID_BACK)
+#endif
+        {
             frameCnt = frame->getFrameCount();
             m_autoFocusContinousQ.pushProcessQ(&frameCnt);
         }
-
 
         frame->setMetaDataEnable(true);
 
@@ -3924,7 +4559,14 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                 } else {
                     if (m_parameters->getUsePureBayerReprocessing() == true) {
                         /* In case of csis(flite) -> 3AA M2M, it should use pure bayer processed by 3AA for capture */
-                        ret = m_captureSelector->manageFrameHoldList(frame, PIPE_FLITE, false, m_previewFrameFactory->getNodeType(PIPE_VC0));
+#ifdef USE_DUAL_CAMERA
+                        if (m_parameters->getDualCameraMode() == true) {
+                            ret = m_captureSelector->manageSyncFrameHoldList(frame, PIPE_FLITE, false, m_previewFrameFactory->getNodeType(PIPE_VC0));
+                        } else
+#endif
+                        {
+                            ret = m_captureSelector->manageFrameHoldList(frame, PIPE_FLITE, false, m_previewFrameFactory->getNodeType(PIPE_VC0));
+                        }
                         if (ret != NO_ERROR) {
                             CLOGE("manageFrameHoldList fail");
                         }
@@ -3933,7 +4575,130 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
             }
         } else {
             if (m_parameters->isReprocessing() == true) {
-                if (frame->getRequest(PIPE_VC0) == true) {
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+                if (m_parameters->getUseDNGCapture() == true) {
+                    if (m_parameters->getDNGCaptureModeOn()) {
+                        if (entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_VC0)) == ENTITY_BUFFER_STATE_COMPLETE
+                            && entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_3AC)) == ENTITY_BUFFER_STATE_COMPLETE) {
+#ifdef USE_DUAL_CAMERA
+                            if (m_parameters->getDualCameraMode() == true) {
+                                ret = m_captureSelector->manageSyncFrameHoldList(frame, PIPE_3AA, false, m_previewFrameFactory->getNodeType(PIPE_3AC));
+                            } else
+#endif
+                            {
+                                ret = m_captureSelector->manageFrameHoldList(frame, PIPE_3AA, false, m_previewFrameFactory->getNodeType(PIPE_3AC));
+                            }
+                            if (ret != NO_ERROR) {
+                                CLOGE("manageFrameHoldList fail");
+                                return ret;
+                            }
+                        } else {
+
+                            CLOGW("Skip manageFrameHoldList(frameCount : %d) VC0(%d), 3AC(%d)", frame->getFrameCount()
+                                , entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_VC0))
+                                , entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_3AC)));
+
+                            ExynosCameraBufferManager *bufferMgr = NULL;
+                            ret = frame->getDstBuffer(entity->getPipeId(), &buffer, m_previewFrameFactory->getNodeType(PIPE_VC0));
+                            if (ret != NO_ERROR) {
+                                CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)", entity->getPipeId(), ret);
+                                return ret;
+                            }
+
+                            if (0 <= buffer.index) {
+                                ret = m_getBufferManager(PIPE_VC0, &bufferMgr, DST_BUFFER_DIRECTION);
+                                if (ret != NO_ERROR) {
+                                    CLOGE("m_getBufferManager(pipeId(%d), DST_BUFFER_DIRECTION) fail", PIPE_VC0);
+                                } else {
+                                    CLOGW("m_putBuffer the flite buffer(%d)(frameCount : %d)", buffer.index, frame->getFrameCount());
+                                    ret = m_putBuffers(bufferMgr, buffer.index);
+                                    if (ret != NO_ERROR) {
+                                        CLOGE("m_putBuffers(bufferMgr, %d) fail", buffer.index);
+                                    }
+                                }
+                            }
+
+                            ret = frame->getDstBuffer(entity->getPipeId(), &buffer, m_previewFrameFactory->getNodeType(PIPE_3AC));
+                            if (ret != NO_ERROR) {
+                                CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)", entity->getPipeId(), ret);
+                                return ret;
+                            }
+
+                            if (0 <= buffer.index) {
+                                ret = m_getBufferManager(PIPE_3AC, &bufferMgr, DST_BUFFER_DIRECTION);
+                                if (ret != NO_ERROR) {
+                                    CLOGE("m_getBufferManager(pipeId(%d), DST_BUFFER_DIRECTION) fail", PIPE_3AC);
+                                } else {
+                                    CLOGW("m_putBuffer the bayer buffer(%d)(frameCount : %d)", buffer.index, frame->getFrameCount());
+                                    ret = m_putBuffers(bufferMgr, buffer.index);
+                                    if (ret != NO_ERROR) {
+                                        CLOGE("m_putBuffers(bufferMgr, %d) fail", buffer.index);
+                                    }
+                                }
+                            }
+                        }
+                    } else {  // PRO MODE + DNG Enable + Burst Shot.
+                        if (frame->getRequest(PIPE_VC0) == true) {
+                            ExynosCameraBufferManager *bufferMgr = NULL;
+                            ret = frame->getDstBuffer(entity->getPipeId(), &buffer, m_previewFrameFactory->getNodeType(PIPE_VC0));
+                            if (ret != NO_ERROR) {
+                                CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)", entity->getPipeId(), ret);
+                                return ret;
+                            }
+
+                            if (0 <= buffer.index) {
+                                ret = m_getBufferManager(PIPE_VC0, &bufferMgr, DST_BUFFER_DIRECTION);
+                                if (ret != NO_ERROR) {
+                                    CLOGE("m_getBufferManager(pipeId(%d), DST_BUFFER_DIRECTION) fail", PIPE_VC0);
+                                } else {
+                                    CLOGW("m_putBuffer the flite buffer(%d)(frameCount : %d)", buffer.index, frame->getFrameCount());
+                                    ret = m_putBuffers(bufferMgr, buffer.index);
+                                    if (ret != NO_ERROR) {
+                                        CLOGE("m_putBuffers(bufferMgr, %d) fail", buffer.index);
+                                    }
+                                }
+                            }
+                            frame->setRequest(PIPE_VC0, false);
+                        }
+
+                        if (entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_3AC)) == ENTITY_BUFFER_STATE_COMPLETE) {
+#ifdef USE_DUAL_CAMERA
+                            if (m_parameters->getDualCameraMode() == true) {
+                                ret = m_captureSelector->manageSyncFrameHoldList(frame, PIPE_3AA, false, m_previewFrameFactory->getNodeType(PIPE_3AC));
+                            } else
+#endif
+                            {
+                                ret = m_captureSelector->manageFrameHoldList(frame, PIPE_3AA, false, m_previewFrameFactory->getNodeType(PIPE_3AC));
+                            }
+                            if (ret != NO_ERROR) {
+                                CLOGE("manageFrameHoldList fail");
+                                return ret;
+                            }
+                        } else {
+                            ExynosCameraBufferManager *bufferMgr = NULL;
+                            ret = frame->getDstBuffer(entity->getPipeId(), &buffer, m_previewFrameFactory->getNodeType(PIPE_3AC));
+                            if (ret != NO_ERROR) {
+                                CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)", entity->getPipeId(), ret);
+                                return ret;
+                            }
+
+                            if (0 <= buffer.index) {
+                                ret = m_getBufferManager(PIPE_3AC, &bufferMgr, DST_BUFFER_DIRECTION);
+                                if (ret != NO_ERROR) {
+                                    CLOGE("m_getBufferManager(pipeId(%d), DST_BUFFER_DIRECTION) fail", PIPE_3AC);
+                                } else {
+                                    CLOGW("m_putBuffer the bayer buffer(%d)(frameCount : %d)", buffer.index, frame->getFrameCount());
+                                    ret = m_putBuffers(bufferMgr, buffer.index);
+                                    if (ret != NO_ERROR) {
+                                        CLOGE("m_putBuffers(bufferMgr, %d) fail", buffer.index);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else
+#endif
+                if (frame->getRequest(PIPE_VC0) == true && m_parameters->getUsePureBayerReprocessing() == true) {
                     ret = frame->getDstBuffer(entity->getPipeId(), &buffer, m_previewFrameFactory->getNodeType(PIPE_VC0));
                     if (ret != NO_ERROR) {
                         CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)", entity->getPipeId(), ret);
@@ -3942,7 +4707,14 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
 
                     if (0 <= buffer.index) {
                         if (entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_VC0)) == ENTITY_BUFFER_STATE_COMPLETE) {
-                            ret = m_captureSelector->manageFrameHoldList(frame, PIPE_3AA, false, m_previewFrameFactory->getNodeType(PIPE_VC0));
+#ifdef USE_DUAL_CAMERA
+                            if (m_parameters->getDualCameraMode() == true) {
+                                ret = m_captureSelector->manageSyncFrameHoldList(frame, PIPE_3AA, false, m_previewFrameFactory->getNodeType(PIPE_VC0));
+                            } else
+#endif
+                            {
+                                ret = m_captureSelector->manageFrameHoldList(frame, PIPE_3AA, false, m_previewFrameFactory->getNodeType(PIPE_VC0));
+                            }
                             if (ret != NO_ERROR) {
                                 CLOGE("manageFrameHoldList fail");
                                 return ret;
@@ -3963,6 +4735,25 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                     CLOGE("m_putBuffers(bufferMgr, %d) fail", buffer.index);
                                 }
                             }
+
+#ifdef SUPPORT_DEPTH_MAP
+                            if (frame->getRequest(PIPE_VC1) == true) {
+                                ExynosCameraBuffer depth_buffer;
+                                ret = frame->getDstBuffer(pipeId, &depth_buffer, m_previewFrameFactory->getNodeType(PIPE_VC1));
+                                if (ret != NO_ERROR) {
+                                    CLOGE("depth_buffer getDstBuffer fail, pipeId(%d), ret(%d)", pipeId, ret);
+                                } else {
+                                    if (depth_buffer.index >= 0) {
+                                        CLOGW("m_putBuffer the depth buffer(%d)(frameCount : %d)",
+                                            depth_buffer.index, frame->getFrameCount());
+                                        ret = m_putBuffers(m_depthMapBufferMgr, depth_buffer.index);
+                                        if (ret != NO_ERROR) {
+                                            CLOGE("m_putBuffers(m_depthMapBufferMgr, %d) fail", depth_buffer.index);
+                                        }
+                                    }
+                                }
+                            }
+#endif
                             CLOGW("Skip manageFrameHoldList(frameCount : %d), on pipeId(%d)'s PIPE_VC0", frame->getFrameCount(), pipeId);
                         }
                     } else {
@@ -3987,63 +4778,114 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                             __FUNCTION__, __LINE__, reprocessingBayerMode);
                         break;
                     }
-
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-                    /* in case of internal frame */
-                    if (m_parameters->getDualCameraMode() == true &&
-                            frame->getFrameType() == FRAME_TYPE_INTERNAL) {
-                        ret = m_captureSelector->manageFrameHoldList(frame, pipeId, false, m_previewFrameFactory->getNodeType(PIPE_VC0));
-                        if (ret != NO_ERROR) {
-                            CLOGE("manageFrameHoldList fail");
-                            return ret;
-                        }
-                    }
-#endif
                 }
             }
         }
 
-        CLOGV("3AA driver-frameCount(%d) HAL-frameCount(%d)",
-                getMetaDmRequestFrameCount((camera2_shot_ext *)buffer.addr[buffer.getMetaPlaneIndex()]),
-                frame->getFrameCount());
+        if (0 <= buffer.index) {
+            CLOGV("3AA driver-frameCount(%d) HAL-frameCount(%d)",
+                    getMetaDmRequestFrameCount((camera2_shot_ext *)buffer.addr[buffer.getMetaPlaneIndex()]),
+                    frame->getFrameCount());
+        }
 
-        if (frame->getRequest(PIPE_3AC) == true) {
-            ret = frame->getDstBuffer(pipeId, &buffer, m_previewFrameFactory->getNodeType(PIPE_3AC));
-            if (ret != NO_ERROR) {
-                CLOGE("getSrcBuffer fail, pipeId(%d), ret(%d)",
-                         pipeId, ret);
-            }
+        if (frame->getRequest(PIPE_3AC) == true
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+            && m_parameters->getUseDNGCapture() == false
+#endif
+            ) {
+            if (entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_3AC)) != ENTITY_BUFFER_STATE_COMPLETE
+#if defined(DEBUG_RAWDUMP_DIRTY_BAYER)
+                    || entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_VC0)) != ENTITY_BUFFER_STATE_COMPLETE
+#endif
+               ) {
+                CLOGW("Skip manageFrameHoldList(frameCount : %d) VC0(%d), 3AC(%d)", frame->getFrameCount()
+                        , entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_VC0))
+                        , entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_3AC)));
 
-            if (buffer.index >= 0) {
-                if (m_parameters->getHighSpeedRecording() == true) {
-                    ret = m_putBuffers(m_bayerBufferMgr, buffer.index);
+                ExynosCameraBufferManager *bufferMgr = NULL;
+#if defined(DEBUG_RAWDUMP_DIRTY_BAYER)
+                ret = frame->getDstBuffer(entity->getPipeId(), &buffer, m_previewFrameFactory->getNodeType(PIPE_VC0));
+                if (ret != NO_ERROR) {
+                    CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)", entity->getPipeId(), ret);
+                    return ret;
+                }
+
+                if (0 <= buffer.index) {
+                    ret = m_getBufferManager(PIPE_VC0, &bufferMgr, DST_BUFFER_DIRECTION);
                     if (ret != NO_ERROR) {
-                        CLOGE("m_putBuffers(m_bayerBufferMgr, %d) fail", buffer.index);
-                        break;
-                    }
-                } else {
-                    if (entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_3AC)) != ENTITY_BUFFER_STATE_ERROR) {
-                        ret = m_captureSelector->manageFrameHoldList(frame, pipeId, false, m_previewFrameFactory->getNodeType(PIPE_3AC));
-                        if (ret != NO_ERROR) {
-                            CLOGE("manageFrameHoldList fail");
-                            return ret;
-                        }
+                        CLOGE("m_getBufferManager(pipeId(%d), DST_BUFFER_DIRECTION) fail", PIPE_VC0);
                     } else {
+                        CLOGW("m_putBuffer the flite buffer(%d)(frameCount : %d)", buffer.index, frame->getFrameCount());
+                        ret = m_putBuffers(bufferMgr, buffer.index);
+                        if (ret != NO_ERROR) {
+                            CLOGE("m_putBuffers(bufferMgr, %d) fail", buffer.index);
+                        }
+                    }
+                }
+#endif
+                ret = frame->getDstBuffer(entity->getPipeId(), &buffer, m_previewFrameFactory->getNodeType(PIPE_3AC));
+                if (ret != NO_ERROR) {
+                    CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)", entity->getPipeId(), ret);
+                    return ret;
+                }
+
+                if (0 <= buffer.index) {
+                    ret = m_getBufferManager(PIPE_3AC, &bufferMgr, DST_BUFFER_DIRECTION);
+                    if (ret != NO_ERROR) {
+                        CLOGE("m_getBufferManager(pipeId(%d), DST_BUFFER_DIRECTION) fail", PIPE_3AC);
+                    } else {
+                        CLOGW("m_putBuffer the bayer buffer(%d)(frameCount : %d)", buffer.index, frame->getFrameCount());
+                        ret = m_putBuffers(bufferMgr, buffer.index);
+                        if (ret != NO_ERROR) {
+                            CLOGE("m_putBuffers(bufferMgr, %d) fail", buffer.index);
+                        }
+                    }
+                }
+            } else {
+                ret = frame->getDstBuffer(pipeId, &buffer, m_previewFrameFactory->getNodeType(PIPE_3AC));
+                if (ret != NO_ERROR) {
+                    CLOGE("getSrcBuffer fail, pipeId(%d), ret(%d)",
+                            pipeId, ret);
+                }
+
+                if (buffer.index >= 0) {
+                    if (m_parameters->getHighSpeedRecording() == true) {
                         ret = m_putBuffers(m_bayerBufferMgr, buffer.index);
                         if (ret != NO_ERROR) {
                             CLOGE("m_putBuffers(m_bayerBufferMgr, %d) fail", buffer.index);
                             break;
                         }
+                    } else {
+                        if (entity->getDstBufState(m_previewFrameFactory->getNodeType(PIPE_3AC)) != ENTITY_BUFFER_STATE_ERROR) {
+#ifdef USE_DUAL_CAMERA
+                            if (m_parameters->getDualCameraMode() == true) {
+                                ret = m_captureSelector->manageSyncFrameHoldList(frame, pipeId, false, m_previewFrameFactory->getNodeType(PIPE_3AC));
+                            } else
+#endif
+                            {
+                                ret = m_captureSelector->manageFrameHoldList(frame, pipeId, false, m_previewFrameFactory->getNodeType(PIPE_3AC));
+                            }
+                            if (ret != NO_ERROR) {
+                                CLOGE("manageFrameHoldList fail");
+                                return ret;
+                            }
+                        } else {
+                            ret = m_putBuffers(m_bayerBufferMgr, buffer.index);
+                            if (ret != NO_ERROR) {
+                                CLOGE("m_putBuffers(m_bayerBufferMgr, %d) fail", buffer.index);
+                                break;
+                            }
+                        }
                     }
                 }
             }
         }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         else {
             /* in case of internal frame */
             if (m_parameters->getDualCameraMode() == true &&
                     frame->getFrameType() == FRAME_TYPE_INTERNAL) {
-                ret = m_captureSelector->manageFrameHoldList(frame, pipeId, false, m_previewFrameFactory->getNodeType(PIPE_3AC));
+                ret = m_captureSelector->manageSyncFrameHoldList(frame, pipeId, false, m_previewFrameFactory->getNodeType(PIPE_3AC));
                 if (ret != NO_ERROR) {
                     CLOGE("manageFrameHoldList fail");
                     return ret;
@@ -4052,14 +4894,88 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
         }
 #endif
 
-        /* check lux for smooth enterance */
         memset(m_meta_shot, 0x00, sizeof(struct camera2_shot_ext));
+
+        /* check lux for smooth enterance */
         frame->getDynamicMeta(m_meta_shot);
         frame->getUserDynamicMeta(m_meta_shot);
+
         m_checkEntranceLux(m_meta_shot);
 
+#ifdef USE_DUAL_CAMERA
+        /* no break */
+        if (m_parameters->getDualCameraMode() == true &&
+                m_parameters->getFlagForceSwitchingOnly() == true) {
+            ret = m_prepareBeforeSync(pipeId, PIPE_SYNC_SWITCHING, frame,
+                    m_previewFrameFactory->getNodeType(PIPE_3AP),
+                    m_previewFrameFactory, m_pipeFrameDoneQ, false, true);
+            if (ret != NO_ERROR) {
+                CLOGE("m_prepareBeforeSync(pipeId(%d/%d), frameCount(%d), dstPos(%d), isReprocessing(%d) fail",
+                        pipeId, PIPE_SYNC_SWITCHING, frame->getFrameCount(),
+                        m_previewFrameFactory->getNodeType(PIPE_MCSC0), false);
+            }
+        }
+#endif
         if (m_parameters->is3aaIspOtf() == false)
             break;
+#ifdef USE_DUAL_CAMERA
+    case PIPE_SYNC_SWITCHING:
+        if (m_parameters->getDualCameraMode() == true) {
+            if (frame->getFrameState() == FRAME_STATE_INVALID ||
+                    frame->getFrameState() == FRAME_STATE_SKIPPED) {
+                CLOGV("pipeId:%d) frame(%d) skipped(%d)",
+                        pipeId, frame->getFrameCount(), frame->getFrameState());
+                frame->setFrameState(FRAME_STATE_COMPLETE);
+            } else {
+                /* if the frame is sync_type_sync, do release slave camera's buffer */
+                if (frame->getSyncType() == SYNC_TYPE_SYNC) {
+                    ExynosCameraBuffer srcBuf2;
+                    ret = frame->getSrcBuffer(PIPE_SYNC_SWITCHING, &srcBuf2, OUTPUT_NODE_2);
+                    if (ret != NO_ERROR || srcBuf2.index < 0) {
+                        CLOGE("getSrcBuffer(frame(%d, %d), index:%d) fail, ret(%d)",
+                                frame->getFrameCount(), frame->getFrameType(),
+                                srcBuf2.index, ret);
+                    } else {
+                        /* put the own buffer to bufMgr */
+                        ExynosCameraBufferManager *bufMgr = (ExynosCameraBufferManager *)srcBuf2.manager;
+                        ret = m_putBuffers(bufMgr, srcBuf2.index);
+                        if (ret < 0)
+                            CLOGE("bufferMgr->putBuffers(%d) fail, ret(%d)", srcBuf2.index, ret);
+                    }
+
+                    /* forcely change the bypass */
+                    frame->setSyncType(SYNC_TYPE_BYPASS);
+                }
+
+                /* push isp pipe */
+                ret = frame->getDstBuffer(PIPE_3AA, &buffer,
+                        m_previewFrameFactory->getNodeType(PIPE_3AP));
+                if (ret != NO_ERROR || buffer.index < 0) {
+                    CLOGE("getDstBuffer(pipeId(%d), frame(%d), buf(%d), node(%d)) failed!! ret(%d)",
+                            pipeId, frame->getFrameCount(), buffer.index,
+                            m_previewFrameFactory->getNodeType(PIPE_3AP), ret);
+                }
+
+                int dstPipeId = PIPE_ISP;
+                ret = frame->setSrcBufferState(dstPipeId, ENTITY_BUFFER_STATE_REQUESTED);
+                if (ret != NO_ERROR) {
+                    CLOGE("pipeId(%d), frame(%d) setDstBufferState(ENTITY_BUFFER_STATE_NOREQ) failed!! ret(%d)",
+                            pipeId, frame->getFrameCount(), ret);
+                }
+
+                ret = m_setSrcBuffer(dstPipeId, frame, &buffer);
+                if (ret != NO_ERROR) {
+                    CLOGE("m_setDstBuffer(pipeId(%d), frame(%d), buf(%d), node(%d)) failed!! ret(%d)",
+                            dstPipeId, frame->getFrameCount(), buffer.index,
+                            m_previewFrameFactory->getNodeType(PIPE_3AP), ret);
+                }
+
+                m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, dstPipeId);
+                m_previewFrameFactory->pushFrameToPipe(frame, dstPipeId);
+            }
+        }
+        break;
+#endif
     case PIPE_ISP:
         /*
         if (entity->getSrcBufState() == ENTITY_BUFFER_STATE_ERROR)
@@ -4133,7 +5049,7 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
             }
         }
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         /* no break */
         if (m_parameters->getDualCameraMode() == true) {
             ret = m_prepareBeforeSync(pipeId, PIPE_SYNC, frame,
@@ -4144,18 +5060,9 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                         pipeId, PIPE_SYNC, frame->getFrameCount(),
                         m_previewFrameFactory->getNodeType(PIPE_MCSC0), false);
             } else {
-                int masterCameraId, slaveCameraId;
-                getDualCameraId(&masterCameraId, &slaveCameraId);
-
                 /* fd detection for slave camera */
                 if (m_cameraId == slaveCameraId) {
-                    if (frame->getSyncType() == SYNC_TYPE_SWITCH &&
-                            frame->getFrameType() != FRAME_TYPE_INTERNAL) {
-                        m_flagHoldFaceDetection = false;
-                        m_handleFaceDetectionFrame(frame, &buffer);
-                    } else {
-                        m_flagHoldFaceDetection = true;
-                    }
+                    m_flagHoldFaceDetection = true;
                 }
             }
             break;
@@ -4242,13 +5149,38 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                 }
             }
 
+#ifdef USE_VRA_GROUP
+            /* MCSC DS : PIPE_MCSC_DS */
+            if (frame->getRequest(PIPE_MCSC_DS) == true) {
+                ret = frame->getDstBuffer(pipeId, &buffer, m_previewFrameFactory->getNodeType(PIPE_MCSC_DS));
+                if (ret != NO_ERROR) {
+                    CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)",
+                             entity->getPipeId(), ret);
+                    return ret;
+                }
+
+                if (buffer.index >= 0) {
+                    ret = m_putBuffers(m_vraBufferMgr, buffer.index);
+                    if (ret < 0)
+                        CLOGE("Preview callback buffer return fail");
+                }
+            }
+
+            if (frame->getRequest(PIPE_VRA) == true) {
+				frame->setRequest(PIPE_VRA, false);
+                ret = frame->setEntityState(PIPE_VRA, ENTITY_STATE_COMPLETE);
+                if (ret < 0) {
+                    CLOGE("setEntityState fail, pipeId(%d), state(%d), ret(%d)",
+                        PIPE_VRA, ENTITY_STATE_COMPLETE, ret);
+                }
+            }
+#endif
             goto entity_state_complete;
         } else {
             int previewPipeId = PIPE_MCSC0;
             int previewCallbackPipeId = PIPE_MCSC1;
             int recordingPipeId = PIPE_MCSC2;
             nsecs_t timeStamp = (nsecs_t)frame->getTimeStamp();
-            entity_buffer_state_t bufferState = ENTITY_BUFFER_STATE_INVALID;
             previewcallbackbuffer.index = -2;
 
             m_parameters->getFrameSkipCount(&m_frameSkipCount);
@@ -4257,8 +5189,11 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                 m_fdFrameSkipCount--;
             }
 
+#ifdef USE_VRA_GROUP
+#else
             /* fd detection */
             m_handleFaceDetectionFrame(frame, &buffer);
+#endif
 
             /* Preview callback : PIPE_MCSC1 */
             if (frame->getRequest(previewCallbackPipeId) == true) {
@@ -4303,7 +5238,7 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                     /* drop preview frame if lcd supported frame rate < scp frame rate */
                     frame->getFpsRange(&minFps, &maxFps);
                     if (dispFps < maxFps) {
-                        ratio = (int)((maxFps * 10 / dispFps) / 10);
+                        ratio = (int)((maxFps * 10 / dispFps) / buffer.batchSize / 10);
 
 #if 0
                         if (maxFps > 60)
@@ -4320,10 +5255,73 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                     }
 
                     memset(m_meta_shot, 0x00, sizeof(struct camera2_shot_ext));
-                    frame->getDynamicMeta(m_meta_shot);
-                    frame->getUserDynamicMeta(m_meta_shot);
+#ifdef SAMSUNG_DUAL_SOLUTION
+                    if (m_parameters->getDualCameraMode() == true) {
+                        UniPlugin_DCVOZ_CAMERAPARAM_t *fusionParam = m_fusionPreviewWrapper->m_getCameraParam();
+                        int fusionIndex = fusionParam->CameraIndex;
+                        int outNode;
+                        bool flagValidFrame = true;
 
-                    m_checkEntranceLux(m_meta_shot);
+                        /* update current Fusion Index */
+                        m_parameters->setMasterCamera(fusionIndex);
+
+                        /* update Fusion param for every frame */
+                        m_parameters->setFusionParam(fusionParam);
+
+                        /* --FORCEWIDE-- : update tele meta for force wide */
+                        if (frame->getSyncType() == SYNC_TYPE_SYNC)
+                            outNode = OUTPUT_NODE_2;
+                        else
+                            outNode = OUTPUT_NODE_1;
+
+                        frame->getDynamicMeta(m_meta_shot, outNode);
+                        frame->getUserDynamicMeta(m_meta_shot, outNode);
+
+                        if (frame->getFrameState() == FRAME_STATE_INVALID ||
+                                frame->getFrameState() == FRAME_STATE_SKIPPED ||
+                                frame->getFrameType() == FRAME_TYPE_INTERNAL) {
+                            flagValidFrame = false;
+                        }
+
+                        if (frame->getSyncType() == SYNC_TYPE_SWITCH ||
+                            (frame->getSyncType() == SYNC_TYPE_SYNC && m_parameters->getForceWide())) {
+                            /* update force wide condition only for tele cam */
+                            m_parameters->setForceWideCond(flagValidFrame, m_meta_shot);
+                        }
+                        /* --FORCEWIDE-- */
+
+                        /* Update the fusion capture condition */
+                        if (frame->getSyncType() == SYNC_TYPE_SYNC) {
+                            /* Get wide camera meta */
+                            memset(m_tempshot, 0x00, sizeof(struct camera2_shot_ext));
+                            frame->getUserDynamicMeta(m_tempshot, OUTPUT_NODE_1);
+                            m_parameters->checkFusionCaptureMode(getCameraIdInternal(), m_tempshot, m_meta_shot);
+                        }
+
+                        if (frame->getSyncType() != SYNC_TYPE_SYNC)
+                            outNode = OUTPUT_NODE_1;
+                        else {
+                            /* Decide meta according to displayed preview */
+                            if (fusionIndex == UNI_PLUGIN_CAMERA_TYPE_WIDE)
+                                outNode = OUTPUT_NODE_1;
+                            else
+                                outNode = OUTPUT_NODE_2;
+
+                            frame->getDynamicMeta(m_meta_shot, outNode);
+                            frame->getUserDynamicMeta(m_meta_shot, outNode);
+                        }
+                    } else
+#endif
+                    {
+                        /* update current Fusion Index */
+                        m_parameters->setMasterCamera(m_cameraId);
+
+                        /* check lux for smooth enterance */
+                        frame->getDynamicMeta(m_meta_shot);
+                        frame->getUserDynamicMeta(m_meta_shot);
+
+                        m_checkEntranceLux(m_meta_shot);
+                    }
 #ifdef SAMSUNG_LBP
                     if (m_parameters->getUsePureBayerReprocessing() == true) {
                         camera2_shot_ext *shot_ext = NULL;
@@ -4444,8 +5442,8 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                 || m_parameters->getObjectTrackingGet() == true)
                             && m_OTstart == OBJECT_TRACKING_INIT
                             && m_OTisTouchAreaGet == true) {
-                        int HwPreviewW = 0, HwPreviewH = 0;
-                        m_parameters->getHwPreviewSize(&HwPreviewW, &HwPreviewH);
+                        int PreviewW = 0, PreviewH = 0;
+                        m_parameters->getPreviewSize(&PreviewW, &PreviewH);
 
                         UniPluginBufferData_t bufferData;
                         memset(&bufferData, 0, sizeof(UniPluginBufferData_t));
@@ -4453,8 +5451,8 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                         bufferData.InBuffY = buffer.addr[0];
                         bufferData.InBuffU = buffer.addr[1];
 
-                        bufferData.InWidth = HwPreviewW;
-                        bufferData.InHeight = HwPreviewH;
+                        bufferData.InWidth = PreviewW;
+                        bufferData.InHeight = PreviewH;
                         bufferData.InFormat = UNI_PLUGIN_FORMAT_NV21;
                         ret = uni_plugin_set(m_OTpluginHandle,
                                 OBJECT_TRACKING_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &bufferData);
@@ -4499,6 +5497,20 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                         oldrect.x2 = m_OTpredictedData.FocusROIRight;
                         oldrect.y1 = m_OTpredictedData.FocusROITop;
                         oldrect.y2 = m_OTpredictedData.FocusROIBottom;
+
+#ifdef SAMSUNG_DUAL_SOLUTION
+                        if (m_parameters->getDualCameraMode() == true) {
+                            UniPlugin_DCVOZ_CAMERAPARAM_t *fusionParam;
+                            fusionParam = m_parameters->getFusionParam();
+                            if (fusionParam) {
+                                oldrect.x1 -= fusionParam->PreviewImageShiftX;
+                                oldrect.y1 -= fusionParam->PreviewImageShiftY;
+                                oldrect.x2 -= fusionParam->PreviewImageShiftX;
+                                oldrect.y2 -= fusionParam->PreviewImageShiftY;
+                            }
+                        }
+#endif
+
                         m_parameters->getHwBayerCropRegion(&cropRegionRect.w, &cropRegionRect.h, &cropRegionRect.x, &cropRegionRect.y);
                         newRect = convertingAndroidArea2HWAreaBcropOut(&oldrect, &cropRegionRect);
                         m_OTpredictedData.FocusROILeft = newRect.x1;
@@ -4508,6 +5520,13 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
 
                         ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
                         ret = autoFocusMgr->setObjectTrackingAreas(&m_OTpredictedData);
+#ifdef SAMSUNG_DUAL_SOLUTION
+                        if (m_parameters->getDualCameraMode() == true &&
+                            (frame->getSyncType() == SYNC_TYPE_SYNC || frame->getSyncType() == SYNC_TYPE_SWITCH)) {
+                            m_parameters->dualNotify(DUAL_CAMERA_NOTIFY_SET_OBJECT_TRACKING_FOCUS_AREA,
+                                                    false, slaveCameraId, 0, (void*)&m_OTpredictedData);
+                        }
+#endif
                         if (ret == false) {
                             CLOGE("[OBTR] setObjectTrackingAreas failed!!");
                         }
@@ -4593,12 +5612,13 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
 
                         swVDIS_BufIndex = -1;
                         int swVDIS_IndexCount = m_swVDIS_NextOutBufIdx;
-                        m_swVDIS_TSIndexCount = (m_swVDIS_FrameNum % NUM_VDIS_BUFFERS);
                         ret = m_swVDIS_BufferMgr->getBuffer(&swVDIS_BufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL,
                                 &m_swVDIS_OutBuf[swVDIS_IndexCount]);
 
                         if (ret < 0) {
                             CLOGE("m_swVDIS_BufferMgr->getBuffer fail, ret(%d)", ret);
+                        } else {
+                            m_swVDIS_OutBufIndex[swVDIS_BufIndex] = swVDIS_IndexCount;
                         }
 
                         nsecs_t swVDIS_timeStamp = (nsecs_t)frame->getTimeStamp();
@@ -4606,6 +5626,7 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                         int swVDIS_Lux = m_meta_shot->shot.udm.ae.vendorSpecific[5] / 256;
                         int swVDIS_ZoomLevel = m_parameters->getZoomLevel();
                         float swVDIS_ExposureValue = (int32_t)m_meta_shot->shot.udm.ae.vendorSpecific[4] / 256.0;
+                        int swVDIS_ExposureTime = (int32_t)m_meta_shot->shot.dm.sensor.exposureTime;
 
                         int swVDIS_num = 0;
                         swVDIS_num = NUM_OF_DETECTED_FACES;
@@ -4621,35 +5642,31 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                             }
                         }
 
-                        m_swVDIS_process(&buffer, swVDIS_BufIndex, swVDIS_timeStamp, swVDIS_timeStampBoot,
-                                    swVDIS_Lux, swVDIS_ZoomLevel, swVDIS_ExposureValue, m_swVDIS_FaceData);
-                        m_swVDIS_StoreVDISOutInfo();
-
 #ifdef SAMSUNG_OIS_VDIS
-                        if (m_parameters->getOIS() == OPTICAL_STABILIZATION_MODE_VDIS) {
-                            UNI_PLUGIN_OIS_MODE mode = m_swVDIS_getOISmode();
-                            uint32_t coef = 0;
-                            if(mode == UNI_PLUGIN_OIS_MODE_CENTERING)
-                                coef = 0xFFFF;
-                            else
-                                coef = 0x1;
-
-                            if (m_OISvdisMode != mode) {
-                                CLOGD("OIS VDIS coef: %d", coef);
-                                m_OISvdisMode = mode;
-                            }
-                            m_parameters->setOISCoef(coef);
-                        }
+                        m_parameters->setSWVdisPreviewFrameExposureTime(swVDIS_ExposureTime);
+                        uint32_t oisGain = m_parameters->getOISGain();
+                        m_parameters->setOISCoef(oisGain);
 #endif
+                        m_swVDIS_process(&buffer, swVDIS_BufIndex, swVDIS_timeStamp, swVDIS_timeStampBoot,
+                                    swVDIS_Lux, swVDIS_ZoomLevel, swVDIS_ExposureValue, oisGain, m_swVDIS_FaceData, swVDIS_ExposureTime);
+                        m_swVDIS_GetPreviewVDISInfo();
                     }
+#ifdef SAMSUNG_OIS_VDIS
+                    else {
+                        int swVDIS_ExposureTime = (int32_t)m_meta_shot->shot.dm.sensor.exposureTime;
+                        m_parameters->setSWVdisPreviewFrameExposureTime(swVDIS_ExposureTime);
+                    }
+#endif
 #endif
 
 #ifdef SAMSUNG_HYPER_MOTION
                     if (m_hyperMotionModeGet() == true) {
                         hyperMotion_BufIndex = -1;
                         int hyperMotion_IndexCount = (m_hyperMotion_FrameNum % NUM_HYPERMOTION_BUFFERS);
-                        ret = m_hyperMotion_BufferMgr->getBuffer(&hyperMotion_BufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL,
-                                                                &m_hyperMotion_OutBuf[hyperMotion_IndexCount]);
+                        if (m_hyperMotion_BufferMgr!= NULL) {
+                            ret = m_hyperMotion_BufferMgr->getBuffer(&hyperMotion_BufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL,
+                                                                    &m_hyperMotion_OutBuf[hyperMotion_IndexCount]);
+                        }
 
                         if (ret < 0) {
                             CLOGE("m_hyperMotion_BufferMgr->getBuffer fail, ret(%d)", ret);
@@ -4659,10 +5676,65 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                             int hyperMotion_Lux = m_meta_shot->shot.udm.ae.vendorSpecific[5] / 256;
                             int hyperMotion_ZoomLevel = m_parameters->getZoomLevel();
                             float hyperMotion_ExposureValue = (int32_t)m_meta_shot->shot.udm.ae.vendorSpecific[4] / 256.0;
+                            int hyperMotion_ExposureTime = (int32_t)m_meta_shot->shot.dm.sensor.exposureTime;
+                            int hyperMotion_Ori = m_parameters->getDeviceOrientation();
+                            int hm_faceCnt = 0;
+
+                            memset(m_swHM_fd_dm, 0x00, sizeof(struct camera2_dm));
+                            if (frame->getDynamicMeta(m_swHM_fd_dm) != NO_ERROR) {
+                                CLOGE("ERR(%s[%d]) meta_shot_ext is null", __FUNCTION__, __LINE__);
+                            }
+                            memset(m_swHM_FaceData, 0x00, sizeof(swHM_FaceData_t));
+
+                            for (int i = 0; i < 10; i++) {//face Detection is able to 10.
+                                if (m_swHM_fd_dm->stats.faceIds[i]) {
+                                    m_swHM_FaceData->FaceRect[i].left = m_swHM_fd_dm->stats.faceRectangles[i][0];
+                                    m_swHM_FaceData->FaceRect[i].top = m_swHM_fd_dm->stats.faceRectangles[i][1];
+                                    m_swHM_FaceData->FaceRect[i].right = m_swHM_fd_dm->stats.faceRectangles[i][2];
+                                    m_swHM_FaceData->FaceRect[i].bottom = m_swHM_fd_dm->stats.faceRectangles[i][3];
+                                    m_swHM_FaceData->FaceNum++;
+                                    hm_faceCnt++;
+                                }
+                            }
 
                             m_hyperMotion_process(&buffer, hyperMotion_IndexCount, hyperMotion_timeStamp, hyperMotion_timeStampBoot,
-                                        hyperMotion_Lux, hyperMotion_ZoomLevel, hyperMotion_ExposureValue);
+                                        hyperMotion_Lux, hyperMotion_ZoomLevel, hyperMotion_ExposureValue, hyperMotion_ExposureTime,
+                                        m_swHM_FaceData, m_parameters->getDeviceOrientation());
                         }
+                    }
+#endif
+
+#ifdef SAMSUNG_STR_PREVIEW
+                    if (m_parameters->checkSTRPreviewMode()) {
+                        ret = m_processSTRPreview(buffer.addr[0], buffer.addr[1], m_meta_shot);
+                        if (ret == NO_ERROR) {
+                            int hwPreviewFormat = m_parameters->getHwPreviewFormat();
+                            int planeCount = getYuvPlaneCount(hwPreviewFormat);
+                            /* TODO : have to consider all fmt(planes) and stride */
+                            for (int plane = 0; plane < planeCount; plane++) {
+                                if (m_ionClient >= 0)
+#ifdef USE_LIB_ION_LEGACY
+                                    ion_sync_fd(m_ionClient, buffer.fd[plane]);
+#else
+                                    exynos_ion_sync_fd(m_ionClient, buffer.fd[plane]);
+#endif
+                            }
+                        }
+                    }
+#endif
+
+#ifdef SUPPORT_DEPTH_MAP
+#ifdef SAMSUNG_FOCUS_PEAKING
+                    if (m_parameters->m_getFocusPeakingMode()
+                        && m_parameters->getFocusMode() == FOCUS_MODE_MANUAL) {
+                        m_processFocusPeaking(buffer.addr[0], buffer.addr[1], frame);
+                    }
+#endif
+#endif
+
+#ifdef SAMSUNG_IDDQD
+                    if (m_parameters->checkIDDQDMode()) {
+                        m_processIDDQD(buffer.addr[0], buffer.addr[1], buffer.size[0], m_meta_shot);
                     }
 #endif
 
@@ -4673,6 +5745,17 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                         }
 #ifdef SUPPORT_SW_VDIS
                         if (m_swVDIS_Mode) {
+                            int VDISOutBufIndex = m_swVDIS_GetVDISOutInfo(&timeStamp);
+                            if (VDISOutBufIndex >= 0) {
+                                ret = m_putBuffers(m_swVDIS_BufferMgr, VDISOutBufIndex);
+                                if (ret != NO_ERROR) {
+                                    CLOGE("ERR(%s[%d]):[F%d B%d]Failed to return SW_VDIS buffer. ret %d",
+                                                                     __FUNCTION__, __LINE__,
+                                                                      frame->getFrameCount(),
+                                                                      VDISOutBufIndex,
+                                                                      ret);
+                                }
+                            }
                             if (m_frameSkipCount == 1) {
                                 for (int i = 0; i < m_sw_VDIS_OutBufferNum; i++) {
                                     ret = m_swVDIS_BufferMgr->cancelBuffer(i);
@@ -4702,6 +5785,15 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
 
                         ExynosCameraFrameSP_sptr_t previewFrame = NULL;
                         previewFrame = m_previewFrameFactory->createNewFrameOnlyOnePipe(previewPipeId, frame->getFrameCount());
+                        if (previewFrame == NULL) {
+                            CLOGE("[F%d]Failed to createFrame previewFrame", frame->getFrameCount());
+                            if (buffer.index >= 0) {
+                                ret = m_scpBufferMgr->cancelBuffer(buffer.index, true);
+                                if (ret != NO_ERROR)
+                                    CLOGE("Preview buffer return fail");
+                            }
+                            goto entity_state_complete;
+                        }
                         m_copyMetaFrameToFrame(frame, previewFrame, true, true);
                         previewFrame->setDstBuffer(previewPipeId, buffer);
 
@@ -4714,6 +5806,10 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
 
                         int previewBufferCount = m_parameters->getPreviewBufferCount();
                         int sizeOfPreviewQ = m_previewQ->getSizeOfProcessQ();
+
+#ifdef TIME_LOGGER_PREVIEW_ENABLE
+                        TIME_LOGGER_UPDATE(m_cameraId, previewFrame->getFrameCount(), PIPE_MCSC0, INTERVAL, PREVIEW_TRIGGER, true);
+#endif
                         if (m_previewThread->isRunning() == true
                             && ((previewBufferCount == NUM_PREVIEW_BUFFERS + NUM_PREVIEW_SPARE_BUFFERS && sizeOfPreviewQ >= 2)
                                 || (previewBufferCount == NUM_PREVIEW_BUFFERS && sizeOfPreviewQ >= 1))) {
@@ -4727,6 +5823,9 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                         m_previewQ->getSizeOfProcessQ(),
                                         m_parameters->getPreviewBufferCount());
 
+#ifdef TIME_LOGGER_PREVIEW_ENABLE
+                                TIME_LOGGER_UPDATE(m_cameraId, previewFrame->getFrameCount(), PIPE_MCSC0, CUMULATIVE_CNT, PREVIEW_TRIGGER, true);
+#endif
                                 if (buffer.index >= 0) {
                                     ret = m_scpBufferMgr->cancelBuffer(buffer.index, true);
                                     if (ret != NO_ERROR)
@@ -4749,7 +5848,7 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                             if (m_swVDIS_Mode == true) {
                                 if (m_parameters->isSWVdisOnPreview() == true) {
                                     int sizeOfPreviewDelayQ = m_previewDelayQ->getSizeOfProcessQ();
-                                    if (sizeOfPreviewDelayQ > 0) {
+                                    if (sizeOfPreviewDelayQ >= NUM_VDIS_PREVIEW_DELAY) {
                                         m_previewDelayQ->pushProcessQ(&previewFrame);
                                         m_previewDelayQ->popProcessQ(&previewFrame);
 #ifdef USE_MCSC1_FOR_PREVIEWCALLBACK
@@ -4779,19 +5878,20 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                     CLOGV("push frame to previewQ");
                                     m_previewQ->pushProcessQ(&previewFrame);
                                     m_longExposureCaptureState = LONG_EXPOSURE_PREVIEW;
+                                    m_preLongExposureTime = 0;
                                 } else if (m_parameters->getCaptureExposureTime() > 0
                                            && (m_meta_shot->shot.dm.sensor.exposureTime / 1000) > CAMERA_PREVIEW_EXPOSURE_TIME_LIMIT) {
                                     CLOGD("manual exposure capture mode. (%lld), fcount(%d)",
                                              (long long)m_meta_shot->shot.dm.sensor.exposureTime,
                                             m_meta_shot->shot.dm.request.frameCount);
-    
+
                                     if (buffer.index >= 0) {
                                         /* only apply in the Full OTF of Exynos74xx. */
                                         ret = m_scpBufferMgr->cancelBuffer(buffer.index, true);
                                         if (ret != NO_ERROR)
                                             CLOGE("SCP buffer return fail");
                                     }
-    
+
                                     if (previewcallbackbuffer.index >= 0) {
                                         ret = m_putBuffers(m_previewCallbackBufferMgr, previewcallbackbuffer.index);
                                         if (ret != NO_ERROR) {
@@ -4807,19 +5907,19 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                     unsigned int OISFcount = 0;
                                     unsigned int fliteFcount = 0;
                                     bool OISCapture_activated = false;
-    
+
                                     m_sCaptureMgr = m_exynosCameraActivityControl->getSpecialCaptureMgr();
                                     OISFcount = m_sCaptureMgr->getOISCaptureFcount();
-    
+
                                     if (m_longExposureCaptureState == LONG_EXPOSURE_CAPTURING) {
                                         CLOGD("manual exposure capture mode end. (%lld), fcount(%d)",
                                              (long long)m_meta_shot->shot.dm.sensor.exposureTime,
                                             m_meta_shot->shot.dm.request.frameCount);
                                         m_sCaptureMgr->resetOISCaptureFcount();
                                     }
-    
+
                                     fliteFcount = m_meta_shot->shot.dm.request.frameCount;
-    
+
                                     if (OISFcount) {
                                         if (OISFcount == fliteFcount
 #ifdef SAMSUNG_LLS_DEBLUR
@@ -4840,21 +5940,21 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                         }
 #endif
                                     }
-    
+
                                     if((m_parameters->getSeriesShotCount() == 0
 #ifdef LLS_REPROCESSING
                                         || m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS
 #endif
                                        ) && OISCapture_activated == true) {
                                         CLOGD("OIS capture mode. Skip frame. FliteFrameCount(%d) ",fliteFcount);
-    
+
                                         if (buffer.index >= 0) {
                                             /* only apply in the Full OTF of Exynos74xx. */
                                             ret = m_scpBufferMgr->cancelBuffer(buffer.index, true);
                                             if (ret < 0)
                                                 CLOGE("SCP buffer return fail");
                                         }
-    
+
                                         if (previewcallbackbuffer.index >= 0) {
                                             ret = m_putBuffers(m_previewCallbackBufferMgr, previewcallbackbuffer.index);
                                             if (ret != NO_ERROR) {
@@ -4868,9 +5968,13 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                         CLOGV("push frame to previewQ");
                                         m_previewQ->pushProcessQ(&previewFrame);
                                     }
-    
+
                                     if (m_stopLongExposure && m_longExposureCaptureState == LONG_EXPOSURE_CAPTURING) {
                                         m_longExposureCaptureState = LONG_EXPOSURE_CANCEL_NOTI;
+                                        m_preLongExposureTime = 0;
+                                    } else if (m_longExposureCaptureState == LONG_EXPOSURE_CAPTURING) {
+                                        m_longExposureCaptureState = LONG_EXPOSURE_PREVIEW;
+                                        m_preLongExposureTime = 0;
                                     } else {
                                         m_longExposureCaptureState = LONG_EXPOSURE_PREVIEW;
                                     }
@@ -4880,10 +5984,10 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                             /* Recording : case of adaptive CSC recording */
 #ifdef SUPPORT_SW_VDIS
                             if (m_swVDIS_Mode == true) {
-                                int VDISOutBufIndex = m_swVDIS_OutQIndex;
+                                nsecs_t timeStamp;
+                                int VDISOutBufIndex = m_swVDIS_GetVDISOutInfo(&timeStamp);
+                                int VDIS_OutVDISQIndex = -1;
                                 if (VDISOutBufIndex >= 0) {
-                                    nsecs_t timeStamp = m_swVDIS_timeStamp[m_swVDIS_TSIndex];
-
                                     if (m_getRecordingEnabled() == true
                                         && m_parameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME)
                                         && m_swVDIS_FrameNum > m_swVDIS_Delay) {
@@ -4896,6 +6000,7 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                             if (m_parameters->doCscRecording() == true) {
                                                 /* FHD to HD down scale */
                                                 int bufIndex = -2;
+                                                VDIS_OutVDISQIndex = m_swVDIS_OutBufIndex[VDISOutBufIndex];
                                                 ExynosCameraBuffer recordingBuffer;
                                                 ret = m_recordingBufferMgr->getBuffer(&bufIndex,
                                                         EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &recordingBuffer);
@@ -4915,7 +6020,7 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                                         m_recordingBufferMgr->printBufferQState();
                                                     }
 
-                                                    ret = m_doPreviewToRecordingFunc(PIPE_GSC_VIDEO, m_swVDIS_OutBuf[m_swVDIS_OutQIndex], recordingBuffer, timeStamp);
+                                                    ret = m_doPreviewToRecordingFunc(PIPE_GSC_VIDEO, m_swVDIS_OutBuf[VDIS_OutVDISQIndex], recordingBuffer, timeStamp);
                                                     if (ret < 0 ) {
                                                         CLOGW("recordingCallback Skip");
                                                     }
@@ -4923,22 +6028,40 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                                     if (VDISOutBufIndex >= 0) {
                                                         m_putBuffers(m_swVDIS_BufferMgr, VDISOutBufIndex);
                                                     }
-                                                    m_recordingTimeStamp[recordingBuffer.getSingleBufferIndex()] = timeStamp;
+                                                    m_recordingTimeStamp[recordingBuffer.index] = timeStamp;
                                                 }
                                             } else {
                                                 ExynosCameraFrameSP_sptr_t adaptiveCscRecordingFrame = NULL;
                                                 adaptiveCscRecordingFrame = m_previewFrameFactory->createNewFrameOnlyOnePipe(recordingPipeId, frame->getFrameCount());
+                                                if (adaptiveCscRecordingFrame != NULL) {
+                                                    VDIS_OutVDISQIndex = m_swVDIS_OutBufIndex[VDISOutBufIndex];
 
-                                                m_recordingTimeStamp[m_swVDIS_OutBuf[m_swVDIS_OutQIndex].index] = timeStamp;
-                                                adaptiveCscRecordingFrame->setDstBuffer(recordingPipeId, m_swVDIS_OutBuf[m_swVDIS_OutQIndex]);
+                                                    m_recordingTimeStamp[m_swVDIS_OutBuf[VDIS_OutVDISQIndex].index] = timeStamp;
+                                                    adaptiveCscRecordingFrame->setDstBuffer(recordingPipeId, m_swVDIS_OutBuf[VDIS_OutVDISQIndex]);
 
-                                                ret = m_insertFrameToList(&m_recordingProcessList, adaptiveCscRecordingFrame, &m_recordingProcessListLock);
-                                                if (ret != NO_ERROR) {
-                                                    CLOGE("[F%d]Failed to insert frame into m_recordingProcessList",
-                                                            adaptiveCscRecordingFrame->getFrameCount());
+                                                    ret = m_insertFrameToList(&m_recordingProcessList, adaptiveCscRecordingFrame, &m_recordingProcessListLock);
+                                                    if (ret != NO_ERROR) {
+                                                        CLOGE("[F%d]Failed to insert frame into m_recordingProcessList",
+                                                                adaptiveCscRecordingFrame->getFrameCount());
+                                                    }
+
+                                                    m_recordingQ->pushProcessQ(&adaptiveCscRecordingFrame);
+                                                } else {
+                                                    CLOGW("WRR(%s[%d]):[F%d]Failed to createNewFrame for adaptiveCscRecording. Skip.",
+                                                            __FUNCTION__, __LINE__,
+                                                            frame->getFrameCount());
+
+                                                    if (VDISOutBufIndex >= 0) {
+                                                        ret = m_putBuffers(m_swVDIS_BufferMgr, VDISOutBufIndex);
+                                                        if (ret != NO_ERROR) {
+                                                            CLOGE("ERR(%s[%d]):[F%d B%d]Failed to return SW_VDIS buffer. ret %d",
+                                                                    __FUNCTION__, __LINE__,
+                                                                    frame->getFrameCount(),
+                                                                    VDISOutBufIndex,
+                                                                    ret);
+                                                        }
+                                                    }
                                                 }
-
-                                                m_recordingQ->pushProcessQ(&adaptiveCscRecordingFrame);
                                             }
                                         }
                                     } else {
@@ -4953,7 +6076,7 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
 #ifdef SAMSUNG_HYPER_MOTION
                             if (m_hyperMotionModeGet() == true) {
                                 if (hyperMotion_BufIndex >= 0) {
-                                    int hyperMotionOutBufIndex = m_hyperMotion_OutBuf[m_hyperMotion_OutQIndex].index();
+                                    int hyperMotionOutBufIndex = m_hyperMotion_OutBuf[m_hyperMotion_OutQIndex].index;
                                     nsecs_t timeStamp = m_hyperMotionTimeStampGet();
 
                                     if (m_getRecordingEnabled() == true
@@ -4968,17 +6091,33 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                             if (m_hyperMotionCanSendFrame() == true) {
                                                 ExynosCameraFrameSP_sptr_t adaptiveCscRecordingFrame = NULL;
                                                 adaptiveCscRecordingFrame = m_previewFrameFactory->createNewFrameOnlyOnePipe(recordingPipeId, frame->getFrameCount());
+                                                if (adaptiveCscRecordingFrame != NULL) {
+                                                    m_recordingTimeStamp[hyperMotionOutBufIndex] = timeStamp;
+                                                    adaptiveCscRecordingFrame->setDstBuffer(recordingPipeId, m_hyperMotion_OutBuf[m_hyperMotion_OutQIndex]);
 
-                                                m_recordingTimeStamp[hyperMotionOutBufIndex] = timeStamp;
-                                                adaptiveCscRecordingFrame->setDstBuffer(recordingPipeId, m_hyperMotion_OutBuf[m_hyperMotion_OutQIndex]);
+                                                    ret = m_insertFrameToList(&m_recordingProcessList, adaptiveCscRecordingFrame, &m_recordingProcessListLock);
+                                                    if (ret != NO_ERROR) {
+                                                        CLOGE("[F%d]Failed to insert frame into m_recordingProcessList",
+                                                                adaptiveCscRecordingFrame->getFrameCount());
+                                                    }
 
-                                                ret = m_insertFrameToList(&m_recordingProcessList, adaptiveCscRecordingFrame, &m_recordingProcessListLock);
-                                                if (ret != NO_ERROR) {
-                                                    CLOGE("[F%d]Failed to insert frame into m_recordingProcessList",
-                                                            adaptiveCscRecordingFrame->getFrameCount());
+                                                    m_recordingQ->pushProcessQ(&adaptiveCscRecordingFrame);
+                                                } else {
+                                                    CLOGW("WARN(%s[%d]):[F%d]Failed to createNewFrame for adaptiveCscRecording. Skip.",
+                                                            __FUNCTION__, __LINE__,
+                                                            frame->getFrameCount());
+
+                                                    if (hyperMotionOutBufIndex >= 0) {
+                                                        ret = m_putBuffers(m_hyperMotion_BufferMgr, hyperMotionOutBufIndex);
+                                                        if (ret != NO_ERROR) {
+                                                            CLOGE("ERR(%s[%d]):[F%d B%d]Failed to return hyperMotionOutBuffer. ret %d",
+                                                                    __FUNCTION__, __LINE__,
+                                                                    frame->getFrameCount(),
+                                                                    hyperMotionOutBufIndex,
+                                                                    ret);
+                                                        }
+                                                    }
                                                 }
-
-                                                m_recordingQ->pushProcessQ(&adaptiveCscRecordingFrame);
                                             } else {
                                                 ret = m_putBuffers(m_hyperMotion_BufferMgr, hyperMotionOutBufIndex);
                                                 if (ret < 0) {
@@ -5006,20 +6145,25 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                                         ExynosCameraFrameSP_sptr_t adaptiveCscRecordingFrame = NULL;
 
                                         adaptiveCscRecordingFrame = m_previewFrameFactory->createNewFrameOnlyOnePipe(recordingPipeId, frame->getFrameCount());
+                                        if (adaptiveCscRecordingFrame != NULL) {
+                                            m_recordingTimeStamp[buffer.index] = timeStamp;
+                                            adaptiveCscRecordingFrame->setDstBuffer(recordingPipeId, buffer);
 
-                                        m_recordingTimeStamp[buffer.index] = timeStamp;
-                                        adaptiveCscRecordingFrame->setDstBuffer(recordingPipeId, buffer);
+                                            ret = m_insertFrameToList(&m_recordingProcessList, adaptiveCscRecordingFrame, &m_recordingProcessListLock);
+                                            if (ret != NO_ERROR) {
+                                                CLOGE("[F%d]Failed to insert frame into m_recordingProcessList",
+                                                        adaptiveCscRecordingFrame->getFrameCount());
+                                            }
 
-                                        ret = m_insertFrameToList(&m_recordingProcessList, adaptiveCscRecordingFrame, &m_recordingProcessListLock);
-                                        if (ret != NO_ERROR) {
-                                            CLOGE("[F%d]Failed to insert frame into m_recordingProcessList",
-                                                    adaptiveCscRecordingFrame->getFrameCount());
+                                            m_recordingQ->pushProcessQ(&adaptiveCscRecordingFrame);
+                                        } else {
+                                            CLOGW("WARN(%s[%d]):[F%d]Failed to createNewFrame for adaptiveCscRecording. Skip",
+                                                    __FUNCTION__, __LINE__,
+                                                    frame->getFrameCount());
                                         }
-
-                                        m_recordingQ->pushProcessQ(&adaptiveCscRecordingFrame);
                                     }
                                 }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
                                 if (m_getRecordingEnabled() == true &&
                                         m_parameters->msgTypeEnabled(CAMERA_MSG_VIDEO_FRAME) &&
                                         m_parameters->getDualCameraMode() == true &&
@@ -5111,17 +6255,31 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                             } else {
                                 ExynosCameraFrameSP_sptr_t recordingFrame = NULL;
                                 recordingFrame = m_previewFrameFactory->createNewFrameOnlyOnePipe(recordingPipeId, frame->getFrameCount());
+                                if (recordingFrame != NULL) {
+                                    m_recordingTimeStamp[buffer.index] = timeStamp;
+                                    recordingFrame->setDstBuffer(recordingPipeId, buffer);
 
-                                m_recordingTimeStamp[buffer.index] = timeStamp;
-                                recordingFrame->setDstBuffer(recordingPipeId, buffer);
+                                    ret = m_insertFrameToList(&m_recordingProcessList, recordingFrame, &m_recordingProcessListLock);
+                                    if (ret != NO_ERROR) {
+                                        CLOGE("[F%d]Failed to insert frame into m_recordingProcessList",
+                                                recordingFrame->getFrameCount());
+                                    }
 
-                                ret = m_insertFrameToList(&m_recordingProcessList, recordingFrame, &m_recordingProcessListLock);
-                                if (ret != NO_ERROR) {
-                                    CLOGE("[F%d]Failed to insert frame into m_recordingProcessList",
-                                            recordingFrame->getFrameCount());
+                                    m_recordingQ->pushProcessQ(&recordingFrame);
+                                } else {
+                                    CLOGW("WARN(%s[%d]):[F%d]Failed to createNewFrame for recording. Skip recording.",
+                                            __FUNCTION__, __LINE__,
+                                            frame->getFrameCount());
+
+                                    if (buffer.index >= 0) {
+                                        ret = m_putBuffers(m_recordingBufferMgr, buffer.index);
+                                        if (ret != NO_ERROR) {
+                                            CLOGE("ERR(%s[%d]):[F%d B%d]Recording buffer return fail",
+                                                    __FUNCTION__, __LINE__,
+                                                    frame->getFrameCount(), buffer.index);
+                                        }
+                                    }
                                 }
-
-                                m_recordingQ->pushProcessQ(&recordingFrame);
                             }
                         } else {
                             if (buffer.index >= 0) {
@@ -5148,6 +6306,69 @@ status_t ExynosCamera::m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame)
                     /* m_previewFrameFactory->dump(); */
                 }
             }
+
+#ifdef USE_VRA_GROUP
+            if (m_parameters->isMcscVraOtf() == false) {
+                if (frame->getRequest(PIPE_MCSC_DS) == true) {
+                    /* Send the Yuv buffer to VRA Pipe */
+                    ret = frame->getDstBuffer(entity->getPipeId(), &buffer, m_previewFrameFactory->getNodeType(PIPE_MCSC_DS));
+                    if (ret < 0) {
+                        CLOGE("getDstBuffer fail, framecount(%d) pipeId(%d), ret(%d)",
+                                frame->getFrameCount(), entity->getPipeId(), ret);
+                    }
+
+                    if (buffer.index < 0) {
+                        CLOGE("Invalid buffer index(%d), framecount(%d), pipeId(%d)",
+                                buffer.index, frame->getFrameCount(), entity->getPipeId());
+                    }
+
+                    ret = m_setupEntity(PIPE_VRA, frame, &buffer, NULL);
+                    if (ret != NO_ERROR) {
+                        CLOGE("m_setupEntity failed, framecount(%d) pipeId(%d), ret(%d)", frame->getFrameCount(), PIPE_VRA, ret);
+                    }
+                    m_previewFrameFactory->pushFrameToPipe(frame, PIPE_VRA);
+                } else {
+                    if (frame->getRequest(PIPE_VRA) == true) {
+                        frame->setRequest(PIPE_VRA, false);
+                        ret = frame->setEntityState(PIPE_VRA, ENTITY_STATE_COMPLETE);
+                        if (ret < 0) {
+                            CLOGE("setEntityState fail, pipeId(%d), state(%d), ret(%d)",
+                                PIPE_VRA, ENTITY_STATE_COMPLETE, ret);
+                        }
+                    }
+                }
+            }
+        }
+        break;
+    case PIPE_VRA:
+        if (entity->getPipeId() == PIPE_VRA) {
+            if (frame->getRequest(PIPE_VRA)) {
+                ret = frame->getSrcBuffer(entity->getPipeId(), &buffer);
+                if (ret != NO_ERROR) {
+                    CLOGE("Failed to getSrcBuffer. pipeId %d ret %d",
+                            entity->getPipeId(), ret);
+                }
+
+                ret = frame->getSrcBufferState(entity->getPipeId(), &bufferState);
+                if (ret < 0) {
+                    CLOGE("getSrcBufferState fail, pipeId(%d), ret(%d)", entity->getPipeId(), ret);
+                    return ret;
+                }
+
+                if (bufferState == ENTITY_BUFFER_STATE_ERROR) {
+                    CLOGE("Src buffer state is error index(%d), framecount(%d), pipeId(%d)",
+                        buffer.index, frame->getFrameCount(), entity->getPipeId());
+                }
+
+                if (buffer.index >= 0) {
+                    ret = m_putBuffers(m_vraBufferMgr, buffer.index);
+                    if (ret != NO_ERROR) {
+                        CLOGE("Recording buffer return fail");
+                    }
+                }
+            }
+            m_handleFaceDetectionFrame(frame, NULL);
+#endif
         }
         break;
     default:
@@ -5191,7 +6412,6 @@ bool ExynosCamera::m_previewThreadFunc(void)
 #endif
     ExynosCameraBuffer scpBuffer;
     ExynosCameraBuffer previewCbBuffer;
-    bool copybuffer = false;
 
     ExynosCameraFrameSP_sptr_t frame = NULL;
     nsecs_t timeStamp = 0;
@@ -5211,6 +6431,9 @@ bool ExynosCamera::m_previewThreadFunc(void)
 #ifdef SAMSUNG_ACCELEROMETER
     static uint8_t accelerometer_error_cnt = 0;
 #endif
+#ifdef SAMSUNG_ROTATION
+    static uint8_t rotation_error_cnt = 0;
+#endif
 #endif
 
 #ifdef USE_CAMERA_PREVIEW_FRAME_SCHEDULER
@@ -5229,6 +6452,7 @@ bool ExynosCamera::m_previewThreadFunc(void)
     pipeIdCsc = PIPE_GSC;
     previewCallbackPipeId = PIPE_MCSC1;
     previewCbBuffer.index = -2;
+    scpBuffer.index = -2;
 
     previewQ = m_previewQ;
 
@@ -5267,6 +6491,7 @@ bool ExynosCamera::m_previewThreadFunc(void)
     if (ret < 0) {
         CLOGE("getDstBuffer fail, ret(%d)", ret);
         /* TODO: doing exception handling */
+        scpBuffer.index = -2;
         goto func_exit;
     }
 
@@ -5290,6 +6515,7 @@ bool ExynosCamera::m_previewThreadFunc(void)
 
     if (scpBuffer.index < 0 || scpBuffer.index >= maxbuffers ) {
         CLOGE("Out of Index! (Max: %d, Index: %d)", maxbuffers, scpBuffer.index);
+        scpBuffer.index = -2;
         goto func_exit;
     }
 
@@ -5297,7 +6523,7 @@ bool ExynosCamera::m_previewThreadFunc(void)
         previewQ->getSizeOfProcessQ(), m_scpBufferMgr->getNumOfAvailableBuffer());
 
     /* Prevent displaying unprocessed beauty images in beauty shot. */
-    if ((m_parameters->getShotMode() == SHOT_MODE_BEAUTY_FACE)
+    if ((m_parameters->getShotMode() == SHOT_MODE_BEAUTY_FACE) || (m_parameters->getShotMode() == SHOT_MODE_KIDS)
 #ifdef LLS_CAPTURE
         || (m_parameters->getLLSOn() == true && getCameraIdInternal() == CAMERA_ID_FRONT)
 #endif
@@ -5305,13 +6531,6 @@ bool ExynosCamera::m_previewThreadFunc(void)
         if (m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME) &&
             checkBit(&m_callbackState, CALLBACK_STATE_COMPRESSED_IMAGE)) {
             CLOGV("skip the preview callback and the preview display while compressed callback.");
-            if (previewCbBuffer.index >= 0) {
-                ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
-                if (ret != NO_ERROR) {
-                    CLOGE("Preview callback buffer return fail");
-                }
-            }
-            ret = m_scpBufferMgr->cancelBuffer(scpBuffer.index);
             goto func_exit;
         }
     }
@@ -5322,7 +6541,8 @@ bool ExynosCamera::m_previewThreadFunc(void)
         m_scpBufferMgr->getNumOfAvailableAndNoneBuffer() > 4 &&
         previewQ->getSizeOfProcessQ() < 2) ||
 #ifdef SUPPORT_SW_VDIS
-        (m_parameters->getPreviewBufferCount() == NUM_VDIS_BUFFERS &&
+        ((m_parameters->getPreviewBufferCount() == NUM_VDIS_BUFFERS ||
+        m_parameters->getPreviewBufferCount() == NUM_VDIS_UHD_BUFFERS) &&
         m_scpBufferMgr->getNumOfAvailableAndNoneBuffer() > 2 &&
         previewQ->getSizeOfProcessQ() < 1) ||
 #endif
@@ -5335,8 +6555,15 @@ bool ExynosCamera::m_previewThreadFunc(void)
         m_scpBufferMgr->getNumOfAvailableAndNoneBuffer() > 2 &&
         previewQ->getSizeOfProcessQ() < 1)) {
 
-        if (m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME) &&
-            m_highResolutionCallbackRunning == false) {
+        if ((m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME) &&
+            m_highResolutionCallbackRunning == false &&
+            m_disablePreviewCB == false &&
+            !m_previewCallbackToggle)
+#ifdef SAMSUNG_COLOR_IRIS
+            || ((getCameraIdInternal() == CAMERA_ID_FRONT) &&
+            m_parameters->msgTypeEnabled(CAMERA_MSG_IRIS_PREVIEW_DATA))
+#endif
+            ) {
 #ifdef USE_MCSC1_FOR_PREVIEWCALLBACK
             m_previewFrameFactory->setRequest(PIPE_MCSC1, true);
 #endif
@@ -5349,60 +6576,51 @@ bool ExynosCamera::m_previewThreadFunc(void)
 
 #ifdef USE_MCSC1_FOR_PREVIEWCALLBACK
             /* Exynos8890 has MC scaler, so it need not make callback frame */
-            int bufIndex = -2;
-            if (previewCbBuffer.index < 0) {
-                m_previewCallbackBufferMgr->getBuffer(&bufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &previewCbBuffer);
-                copybuffer = false;
-            } else {
-                copybuffer = true;
-            }
-#else
-            int bufIndex = -2;
-            m_previewCallbackBufferMgr->getBuffer(&bufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &previewCbBuffer);
-            copybuffer = false;
+            if (previewCbBuffer.index < 0)
 #endif
+            {
+                int bufIndex = -2;
+                m_previewCallbackBufferMgr->getBuffer(&bufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &previewCbBuffer);
+                if (bufIndex < 0) {
+                    CLOGE("getBuffer fail");
+                    goto func_exit;
+                }
+                ret = m_doPreviewToCallbackFunc(pipeIdCsc, scpBuffer, previewCbBuffer);
+                if (ret < 0) {
+                    CLOGE("m_doPreviewToCallbackFunc fail");
+                    goto func_exit;
+                }
 
-            ExynosCameraFrameSP_sptr_t newFrame = NULL;
-
-            newFrame = m_previewFrameFactory->createNewFrameOnlyOnePipe(pipeIdCsc);
-            if (newFrame == NULL) {
-                CLOGE("newFrame is NULL");
-                return UNKNOWN_ERROR;
+                ret = frame->setSrcBuffer(pipeId, previewCbBuffer);
+                if (ret < 0) {
+                    CLOGE("setSrcBuffer fail, ret(%d)", ret);
+                    goto func_exit;
+                }
             }
 
-            m_copyMetaFrameToFrame(frame, newFrame, true, true);
+            if (m_parameters->getCallbackNeedCopy2Rendering() == true) {
+                ret = m_previewCallbackFunc(frame);
+                if (ret < 0) {
+                    CLOGE("m_previewCallbackFunc fail");
+                    goto func_exit;
+                }
 
-            ret = m_doPreviewToCallbackFunc(pipeIdCsc, newFrame, scpBuffer, previewCbBuffer, copybuffer);
-            if (ret < 0) {
-                CLOGE("m_doPreviewToCallbackFunc fail");
+                ret = m_doCallbackToPreviewFunc(pipeIdCsc, frame, previewCbBuffer, scpBuffer);
+                if (ret < 0) {
+                    CLOGE("m_doCallbackToPreviewFunc fail");
+                    goto func_exit;
+                }
+
                 if (previewCbBuffer.index >= 0) {
                     ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
                     if (ret != NO_ERROR) {
                         CLOGE("Preview callback buffer return fail");
                     }
+                    previewCbBuffer.index  = -2;
                 }
-                m_scpBufferMgr->cancelBuffer(scpBuffer.index);
-                goto func_exit;
             } else {
-                if (m_parameters->getCallbackNeedCopy2Rendering() == true) {
-                    ret = m_doCallbackToPreviewFunc(pipeIdCsc, frame, previewCbBuffer, scpBuffer);
-                    if (ret < 0) {
-                        CLOGE("m_doCallbackToPreviewFunc fail");
-                        if (previewCbBuffer.index >= 0) {
-                            ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
-                            if (ret != NO_ERROR) {
-                                CLOGE("Preview callback buffer return fail");
-                            }
-                        }
-                        m_scpBufferMgr->cancelBuffer(scpBuffer.index);
-                        goto func_exit;
-                    }
-                }
-            }
-
-
-            if (newFrame != NULL) {
-                newFrame = NULL;
+                m_previewCallbackQ->pushProcessQ(&frame);
+                previewCbBuffer.index = -2;
             }
         }
 #ifdef USE_GSC_FOR_PREVIEW
@@ -5412,13 +6630,17 @@ bool ExynosCamera::m_previewThreadFunc(void)
                 m_previewFrameFactory->stopThread(pipeIdCsc);
         }
 #endif
+        /* In case of 240 fps recording */
+        if (m_parameters->getFastFpsMode() == 3) {
+            m_previewCallbackToggle = (m_previewCallbackToggle + 1) % 6;
+        }
 
         if (m_previewWindow != NULL) {
             if (timeStamp > 0L) {
                 m_previewWindow->set_timestamp(m_previewWindow, (int64_t)timeStamp);
             } else {
                 uint32_t fcount = 0;
-                getStreamFrameCount((struct camera2_stream *)scpBuffer.addr[2], &fcount);
+                getStreamFrameCount((struct camera2_stream *)scpBuffer.addr[scpBuffer.getMetaPlaneIndex()], &fcount);
                 CLOGW(" frameCount(%d)(%d), Invalid timeStamp(%lld)",
                         frameCount,
                         fcount,
@@ -5432,6 +6654,17 @@ bool ExynosCamera::m_previewThreadFunc(void)
             m_firstPreviewTimer.stop();
             m_flagFirstPreviewTimerOn = false;
 
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+            if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+            {
+                TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_START_PREVIEW_END, false);
+                TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_TOTAL_TIME, false);
+                if (g_timeLoggerLaunchIndex % TIME_LOGGER_LAUNCH_COUNT == 0)
+                    TIME_LOGGER_SAVE_BASE(&g_timeLoggerLaunch, m_cameraId);
+            }
+#endif
             CLOGD("m_firstPreviewTimer stop");
 
             CLOGD("============= First Preview time ==================");
@@ -5507,6 +6740,48 @@ bool ExynosCamera::m_previewThreadFunc(void)
             }
         }
 #endif
+
+#ifdef SAMSUNG_ROTATION
+        if (m_rotationHandle != NULL) {
+            ret = sensor_listener_get_data(m_rotationHandle, ST_ROTATION, &m_rotationListenerData, false);
+            if (ret < 0) {
+                if ((rotation_error_cnt % 30) == 0) {
+                    CLOGW("%d:skip the Rotation data", ret);
+                    rotation_error_cnt = 1;
+                } else {
+                    rotation_error_cnt++;
+                }
+            } else {
+                /* rotationListenerData : counterclockwise,index / DeviceOrientation : clockwise,degree  */
+                int orientation_Degrees = 0;
+                switch (m_rotationListenerData.rotation.orientation) {
+                    case SCREEN_DEGREES_0:
+                        orientation_Degrees = 0;
+                        break;
+                    case SCREEN_DEGREES_270:
+                        orientation_Degrees = 270;
+                        break;
+                    case SCREEN_DEGREES_180:
+                        orientation_Degrees = 180;
+                        break;
+                    case SCREEN_DEGREES_90:
+                        orientation_Degrees = 90;
+                        break;
+                    default:
+                        CLOGW("%d:skip the Rotation data(unknown index)", m_rotationListenerData.rotation.orientation);
+                        orientation_Degrees = m_parameters->getDeviceOrientation();
+                        break;
+                }
+                if (m_parameters->getDeviceOrientation() != orientation_Degrees) {
+                    m_parameters->setDeviceOrientation(orientation_Degrees);
+                    ExynosCameraActivityUCTL *uctlMgr = NULL;
+                    uctlMgr = m_exynosCameraActivityControl->getUCTLMgr();
+                    if (uctlMgr != NULL)
+                        uctlMgr->setDeviceRotation(m_parameters->getFdOrientation());
+                }
+            }
+        }
+#endif /* SAMSUNG_ROTATION */
 #endif /* SAMSUNG_SENSOR_LISTENER */
 
 #ifdef SUPPORT_SW_VDIS
@@ -5515,6 +6790,18 @@ bool ExynosCamera::m_previewThreadFunc(void)
             int swVDIS_StartX, swVDIS_StartY;
 
             m_parameters->getHwPreviewSize(&swVDIS_InW, &swVDIS_InH);
+#ifdef SAMSUNG_DUAL_SOLUTION
+            if (m_parameters->getDualCameraMode() == true) {
+                ExynosRect fusionSrcRect;
+                ExynosRect fusionDstRect;
+                int previewW, previewH;
+                m_parameters->getPreviewSize(&previewW, &previewH);
+                m_parameters->getFusionSize(previewW, previewH, &fusionSrcRect, &fusionDstRect);
+
+                swVDIS_InW = fusionDstRect.w;
+                swVDIS_InH = fusionDstRect.h;
+            }
+#endif
             swVDIS_OutW = swVDIS_InW;
             swVDIS_OutH = swVDIS_InH;
             m_swVDIS_AdjustPreviewSize(&swVDIS_OutW, &swVDIS_OutH);
@@ -5560,7 +6847,7 @@ bool ExynosCamera::m_previewThreadFunc(void)
 #endif /*SAMSUNG_HYPER_MOTION*/
 
         /* Prevent displaying unprocessed beauty images in beauty shot. */
-        if ((m_parameters->getShotMode() == SHOT_MODE_BEAUTY_FACE)
+        if ((m_parameters->getShotMode() == SHOT_MODE_BEAUTY_FACE) || (m_parameters->getShotMode() == SHOT_MODE_KIDS)
 #ifdef LLS_CAPTURE
             || (m_parameters->getLLSOn() == true && getCameraIdInternal() == CAMERA_ID_FRONT)
 #endif
@@ -5568,13 +6855,6 @@ bool ExynosCamera::m_previewThreadFunc(void)
             if (m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME) &&
                 checkBit(&m_callbackState, CALLBACK_STATE_COMPRESSED_IMAGE)) {
                 CLOGV("skip the preview callback and the preview display while compressed callback.");
-                if (previewCbBuffer.index >= 0) {
-                    ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
-                    if (ret != NO_ERROR) {
-                        CLOGE("Preview callback buffer return fail");
-                    }
-                }
-                ret = m_scpBufferMgr->cancelBuffer(scpBuffer.index);
                 goto func_exit;
             }
         }
@@ -5591,17 +6871,13 @@ bool ExynosCamera::m_previewThreadFunc(void)
 #endif
 
         /* display the frame */
+#ifdef TIME_LOGGER_PREVIEW_ENABLE
+        TIME_LOGGER_UPDATE(m_cameraId, frameCount, PIPE_MCSC0, INTERVAL, PREVIEW_SERVICE_ENQUEUE, true);
+#endif
         ret = m_putBuffers(m_scpBufferMgr, scpBuffer.index);
         if (ret < 0) {
             /* TODO: error handling */
             CLOGE("put Buffer fail");
-        }
-
-        if (previewCbBuffer.index >= 0) {
-            ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
-            if (ret != NO_ERROR) {
-                CLOGE("Preview callback buffer return fail");
-            }
         }
     } else {
         CLOGW("Preview frame buffer is canceled."
@@ -5620,6 +6896,14 @@ bool ExynosCamera::m_previewThreadFunc(void)
     }
 
 func_exit:
+	if (previewCbBuffer.index >= 0) {
+        ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
+        if (ret != NO_ERROR) {
+            CLOGE("Preview callback buffer return fail");
+        }
+    }
+
+    ret = m_scpBufferMgr->cancelBuffer(scpBuffer.index);
 
     if (frame != NULL) {
         frame = NULL;
@@ -5642,7 +6926,7 @@ bool ExynosCamera::m_recordingThreadFunc(void)
         pipeId = PIPE_GSC_VIDEO;
     }
 #endif
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     if (m_doCscRecording == true && m_parameters->getDualCameraMode() == true)
         pipeId = PIPE_GSC_VIDEO;
 #endif
@@ -5694,7 +6978,7 @@ bool ExynosCamera::m_recordingThreadFunc(void)
     if (m_recordingStartTimeStamp == 0) {
         m_recordingStartTimeStamp = timeStamp;
         CLOGI("m_recordingStartTimeStamp=%lld frameDuration %lld batchSize %d",
-                m_recordingStartTimeStamp,
+                (long long)m_recordingStartTimeStamp,
                 (long long)frameDuration,
                 buffer.batchSize);
     }
@@ -5722,7 +7006,8 @@ bool ExynosCamera::m_recordingThreadFunc(void)
     if (timeStamp > 0L
         && timeStamp > m_lastRecordingTimeStamp
         && timeStamp >= m_recordingStartTimeStamp) {
-
+        int heapIndex = -1;
+        native_handle* handle = NULL;
         for (int batchIndex = 0; batchIndex < buffer.batchSize; batchIndex++) {
             int planeIndex = batchIndex * (buffer.planeCount - 1);
             int recordingFrameIndex = -1;
@@ -5754,22 +7039,27 @@ bool ExynosCamera::m_recordingThreadFunc(void)
                 m_recordingStartTimeStamp);
 #endif
 
+            heapIndex = -1;
+            handle = NULL;
+
             if (m_recordingCallbackHeap != NULL) {
                 struct VideoNativeHandleMetadata *recordAddrs = NULL;
 
-                recordAddrs = (struct VideoNativeHandleMetadata *) m_recordingCallbackHeap->data;
-                recordAddrs[recordingFrameIndex].eType = kMetadataBufferTypeNativeHandleSource;
-
-                native_handle* handle = native_handle_create(2, 1);
-                if (handle == NULL) {
-                    CLOGE("native hande create fail, skip frame");
+                ret = m_getAvailableRecordingCallbackHeapIndex(&heapIndex);
+                if (ret != NO_ERROR || heapIndex < 0 || heapIndex >= m_recordingBufferCount) {
+                    CLOGE("Failed to getAvailableRecordingCallbackHeapIndex %d", heapIndex);
                     goto func_exit;
                 }
+
+                recordAddrs = (struct VideoNativeHandleMetadata *) m_recordingCallbackHeap->data;
+                recordAddrs[heapIndex].eType = kMetadataBufferTypeNativeHandleSource;
+
+                handle = native_handle_create(2, 1);
                 handle->data[0] = (int32_t) buffer.fd[planeIndex];
                 handle->data[1] = (int32_t) buffer.fd[planeIndex+1];
                 handle->data[2] = (int32_t) recordingFrameIndex;
 
-                recordAddrs[recordingFrameIndex].pHandle = handle;
+                recordAddrs[heapIndex].pHandle = handle;
 
                 m_recordingBufAvailable[recordingFrameIndex] = false;
                 m_lastRecordingTimeStamp = timeStamp;
@@ -5812,13 +7102,22 @@ bool ExynosCamera::m_recordingThreadFunc(void)
                     ret = m_ProgramAndProcessHLV(&buffer);
                 }
 #endif
-
+#ifdef TIME_LOGGER_RECORDING_ENABLE
+                TIME_LOGGER_UPDATE(m_cameraId, buffer.index, PIPE_MCSC2, INTERVAL, RECORDING_CALLBACK, true);
+                TIME_LOGGER_UPDATE(m_cameraId, buffer.index, PIPE_MCSC2, DURATION, RECORDING_CALLBACK, true);
+#endif
                 m_dataCbTimestamp(
                     timeStamp,
                     CAMERA_MSG_VIDEO_FRAME,
                     m_recordingCallbackHeap,
-                    recordingFrameIndex,
+                    heapIndex,
                     m_callbackCookie);
+                }
+#ifdef TIME_LOGGER_RECORDING_ENABLE
+                TIME_LOGGER_UPDATE(m_cameraId, buffer.index, PIPE_MCSC2, DURATION, RECORDING_CALLBACK, false);
+#endif
+                if (handle != NULL) {
+                    native_handle_delete(handle);
                 }
 
                 timeStamp += frameDuration;
@@ -5848,6 +7147,13 @@ func_exit:
 void ExynosCamera::m_vendorSpecificPreConstructor(int cameraId, __unused camera_device_t *dev)
 {
     CLOGI(" -IN-");
+
+#ifdef SAMSUNG_DUAL_SOLUTION
+    m_fusionPreviewWrapper = ExynosCameraSingleton<ExynosCameraFusionPreviewWrapper>::getInstance();
+    m_fusionCaptureWrapper = ExynosCameraSingleton<ExynosCameraFusionCaptureWrapper>::getInstance();
+    m_previewSolutionHandle = NULL;
+    m_captureSolutionHandle = NULL;
+#endif
 
 #ifdef SAMSUNG_COMPANION
     m_companionNode = NULL;
@@ -5914,9 +7220,9 @@ void ExynosCamera::m_vendorSpecificConstructor(__unused int cameraId, __unused c
 
 #ifdef DEBUG_IQ_OSD
     isOSDMode = -1;
-    if (access("/data/media/0/debug_iq_osd.txt", F_OK) == 0) { 
+    if (access("/data/media/0/debug_iq_osd.txt", F_OK) == 0) {
         CLOGD(" debug_iq_osd.txt access successful");
-        isOSDMode = 1; 
+        isOSDMode = 1;
     }
 #endif
 
@@ -5934,7 +7240,12 @@ void ExynosCamera::m_vendorSpecificConstructor(__unused int cameraId, __unused c
 #ifdef SAMSUNG_LENS_DC
     m_createInternalBufferManager(&m_lensDCBufferMgr, "LENSDC_BUF");
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+    m_createInternalBufferManager(&m_strCaptureBufferMgr, "STRCAPTURE_BUF");
+#endif
+
 #ifdef SR_CAPTURE
+    m_isCopySrMdeta = false;
     m_srCallbackHeap = NULL;
     memset(m_faces_sr, 0, sizeof(camera_face_t) * NUM_OF_DETECTED_FACES);
 #endif
@@ -5953,7 +7264,7 @@ void ExynosCamera::m_vendorSpecificConstructor(__unused int cameraId, __unused c
 #ifdef RAWDUMP_CAPTURE
     /* RawCaptureDump Thread */
     m_RawCaptureDumpThread = new mainCameraThread(this, &ExynosCamera::m_RawCaptureDumpThreadFunc, "m_RawCaptureDumpThread");
-    CLOGD("RawCaptureDumpThread created");
+    CLOGD("[RAWDUMP_CAP] RawCaptureDumpThread created");
 #endif
 
 #ifdef SAMSUNG_DNG
@@ -5966,6 +7277,10 @@ void ExynosCamera::m_vendorSpecificConstructor(__unused int cameraId, __unused c
     /* m_LDCapture Thread */
     m_LDCaptureThread = new mainCameraThread(this, &ExynosCamera::m_LDCaptureThreadFunc, "m_LDCaptureThread");
     CLOGD("m_LDCaptureThread created");
+#endif
+#ifdef USE_MSC_CAPTURE
+    m_MscCaptureThread = new mainCameraThread(this, &ExynosCamera::m_MscCaptureThreadFunc, "m_MscCaptureThread");
+    CLOGD("m_MscCaptureThread created");
 #endif
 #ifdef SAMSUNG_SENSOR_LISTENER
     m_sensorListenerThread = new mainCameraThread(this, &ExynosCamera::m_sensorListenerThreadFunc, "sensorListenerThread");
@@ -6001,6 +7316,11 @@ void ExynosCamera::m_vendorSpecificConstructor(__unused int cameraId, __unused c
 #endif
 #ifdef SAMSUNG_LLS_DEBLUR
     m_LDCaptureQ = new frame_queue_t(m_LDCaptureThread);
+    m_LDCaptureQ->setWaitTime(1000000000);
+#endif
+#ifdef USE_MSC_CAPTURE
+    m_MscCaptureQ = new frame_queue_t(m_MscCaptureThread);
+    m_MscCaptureQ->setWaitTime(1000000000);
 #endif
 #ifdef SAMSUNG_CAMERA_EXTRA_INFO
     m_flagFlashCallback = false;
@@ -6058,11 +7378,27 @@ void ExynosCamera::m_vendorSpecificConstructor(__unused int cameraId, __unused c
 #ifdef SAMSUNG_ACCELEROMETER
     m_accelerometerHandle = NULL;
 #endif
+#ifdef SAMSUNG_ROTATION
+    m_rotationHandle = NULL;
+#endif
 
 #ifdef SUPPORT_SW_VDIS
-    m_swVDIS_fd_dm = new struct camera2_dm;
-    m_swVDIS_FaceData = new struct swVDIS_FaceData;
+    if (m_swVDIS_fd_dm == NULL) {
+        m_swVDIS_fd_dm = new struct camera2_dm;
+    }
+    if (m_swVDIS_FaceData == NULL) {
+        m_swVDIS_FaceData = new struct swVDIS_FaceData;
+    }
 #endif /*SUPPORT_SW_VDIS*/
+
+#ifdef SAMSUNG_HYPER_MOTION
+    if (m_swHM_fd_dm == NULL) {
+        m_swHM_fd_dm = new struct camera2_dm;
+    }
+    if (m_swHM_FaceData == NULL) {
+        m_swHM_FaceData = new struct swHM_FaceData;
+    }
+#endif /*SUPPORT_SW_HM*/
 
 #ifdef SAMSUNG_LLS_DEBLUR
     m_LDCaptureCount = 0;
@@ -6070,6 +7406,10 @@ void ExynosCamera::m_vendorSpecificConstructor(__unused int cameraId, __unused c
     for (int i = 0; i < MAX_LD_CAPTURE_COUNT; i++) {
         m_LDBufIndex[i] = 0;
     }
+#endif
+
+#ifdef SAMSUNG_HIFI_LLS
+    m_hifiLLSEnabled = false;
 #endif
 
 #ifdef ONE_SECOND_BURST_CAPTURE
@@ -6110,6 +7450,14 @@ void ExynosCamera::m_vendorSpecificConstructor(__unused int cameraId, __unused c
     m_LensDCIndex = -1;
 #endif
 
+#ifdef SAMSUNG_INF_BURST
+    memset(&m_preBurstTimeinfo, 0, sizeof(m_preBurstTimeinfo));
+#endif
+
+#ifdef SAMSUNG_IDDQD
+    m_lens_dirty_detected = 0;
+#endif
+
     CLOGI(" -OUT-");
 
     return;
@@ -6119,7 +7467,9 @@ void ExynosCamera::m_vendorSpecificDestructor(void)
 {
     CLOGI(" -IN-");
 
+#ifdef SAMSUNG_TN_FEATURE
     status_t ret = NO_ERROR;
+#endif
 
 #ifdef SAMSUNG_UNI_API
     uni_api_deinit();
@@ -6160,11 +7510,31 @@ void ExynosCamera::m_vendorSpecificDestructor(void)
         m_LDCaptureQ = NULL;
     }
 #endif
+#ifdef USE_MSC_CAPTURE
+    if (m_MscCaptureQ != NULL) {
+        delete m_MscCaptureQ;
+        m_MscCaptureQ = NULL;
+    }
+#endif
 #ifdef SAMSUNG_LBP
     if (m_lbpBufferMgr != NULL) {
         delete m_lbpBufferMgr;
         m_lbpBufferMgr = NULL;
         CLOGD("BufferManager(lbpBufferMgr) destroyed");
+    }
+#endif
+#ifdef SAMSUNG_LENS_DC
+    if (m_lensDCBufferMgr != NULL) {
+        delete m_lensDCBufferMgr;
+        m_lensDCBufferMgr = NULL;
+        CLOGD("BufferManager(m_lensDCBufferMgr) destroyed");
+    }
+#endif
+#ifdef SAMSUNG_STR_CAPTURE
+    if (m_strCaptureBufferMgr != NULL) {
+        delete m_strCaptureBufferMgr;
+        m_strCaptureBufferMgr = NULL;
+        CLOGD("BufferManager(m_strCaptureBufferMgr) destroyed");
     }
 #endif
 #ifdef SUPPORT_SW_VDIS
@@ -6194,6 +7564,48 @@ void ExynosCamera::m_vendorSpecificDestructor(void)
 #ifdef SAMSUNG_QUICK_SWITCH
     if (m_preStartPictureInternalThread != NULL) {
         m_preStartPictureInternalThread->requestExitAndWait();
+    }
+#endif
+
+#ifdef SAMSUNG_DUAL_SOLUTION
+    if (getCameraIdInternal() == CAMERA_ID_BACK) {
+        if (m_fusionPreviewWrapper->m_getIsInit() == true)
+            m_fusionPreviewWrapper->m_deinitDualSolution(getCameraId());
+
+        if (m_previewSolutionHandle != NULL) {
+            ret = uni_plugin_unload(&m_previewSolutionHandle);
+            if (ret < 0) {
+                CLOGE("[Fusion]DUAL_PREVIEW plugin unload failed!!");
+            }
+        }
+
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+        if (m_fusionCaptureWrapper->m_getIsInit() == true)
+            m_fusionCaptureWrapper->m_deinitDualSolution(getCameraId());
+
+        if (m_captureSolutionHandle != NULL) {
+            ret = uni_plugin_unload(&m_captureSolutionHandle);
+            if (ret < 0) {
+                CLOGE("[Fusion]DUAL_CAPTURE plugin unload failed!!");
+            }
+        }
+#endif
+        m_previewSolutionHandle = NULL;
+        m_captureSolutionHandle = NULL;
+        m_fusionCaptureWrapper->m_setSolutionHandle(NULL, NULL);
+        m_fusionPreviewWrapper->m_setSolutionHandle(NULL, NULL);
+    }
+#endif
+
+#ifdef SAMSUNG_HIFI_LLS
+    if (m_hifiLLSEnabled == true && m_LLSpluginHandle != NULL) {
+        int powerCtrl = 0;
+        ret = uni_plugin_set(m_LLSpluginHandle,
+                HIFI_LLS_PLUGIN_NAME, UNI_PLUGIN_INDEX_POWER_CONTROL, &powerCtrl);
+        if (ret < 0) {
+            CLOGE("[LLS_MBR] LLS Plugin set UNI_PLUGIN_INDEX_POWER_CONTROL failed!! ret(%d)", ret);
+        }
+        m_hifiLLSEnabled = false;
     }
 #endif
 
@@ -6254,6 +7666,41 @@ void ExynosCamera::m_vendorSpecificDestructor(void)
         }
     }
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+    if (m_STRCapturePluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_STRCapturePluginHandle);
+        if (ret < 0) {
+            CLOGE("[STR_CAPTURE] STR_CAPTURE plugin unload failed!!");
+        }
+    }
+#endif
+#ifdef SAMSUNG_STR_PREVIEW
+    if (m_STRPreviewPluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_STRPreviewPluginHandle);
+        if (ret < 0) {
+            CLOGE("[STR_PRVIEW] STR_PRVIEW plugin unload failed!!");
+        }
+    }
+#endif
+#ifdef SUPPORT_DEPTH_MAP
+#ifdef SAMSUNG_FOCUS_PEAKING
+    if (m_FocusPeakingPluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_FocusPeakingPluginHandle);
+        if (ret < 0) {
+            CLOGE("[FocusPeaking] FocusPeaking plugin unload failed!!");
+        }
+    }
+#endif
+#endif
+
+#ifdef SAMSUNG_IDDQD
+    if (m_IDDQDPluginHandle != NULL) {
+        ret = uni_plugin_unload(&m_IDDQDPluginHandle);
+        if (ret < 0) {
+            CLOGE("[IDDQD] IDDQD plugin unload failed!!");
+        }
+    }
+#endif
 
 #ifdef SAMSUNG_HRM
     if (m_uv_rayHandle != NULL) {
@@ -6281,7 +7728,14 @@ void ExynosCamera::m_vendorSpecificDestructor(void)
         sensor_listener_disable_sensor(m_accelerometerHandle, ST_ACCELEROMETER);
         sensor_listener_unload(&m_accelerometerHandle);
         m_accelerometerHandle = NULL;
-}
+    }
+#endif
+#ifdef SAMSUNG_ROTATION
+    if (m_rotationHandle != NULL) {
+        sensor_listener_disable_sensor(m_rotationHandle, ST_ROTATION);
+        sensor_listener_unload(&m_rotationHandle);
+        m_rotationHandle = NULL;
+    }
 #endif
 
 #ifdef SUPPORT_SW_VDIS
@@ -6296,6 +7750,18 @@ void ExynosCamera::m_vendorSpecificDestructor(void)
     }
 #endif /*SUPPORT_SW_VDIS*/
 
+#ifdef SAMSUNG_HYPER_MOTION
+    if (m_swHM_fd_dm != NULL) {
+        delete m_swHM_fd_dm;
+        m_swHM_fd_dm = NULL;
+    }
+
+    if (m_swHM_FaceData != NULL) {
+        delete m_swHM_FaceData;
+        m_swHM_FaceData = NULL;
+    }
+#endif
+
     CLOGI(" -OUT-");
 
     return;
@@ -6305,8 +7771,11 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrameSP_sptr_t frame)
 {
     ExynosCameraDurationTimer m_fdcallbackTimer;
     long long m_fdcallbackTimerTime;
+#if defined(SAMSUNG_DOF) || defined(SUPPORT_MULTI_AF) ||(SAMSUNG_LIVE_OUTFOCUS)
     ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
+#endif
     bool autoFocusChanged = false;
+    uint32_t shutterSpeed = 0;
 #ifdef LLS_CAPTURE
     int LLS_value = 0;
 #endif
@@ -6326,12 +7795,37 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrameSP_sptr_t frame)
     }
 
     memset(m_fdmeta_shot, 0x00, sizeof(struct camera2_shot_ext));
+
+#ifdef SAMSUNG_DUAL_SOLUTION
+    if (m_parameters->getDualCameraMode() == true &&
+            frame->getSyncType() == SYNC_TYPE_SYNC) {
+        int fusionIndex = m_parameters->getFusionParamIndex();
+        int outNode = (fusionIndex == UNI_PLUGIN_CAMERA_TYPE_TELE ? OUTPUT_NODE_2 : OUTPUT_NODE_1);
+
+        CLOGV("fusionIndex = %d, outNode = %d", fusionIndex, outNode);
+
+        if (frame->getDynamicMeta(m_fdmeta_shot, outNode) != NO_ERROR) {
+            CLOGE(" meta_shot_ext is null");
+            return INVALID_OPERATION;
+        }
+
+        frame->getUserDynamicMeta(m_fdmeta_shot, outNode);
+    } else {
+        if (frame->getDynamicMeta(m_fdmeta_shot) != NO_ERROR) {
+            CLOGE(" meta_shot_ext is null");
+            return INVALID_OPERATION;
+        }
+
+        frame->getUserDynamicMeta(m_fdmeta_shot);
+    }
+#else
     if (frame->getDynamicMeta(m_fdmeta_shot) != NO_ERROR) {
         CLOGE(" meta_shot_ext is null");
         return INVALID_OPERATION;
     }
 
     frame->getUserDynamicMeta(m_fdmeta_shot);
+#endif
 
     if (m_flagAFDone) {
         m_flagAFDone = false;
@@ -6354,11 +7848,38 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrameSP_sptr_t frame)
         memset(&id, 0x00, sizeof(int) * NUM_OF_DETECTED_FACES);
         memset(&score, 0x00, sizeof(int) * NUM_OF_DETECTED_FACES);
 
+#ifdef SAMSUNG_DUAL_SOLUTION
+        if (m_parameters->getDualCameraMode() == true) {
+            if (frame->getSyncType() == SYNC_TYPE_SWITCH) {
+                if (m_fusionPreviewWrapper->m_getNeedMargin(CAMERA_ID_BACK_1, frame->getZoom()) == 0) {
+                    m_parameters->getPreviewSize(&previewW, &previewH);
+                } else {
+                    m_parameters->getHwPreviewSize(&previewW, &previewH);
+                }
+            } else {
+                if (m_fusionPreviewWrapper->m_getNeedMargin(CAMERA_ID_BACK_0, frame->getZoom()) == 0) {
+                    m_parameters->getPreviewSize(&previewW, &previewH);
+                } else {
+                    m_parameters->getHwPreviewSize(&previewW, &previewH);
+                }
+            }
+        } else {
+            m_parameters->getHwPreviewSize(&previewW, &previewH);
+        }
+#else
         m_parameters->getHwPreviewSize(&previewW, &previewH);
+#endif
+
+        camera2_node_group node_group_info;
+        frame->getNodeGroupInfo(&node_group_info, PERFRAME_INFO_3AA);
 
         dm = &(m_fdmeta_shot->shot.dm);
+        if (dm == NULL) {
+            CLOGE(" dm data is null");
+            return INVALID_OPERATION;
+        }
 
-        CLOGV(" faceDetectMode(%d)", dm->stats.faceDetectMode);
+        CLOGV("faceDetectMode(%d)", dm->stats.faceDetectMode);
         CLOGV("[%d %d]", dm->stats.faceRectangles[0][0], dm->stats.faceRectangles[0][1]);
         CLOGV("[%d %d]", dm->stats.faceRectangles[0][2], dm->stats.faceRectangles[0][3]);
 
@@ -6400,10 +7921,44 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrameSP_sptr_t frame)
                     id[i] = dm->stats.faceIds[i];
                     score[i] = dm->stats.faceScores[i];
 
-                    detectedFace[i].x1 = dm->stats.faceRectangles[i][0];
-                    detectedFace[i].y1 = dm->stats.faceRectangles[i][1];
-                    detectedFace[i].x2 = dm->stats.faceRectangles[i][2];
-                    detectedFace[i].y2 = dm->stats.faceRectangles[i][3];
+                    if (m_parameters->isMcscVraOtf() == false) {
+                        int vraWidth = 0, vraHeight = 0;
+                        vraWidth = dm->stats.faceSrcImageSize[0];
+                        vraHeight = dm->stats.faceSrcImageSize[1];
+
+                        detectedFace[i].x1 = m_calibratePosition(vraWidth, previewW, dm->stats.faceRectangles[i][0]);
+                        detectedFace[i].y1 = m_calibratePosition(vraHeight, previewH, dm->stats.faceRectangles[i][1]);
+                        detectedFace[i].x2 = m_calibratePosition(vraWidth, previewW, dm->stats.faceRectangles[i][2]);
+                        detectedFace[i].y2 = m_calibratePosition(vraHeight, previewH, dm->stats.faceRectangles[i][3]);
+                    } else if ((int)(node_group_info.leader.output.cropRegion[2]) < previewW
+                               || (int)(node_group_info.leader.output.cropRegion[3]) < previewH) {
+                        detectedFace[i].x1 = m_calibratePosition(node_group_info.leader.output.cropRegion[2], previewW, dm->stats.faceRectangles[i][0]);
+                        detectedFace[i].y1 = m_calibratePosition(node_group_info.leader.output.cropRegion[3], previewH, dm->stats.faceRectangles[i][1]);
+                        detectedFace[i].x2 = m_calibratePosition(node_group_info.leader.output.cropRegion[2], previewW, dm->stats.faceRectangles[i][2]);
+                        detectedFace[i].y2 = m_calibratePosition(node_group_info.leader.output.cropRegion[3], previewH, dm->stats.faceRectangles[i][3]);
+                    } else {
+                        detectedFace[i].x1 = dm->stats.faceRectangles[i][0];
+                        detectedFace[i].y1 = dm->stats.faceRectangles[i][1];
+                        detectedFace[i].x2 = dm->stats.faceRectangles[i][2];
+                        detectedFace[i].y2 = dm->stats.faceRectangles[i][3];
+                    }
+
+#ifdef SAMSUNG_DUAL_SOLUTION
+                    /* Fix faceRect according to ShiftX/ShiftY diff */
+                    if (m_parameters->getDualCameraMode() == true) {
+                        UniPlugin_DCVOZ_CAMERAPARAM_t *fusionParam;
+                        fusionParam = m_parameters->getFusionParam();
+                        detectedFace[i].x1 += fusionParam->PreviewImageShiftX;
+                        detectedFace[i].y1 += fusionParam->PreviewImageShiftY;
+                        detectedFace[i].x2 += fusionParam->PreviewImageShiftX;
+                        detectedFace[i].y2 += fusionParam->PreviewImageShiftY;
+                        CLOGV("ShiftX = %d, ShiftY = %d, Result = (%d, %d, %d, %d)",
+                                fusionParam->PreviewImageShiftX,
+                                fusionParam->PreviewImageShiftY,
+                                detectedFace[i].x1, detectedFace[i].y1,
+                                detectedFace[i].x2, detectedFace[i].y2);
+                    }
+#endif
 
                     numOfDetectedFaces++;
 
@@ -6546,20 +8101,35 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrameSP_sptr_t frame)
             m_parameters->getLLSValue(), m_frameMetadata.light_condition);
 #endif
 
+    if (m_fdmeta_shot->shot.udm.ae.vendorSpecific[0] == 0xAEAEAEAE)
+        shutterSpeed = m_fdmeta_shot->shot.udm.ae.vendorSpecific[64];
+    else
+        shutterSpeed = m_fdmeta_shot->shot.udm.internal.vendorSpecific2[100];
+
 #if defined(BURST_CAPTURE) && defined(VARIABLE_BURST_FPS)
+    int Bv = m_fdmeta_shot->shot.udm.internal.vendorSpecific2[102];
+
     /* vendorSpecific[64] : Exposure time's denominator */
-    if ((m_fdmeta_shot->shot.udm.ae.vendorSpecific[64] <= 7) ||
+    if ((shutterSpeed <= 7)
+#ifdef USE_BV_FOR_VARIABLE_BURST_FPS
+#ifdef LLS_BV_REAR
+        || ((Bv <= LLS_BV_REAR) && (m_cameraId == CAMERA_ID_BACK))
+#endif
+        || ((Bv <= LLS_BV) && (m_cameraId == CAMERA_ID_FRONT))
+#endif
 #ifdef LLS_CAPTURE
-        (m_frameMetadata.light_condition == LLS_LEVEL_LLS_INDICATOR_ONLY)
+        || (m_frameMetadata.light_condition == LLS_LEVEL_LLS_INDICATOR_ONLY)
 #endif
         ) {
         m_frameMetadata.burstshot_fps = BURSTSHOT_OFF_FPS;
-    } else if (m_fdmeta_shot->shot.udm.ae.vendorSpecific[64] <= 14) {
+    } else if (shutterSpeed <= 14) {
         m_frameMetadata.burstshot_fps = BURSTSHOT_MIN_FPS;
     } else {
         m_frameMetadata.burstshot_fps = BURSTSHOT_MAX_FPS;
     }
-    CLOGV(":m_frameMetadata.burstshot_fps(%d)", m_frameMetadata.burstshot_fps);
+
+    CLOGV("(%s):m_frameMetadata.burstshot_fps(%d) / Bv(%d)",
+        __FUNCTION__, m_frameMetadata.burstshot_fps, Bv);
 #endif
 
 #ifdef SAMSUNG_LBP
@@ -6669,7 +8239,7 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrameSP_sptr_t frame)
 
     /* Set capture exposure time, iso value in pro mode */
     if (m_parameters->getShotMode() == SHOT_MODE_PRO_MODE) {
-        m_frameMetadata.current_set_data.exposure_time = (uint32_t)(1000000000.0/m_fdmeta_shot->shot.udm.ae.vendorSpecific[64]);
+        m_frameMetadata.current_set_data.exposure_time = (uint32_t)(1000000000.0/shutterSpeed);
         m_frameMetadata.current_set_data.iso = (uint16_t)m_fdmeta_shot->shot.udm.internal.vendorSpecific2[101];
     } else {
         m_frameMetadata.current_set_data.exposure_time = (uint32_t)m_fdmeta_shot->shot.dm.sensor.exposureTime;
@@ -6692,6 +8262,10 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrameSP_sptr_t frame)
             m_OTfocusData.FocusROILeft, m_OTfocusData.FocusROITop,
             m_OTfocusData.FocusROIRight, m_OTfocusData.FocusROIBottom);
     }
+#endif
+#ifdef SAMSUNG_FACE_BEAUTY_SCENE
+    if (m_cameraId == CAMERA_ID_FRONT)
+        m_frameMetadata.scene_index = m_fdmeta_shot->shot.udm.ae.vendorSpecific[395];
 #endif
 
 #ifdef SAMSUNG_CAMERA_EXTRA_INFO
@@ -6771,6 +8345,63 @@ status_t ExynosCamera::m_doFdCallbackFunc(ExynosCameraFrameSP_sptr_t frame)
     }
 #endif
 
+#ifdef SAMSUNG_LIVE_OUTFOCUS
+    if (m_parameters->getShotMode() == SHOT_MODE_LIVE_OUTFOCUS
+        && m_parameters->getCameraId() == CAMERA_ID_BACK_1) {
+        ExynosRect bayerCropRegionRect, cropRegionRect;
+        ExynosRect2 focusedRect, convertingRect;
+        int curAFstatus = 0;
+
+        m_parameters->getHwBayerCropRegion(&bayerCropRegionRect.w, &bayerCropRegionRect.h,
+                                           &bayerCropRegionRect.x, &bayerCropRegionRect.y);
+
+        if (m_parameters->isUseIspInputCrop() == true
+            || m_parameters->isUseMcscInputCrop() == true) {
+            int zoomLevel = 0;
+            float zoomRatio = m_parameters->getZoomRatio(0) / 1000;
+
+            zoomLevel = m_parameters->getZoomLevel();
+            zoomRatio = m_parameters->getZoomRatio(zoomLevel) / 1000;
+            ret = getCropRectAlign(bayerCropRegionRect.w, bayerCropRegionRect.h,
+                    bayerCropRegionRect.w, bayerCropRegionRect.h,
+                    &cropRegionRect.x, &cropRegionRect.y,
+                    &cropRegionRect.w, &cropRegionRect.h,
+                    2, 2,
+                    zoomLevel, zoomRatio);
+        } else {
+            cropRegionRect = bayerCropRegionRect;
+        }
+
+        focusedRect.x1 = m_fdmeta_shot->shot.dm.aa.afRegions[0];
+        focusedRect.y1 = m_fdmeta_shot->shot.dm.aa.afRegions[1];
+        focusedRect.x2 = m_fdmeta_shot->shot.dm.aa.afRegions[2];
+        focusedRect.y2 = m_fdmeta_shot->shot.dm.aa.afRegions[3];
+
+        curAFstatus = autoFocusMgr->getCurrentState();
+
+        if (curAFstatus == ExynosCameraActivityAutofocus::AUTOFOCUS_STATE_SUCCEESS) {
+            m_frameMetadata.focus_area.focusState =  1;
+            convertingRect = convertingHWArea2AndroidArea(&focusedRect, &cropRegionRect);
+            m_frameMetadata.focus_area.focusROI[0] = (int16_t)convertingRect.x1;
+            m_frameMetadata.focus_area.focusROI[1] = (int16_t)convertingRect.y1;
+            m_frameMetadata.focus_area.focusROI[2] = (int16_t)convertingRect.x2;
+            m_frameMetadata.focus_area.focusROI[3] = (int16_t)convertingRect.y2;
+        } else {
+            m_frameMetadata.focus_area.focusState =  0;
+        }
+
+        CLOGV("current_set_data.focus_area.focusState(%d)", m_frameMetadata.focus_area.focusState);
+        CLOGV("current_set_data.focus_area.focusROI(%d, %d, %d, %d)",
+                m_frameMetadata.focus_area.focusROI[0], m_frameMetadata.focus_area.focusROI[1],
+                m_frameMetadata.focus_area.focusROI[2], m_frameMetadata.focus_area.focusROI[3]);
+    }
+#endif
+
+#ifdef SAMSUNG_IDDQD
+        CLOGV("[IDDQD](%s[%d]): DIRT=%d", __FUNCTION__, __LINE__, m_lens_dirty_detected); 
+        m_frameMetadata.lens_dirty_detected = m_lens_dirty_detected;
+#endif
+
     m_fdcallbackTimer.start();
 
     if (m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_METADATA) &&
@@ -6840,7 +8471,6 @@ status_t ExynosCamera::m_doPreviewToRecordingFunc(
     ExynosRect srcRect, dstRect;
     ExynosCameraFrameSP_sptr_t newFrame = NULL;
     struct camera2_node_output node;
-    bool useStopRecordingLock = false;
 #ifdef PERFRAME_CONTROL_FOR_FLIP
     int flipHorizontal = m_parameters->getFlipHorizontal();
     int flipVertical = m_parameters->getFlipVertical();
@@ -6871,54 +8501,45 @@ status_t ExynosCamera::m_doPreviewToRecordingFunc(
         CLOGE("setupEntity fail, pipeId(%d), ret(%d)",
              pipeId, ret);
         ret = INVALID_OPERATION;
-        if (newFrame != NULL) {
-            newFrame = NULL;
+        goto func_exit;
+    }
+
+    m_previewFrameFactory->setOutputFrameQToPipe(m_recordingQ, pipeId);
+
+    m_recordingStopLock.lock();
+    if (m_getRecordingEnabled() == false) {
+        m_recordingStopLock.unlock();
+        CLOGD("DEBUG(%s[%d]): m_getRecordingEnabled is false, skip frame(%d) previewBuf(%d) recordingBuf(%d)",
+            __FUNCTION__, __LINE__, newFrame->getFrameCount(), previewBuf.index, recordingBuf.index);
+
+        if (recordingBuf.index >= 0) {
+            m_putBuffers(m_recordingBufferMgr, recordingBuf.index);
         }
         goto func_exit;
     }
 
     ret = m_insertFrameToList(&m_recordingProcessList, newFrame, &m_recordingProcessListLock);
     if (ret != NO_ERROR) {
-        CLOGE("[F%d]Failed to insert frame into m_recordingProcessList",
-                newFrame->getFrameCount());
+        m_recordingStopLock.unlock();
+        CLOGE("ERR(%s[%d]):[F%d]Failed to insert frame into m_recordingProcessList",
+                __FUNCTION__, __LINE__, newFrame->getFrameCount());
+
+        if (recordingBuf.index >= 0) {
+            m_putBuffers(m_recordingBufferMgr, recordingBuf.index);
+        }
         goto func_exit;
     }
 
-    m_previewFrameFactory->setOutputFrameQToPipe(m_recordingQ, pipeId);
+    m_previewFrameFactory->pushFrameToPipe(newFrame, pipeId);
+    m_recordingStopLock.unlock();
 
-#ifdef SUPPORT_SW_VDIS
-    if (m_doCscRecording == true && swVDIS_Mode == true)
-        useStopRecordingLock = true;
-#endif
-
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-    if (m_doCscRecording == true && m_parameters->getDualCameraMode() == true)
-        useStopRecordingLock = true;
-#endif
-
-    if (useStopRecordingLock == true) {
-        m_recordingStopLock.lock();
-        if (m_getRecordingEnabled() == false) {
-            m_recordingStopLock.unlock();
-            CLOGD(" m_getRecordingEnabled is false, skip frame(%d) previewBuf(%d) recordingBuf(%d)",
-                 newFrame->getFrameCount(), previewBuf.index, recordingBuf.index);
-            if (newFrame != NULL) {
-                newFrame = NULL;
-            }
-
-            if (recordingBuf.index >= 0){
-                m_putBuffers(m_recordingBufferMgr, recordingBuf.index);
-            }
-            goto func_exit;
-        }
-
-        m_previewFrameFactory->pushFrameToPipe(newFrame, pipeId);
-        m_recordingStopLock.unlock();
-    } else {
-        m_previewFrameFactory->pushFrameToPipe(newFrame, pipeId);
-    }
+    CLOGV("DEBUG(%s[%d]):--OUT--", __FUNCTION__, __LINE__);
+    return ret;
 
 func_exit:
+    if (newFrame != NULL) {
+        newFrame = NULL;
+    }
 
     CLOGV("--OUT--");
     return ret;
@@ -7002,7 +8623,8 @@ status_t ExynosCamera::m_fastenAeStable(void)
     unsigned int bytesPerLine[EXYNOS_CAMERA_BUFFER_MAX_PLANES] = {0};
     planeSize[0] = 32 * 64 * 2;
     int planeCount  = 2;
-    int batchSize = m_parameters->getBatchSize(PIPE_3AA);
+    /* Fixed 1 batchSize */
+    int batchSize = 1;
 #ifdef SAMSUNG_COMPANION
     int bufferCount = (m_parameters->getRTHdr() == COMPANION_WDR_ON) ?
                         NUM_FASTAESTABLE_BUFFER : NUM_FASTAESTABLE_BUFFER - 4;
@@ -7067,7 +8689,6 @@ status_t ExynosCamera::m_startRecordingInternal(void)
     int maxBufferCount = 1;
     exynos_camera_buffer_type_t type = EXYNOS_CAMERA_BUFFER_ION_NONCACHED_TYPE;
     buffer_manager_allocation_mode_t allocMode = BUFFER_MANAGER_ALLOCATION_SILENT;
-    int heapFd = 0;
 
 #ifdef SAMSUNG_LLV
     if (m_parameters->getLLV() == true
@@ -7153,15 +8774,22 @@ status_t ExynosCamera::m_startRecordingInternal(void)
         goto func_exit;
     }
 
+    /* Initialize recording callback heap available flags */
+    memset(m_recordingCallbackHeapAvailable, 0x00, sizeof(m_recordingCallbackHeapAvailable));
+    for (int i = 0; i < m_recordingBufferCount; i++) {
+        m_recordingCallbackHeapAvailable[i] = true;
+    }
+
     if ((m_doCscRecording == true
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
          || m_parameters->getDualCameraMode() == true
 #endif
          )
         && m_recordingBufferMgr->isAllocated() == false) {
         /* alloc recording Image buffer */
         planeSize[0] = ROUND_UP(videoW, MFC_ALIGN) * ROUND_UP(videoH, MFC_ALIGN) + MFC_7X_BUFFER_OFFSET;
-        planeSize[1] = ROUND_UP(videoW, MFC_ALIGN) * ROUND_UP(videoH / 2, MFC_ALIGN) + MFC_7X_BUFFER_OFFSET;
+	/*Chroma buffer size should to be optimized for MFC V11.20 (LS,KM) */
+        planeSize[1] = ROUND_UP(videoW, MFC_ALIGN) * ROUND_UP(videoH / 2, MFC_ALIGN*2) + MFC_7X_BUFFER_OFFSET;
         int batchSize = m_parameters->getBatchSize(PIPE_MCSC2);
         if( m_parameters->getHighSpeedRecording() == true)
             minBufferCount = m_recordingBufferCount;
@@ -7204,7 +8832,7 @@ status_t ExynosCamera::m_stopRecordingInternal(void)
     if (m_doCscRecording == true && m_swVDIS_Mode == true)
         useGSCPipe = true;
 #endif
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     /* If dual camera, use libcsc only */
     if (m_doCscRecording == true && m_parameters->getDualCameraMode() == true)
         useGSCPipe = true;
@@ -7297,7 +8925,7 @@ bool ExynosCamera::m_releasebuffersForRealloc()
     if (m_bayerBufferMgr != NULL) {
         m_bayerBufferMgr->deinit();
     }
-#ifdef DEBUG_RAWDUMP
+#if defined(SAMSUNG_DNG_DIRTY_BAYER) || defined(DEBUG_RAWDUMP_DIRTY_BAYER)
     if (m_parameters->getUsePureBayerReprocessing() == false) {
         if (m_fliteBufferMgr != NULL) {
             m_fliteBufferMgr->deinit();
@@ -7309,6 +8937,9 @@ bool ExynosCamera::m_releasebuffersForRealloc()
     }
     if (m_ispBufferMgr != NULL) {
         m_ispBufferMgr->deinit();
+    }
+    if (m_vraBufferMgr != NULL) {
+        m_vraBufferMgr->deinit();
     }
     if (m_hwDisBufferMgr != NULL) {
         m_hwDisBufferMgr->deinit();
@@ -7394,10 +9025,17 @@ status_t ExynosCamera::m_setReprocessingBuffer(void)
             maxBufferCount = m_exynosconfig->current->bufInfo.num_reprocessing_buffers;
         }
         type = EXYNOS_CAMERA_BUFFER_ION_NONCACHED_TYPE;
-
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true) {
+            needMmap = true;
+        } else
+#endif
+        {
+            needMmap = false;
+        }
         ret = m_allocBuffers(m_ispReprocessingBufferMgr, planeCount, planeSize, bytesPerLine,
                              minBufferCount, maxBufferCount, batchSize, type, allocMode,
-                             true, false);
+                             true, needMmap);
         if (ret != NO_ERROR) {
             CLOGE("m_ispReprocessingBufferMgr m_allocBuffers(minBufferCount=%d/maxBufferCount=%d) fail",
                      minBufferCount, maxBufferCount);
@@ -7444,21 +9082,29 @@ status_t ExynosCamera::m_setReprocessingBuffer(void)
         minBufferCount = 1;
     maxBufferCount = m_exynosconfig->current->bufInfo.num_picture_buffers;
     type = EXYNOS_CAMERA_BUFFER_ION_CACHED_SYNC_FORCE_TYPE;
-
-    ret = m_allocBuffers(m_sccReprocessingBufferMgr, planeCount, planeSize, bytesPerLine,
-                         minBufferCount, maxBufferCount, batchSize, type, allocMode,
-                         true, false);
-    if (ret != NO_ERROR) {
-        CLOGE("m_sccReprocessingBufferMgr m_allocBuffers(minBufferCount=%d, maxBufferCount=%d) fail",
-                 minBufferCount, maxBufferCount);
-        return ret;
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        needMmap = true;
+    } else
+#endif
+    {
+        needMmap = false;
+    }
+    if (m_parameters->getHighResolutionCallbackMode() == false) {
+        ret = m_allocBuffers(m_sccReprocessingBufferMgr, planeCount, planeSize, bytesPerLine,
+                             minBufferCount, maxBufferCount, batchSize, type, allocMode,
+                             true, needMmap);
+        if (ret != NO_ERROR) {
+            CLOGE("m_sccReprocessingBufferMgr m_allocBuffers(minBufferCount=%d, maxBufferCount=%d) fail",
+                     minBufferCount, maxBufferCount);
+            return ret;
+        }
+        CLOGI("m_allocBuffers(YUV Re Buffer) %d x %d, planeCount(%d), maxBufferCount(%d)",
+                 maxPictureW, maxPictureH, planeCount, maxBufferCount);
     }
 
-    CLOGI("m_allocBuffers(YUV Re Buffer) %d x %d, planeCount(%d), maxBufferCount(%d)",
-             maxPictureW, maxPictureH, planeCount, maxBufferCount);
-
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-    if (m_parameters->getDualCameraMode() == true) {
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraCaptureFusionMode() == true) {
         ret = m_allocBuffers(m_fusionReprocessingBufferMgr, planeCount, planeSize, bytesPerLine,
                 minBufferCount, maxBufferCount, batchSize, type, allocMode,
                 true, true);
@@ -7495,17 +9141,19 @@ status_t ExynosCamera::m_setReprocessingBuffer(void)
     {
         needMmap = false;
     }
-    ret = m_allocBuffers(m_thumbnailBufferMgr, planeCount, planeSize, bytesPerLine,
-                         minBufferCount, maxBufferCount, batchSize, type, allocMode,
-                         true, needMmap);
-    if (ret != NO_ERROR) {
-        CLOGE("m_thumbnailBufferMgr m_allocBuffers(minBufferCount=%d, maxBufferCount=%d) fail",
-                 minBufferCount, maxBufferCount);
-        return ret;
-    }
+    if (m_parameters->getHighResolutionCallbackMode() == false) {
+        ret = m_allocBuffers(m_thumbnailBufferMgr, planeCount, planeSize, bytesPerLine,
+                             minBufferCount, maxBufferCount, batchSize, type, allocMode,
+                             true, needMmap);
+        if (ret != NO_ERROR) {
+            CLOGE("m_thumbnailBufferMgr m_allocBuffers(minBufferCount=%d, maxBufferCount=%d) fail",
+                     minBufferCount, maxBufferCount);
+            return ret;
+        }
 
-    CLOGI("m_allocBuffers(Thumb Re Buffer) %d x %d, planeCount(%d), maxBufferCount(%d) needMmap(%d)",
-             maxThumbnailW, maxThumbnailH, planeCount, maxBufferCount, needMmap);
+        CLOGI("m_allocBuffers(Thumb Re Buffer) %d x %d, planeCount(%d), maxBufferCount(%d) needMmap(%d)",
+                 maxThumbnailW, maxThumbnailH, planeCount, maxBufferCount, needMmap);
+    }
 
     return NO_ERROR;
 }
@@ -7557,7 +9205,7 @@ status_t ExynosCamera::m_deallocVendorBuffers(void)
     }
 
     if (m_sccReprocessingBufferMgr != NULL) {
-        m_sccReprocessingBufferMgr->deinit();
+        m_sccReprocessingBufferMgr->deinit(m_cameraId);
     }
 
     if (m_thumbnailBufferMgr != NULL) {
@@ -7595,9 +9243,21 @@ status_t ExynosCamera::m_deallocVendorBuffers(void)
     }
 #endif
 
+#ifdef SAMSUNG_STR_CAPTURE
+    if (m_strCaptureBufferMgr != NULL) {
+        m_strCaptureBufferMgr->deinit();
+    }
+#endif
+
     if (m_thumbnailGscBufferMgr != NULL) {
         m_thumbnailGscBufferMgr->deinit();
     }
+
+#ifdef USE_MSC_CAPTURE
+    if (m_mscBufferMgr != NULL) {
+        m_mscBufferMgr->deinit();
+    }
+#endif
 
 #ifdef SAMSUNG_LBP
     if (m_lbpBufferMgr != NULL) {
@@ -7670,6 +9330,12 @@ status_t ExynosCamera::m_setVendorBuffers(void)
     else
         bayerFormat = m_parameters->getBayerFormat(PIPE_3AC);
 
+#ifdef USE_REMOSAIC_CAPTURE
+    if (m_parameters->isUseRemosaicCapture() == true) {
+        bayerFormat = m_parameters->getBayerFormat(PIPE_VC0);
+    }
+#endif
+
     bytesPerLine[0] = getBayerLineSize(sensorMaxW, bayerFormat);
     planeSize[0]    = getBayerPlaneSize(sensorMaxW, sensorMaxH, bayerFormat);
     planeCount      = 2;
@@ -7686,7 +9352,18 @@ status_t ExynosCamera::m_setVendorBuffers(void)
         needMmap = false;
         type = EXYNOS_CAMERA_BUFFER_ION_RESERVED_TYPE;
 #endif
-        m_bayerBufferMgr->setContigBufCount(RESERVED_NUM_BAYER_BUFFERS);
+        m_bayerBufferMgr->setContigBufCount(m_exynosconfig->current->reservedBufInfo.num_buffers[CONFIG_RESERVED::BAYER]);
+
+#ifdef USE_DUAL_CAMERA
+    } else if (getCameraIdInternal() == CAMERA_ID_BACK_1) {
+#if defined(CAMERA_ADD_BAYER_ENABLE) || defined(SAMSUNG_DNG)
+            needMmap = true;
+            type = EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE;
+#else
+            needMmap = false;
+            type = EXYNOS_CAMERA_BUFFER_ION_NONCACHED_TYPE;
+#endif
+#endif
     } else if (m_parameters->getDualMode() == false) {
 #if defined(SAMSUNG_DNG)
         needMmap = true;
@@ -7695,7 +9372,7 @@ status_t ExynosCamera::m_setVendorBuffers(void)
         needMmap = false;
         type = EXYNOS_CAMERA_BUFFER_ION_RESERVED_TYPE;
 #endif
-        m_bayerBufferMgr->setContigBufCount(FRONT_RESERVED_NUM_BAYER_BUFFERS);
+        m_bayerBufferMgr->setContigBufCount(m_exynosconfig->current->reservedBufInfo.num_buffers[CONFIG_RESERVED::BAYER]);
     } else
 #endif
     {
@@ -7708,7 +9385,8 @@ status_t ExynosCamera::m_setVendorBuffers(void)
 #endif
     }
 
-    if (m_parameters->getIntelligentMode() != 1) {
+    if (m_parameters->getIntelligentMode() != 1
+		|| (CONFIG_MODE::HIGHSPEED_60 >= m_parameters->getFastFpsMode())) {
         ret = m_allocBuffers(m_bayerBufferMgr, planeCount, planeSize, bytesPerLine,
                              maxBufferCount, maxBufferCount, batchSize,
                              type, true, needMmap);
@@ -7726,8 +9404,13 @@ status_t ExynosCamera::m_setVendorBuffers(void)
     CLOGI("m_allocBuffers(Bayer Buffer) planeSize(%d), planeCount(%d), maxBufferCount(%d)",
              planeSize[0], planeCount, maxBufferCount);
 
-#ifdef DEBUG_RAWDUMP
-    if (m_parameters->getUsePureBayerReprocessing() == false) {
+#if defined(SAMSUNG_DNG_DIRTY_BAYER)
+#if defined(DEBUG_RAWDUMP_DIRTY_BAYER)
+    if (m_parameters->getUsePureBayerReprocessing() == false)
+#else
+    if (m_parameters->getUsePureBayerReprocessing() == false && m_parameters->getDNGCaptureModeOn() == true)
+#endif
+    {
         /* Bayer Dump Buffer */
         bayerFormat = m_parameters->getBayerFormat(PIPE_VC0);
         batchSize = m_parameters->getBatchSize(PIPE_VC0);
@@ -7773,10 +9456,24 @@ status_t ExynosCamera::m_setVendorBuffers(void)
 #endif
 
 #ifdef SUPPORT_SW_VDIS
-    if (m_swVDIS_Mode == true) {
+    int cameraId = getCameraIdInternal();
+    if (m_swVDIS_Mode && (m_swVDIS_ModeDual == false || (m_swVDIS_ModeDual == true && cameraId != CAMERA_ID_BACK_1))) {
         int hwPreviewW = 0, hwPreviewH = 0;
         m_parameters->getHwPreviewSize(&hwPreviewW, &hwPreviewH);
         m_swVDIS_AdjustPreviewSize(&hwPreviewW, &hwPreviewH);
+#ifdef SAMSUNG_DUAL_SOLUTION
+        if (m_parameters->getDualCameraMode() == true) {
+            ExynosRect fusionSrcRect;
+            ExynosRect fusionDstRect;
+            int previewW = 0, previewH = 0;
+            m_parameters->getPreviewSize(&previewW, &previewH);
+            m_parameters->getFusionSize(previewW, previewH, &fusionSrcRect, &fusionDstRect);
+
+            hwPreviewW = fusionDstRect.w;
+            hwPreviewH = fusionDstRect.h;
+            m_swVDIS_AdjustPreviewSize(&hwPreviewW, &hwPreviewH);
+        }
+#endif
 
         planeCount = 3;
         batchSize = 1;
@@ -7798,7 +9495,7 @@ status_t ExynosCamera::m_setVendorBuffers(void)
             return ret;
         }
 
-        VDIS_LOG("VDIS_HAL: m_allocBuffers(m_swVDIS_BufferMgr): %d x %d", hwPreviewW, hwPreviewH);
+        CLOGD("VDIS_HAL: m_allocBuffers(m_swVDIS_BufferMgr): %d x %d", hwPreviewW, hwPreviewH);
     }
 #endif
 
@@ -7881,6 +9578,16 @@ status_t ExynosCamera::m_setVendorPictureBuffer(void)
         m_parameters->getMaxPictureSize(&f_pictureW, &f_pictureH);
     } else
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+    if (!m_parameters->getSamsungCamera() && getCameraIdInternal() == CAMERA_ID_FRONT) {
+        m_parameters->getMaxPictureSize(&f_pictureW, &f_pictureH);
+    } else
+#endif
+#ifdef SAMSUNG_HIFI_LLS
+    if (m_parameters->checkHiFiLLSEnable()) {
+        m_parameters->getHwPictureSize(&f_pictureW, &f_pictureH);
+    } else
+#endif
     {
         m_parameters->getPictureSize(&f_pictureW, &f_pictureH);
     }
@@ -7903,8 +9610,13 @@ status_t ExynosCamera::m_setVendorPictureBuffer(void)
 #if defined (SAMSUNG_BD) || defined(SAMSUNG_LLS_DEBLUR)
 #ifdef RESERVED_MEMORY_ENABLE
     if (getCameraIdInternal() == CAMERA_ID_BACK || m_parameters->getDualMode() == false) {
-        m_postPictureBufferMgr->setContigBufCount(RESERVED_NUM_POST_PIC_BUFFERS);
+        m_postPictureBufferMgr->setContigBufCount(m_exynosconfig->current->reservedBufInfo.num_buffers[CONFIG_RESERVED::POST_PIC]);
         type = EXYNOS_CAMERA_BUFFER_ION_CACHED_RESERVED_TYPE;
+#ifdef USE_DUAL_CAMERA
+    } else if (getCameraIdInternal() == CAMERA_ID_BACK_1 || m_parameters->getDualMode() == false) {
+        m_postPictureBufferMgr->setContigBufCount(m_exynosconfig->current->reservedBufInfo.num_buffers[CONFIG_RESERVED::POST_PIC]);
+        type = EXYNOS_CAMERA_BUFFER_ION_CACHED_RESERVED_TYPE;
+#endif
     } else {
         type = EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE;
     }
@@ -7922,8 +9634,13 @@ status_t ExynosCamera::m_setVendorPictureBuffer(void)
 #else
 #ifdef RESERVED_MEMORY_ENABLE
     if (getCameraIdInternal() == CAMERA_ID_BACK || m_parameters->getDualMode() == false) {
-        m_postPictureBufferMgr->setContigBufCount(RESERVED_NUM_POST_PIC_BUFFERS);
+        m_postPictureBufferMgr->setContigBufCount(m_exynosconfig->current->reservedBufInfo.num_buffers[CONFIG_RESERVED::POST_PIC]);
         type = EXYNOS_CAMERA_BUFFER_ION_CACHED_RESERVED_TYPE;
+#ifdef USE_DUAL_CAMERA
+    } else if (getCameraIdInternal() == CAMERA_ID_BACK_1 || m_parameters->getDualMode() == false) {
+            m_postPictureBufferMgr->setContigBufCount(m_exynosconfig->current->reservedBufInfo.num_buffers[CONFIG_RESERVED::POST_PIC]);
+            type = EXYNOS_CAMERA_BUFFER_ION_CACHED_RESERVED_TYPE;
+#endif
     } else {
         type = EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE;
     }
@@ -7959,6 +9676,41 @@ status_t ExynosCamera::m_setVendorPictureBuffer(void)
     }
 #endif
 
+#ifdef SAMSUNG_STR_CAPTURE
+    if (getCameraIdInternal() == CAMERA_ID_FRONT && m_STRCapturePluginHandle != NULL) {
+        minBufferCount = 1;
+        maxBufferCount = 1;
+        batchSize = 1;
+        type = EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE;
+
+        ret = m_allocBuffers(m_strCaptureBufferMgr, planeCount, planeSize, bytesPerLine,
+                             minBufferCount, maxBufferCount, batchSize,
+                             type, allocMode, false, true);
+
+        CLOGI("[STR_CAPTURE] m_allocBuffers(m_strCaptureBufferMgr) %d x %d, planeCount(%d), planeSize(%d)",
+                 inputW, inputH, planeCount, planeSize[0]);
+    }
+#endif
+
+#ifdef USE_MSC_CAPTURE
+    planeCount  = 1;
+    batchSize = m_parameters->getBatchSize(PIPE_GSC_REPROCESSING3);
+    maxBufferCount = 1;
+    type = EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE;
+
+    ret = m_allocBuffers(m_mscBufferMgr, planeCount, planeSize, bytesPerLine,
+                         maxBufferCount, maxBufferCount, batchSize,
+                         type, allocMode, false, true);
+    if (ret < 0) {
+        CLOGE("m_mscBufferMgr m_allocBuffers(minBufferCount=%d, maxBufferCount=%d) fail",
+             maxBufferCount, maxBufferCount);
+        return ret;
+    }
+
+    CLOGI("m_allocBuffers(m_mscBufferMgr) %d x %d, planeCount(%d), planeSize(%d)",
+             inputW, inputH, planeCount, planeSize[0]);
+#endif
+
     if (m_parameters->getSamsungCamera() == true) {
         int thumbnailW = 0, thumbnailH = 0;
         m_parameters->getThumbnailSize(&thumbnailW, &thumbnailH);
@@ -7990,7 +9742,6 @@ status_t ExynosCamera::m_setVendorPictureBuffer(void)
 status_t ExynosCamera::m_releaseVendorBuffers(void)
 {
     CLOGI("release buffer");
-    int ret = 0;
 
 #ifdef SAMSUNG_LBP
     if (m_lbpBufferMgr != NULL)
@@ -8027,6 +9778,12 @@ status_t ExynosCamera::m_releaseVendorBuffers(void)
     }
 #endif
 
+#ifdef SAMSUNG_STR_CAPTURE
+    if (m_strCaptureBufferMgr != NULL) {
+        m_strCaptureBufferMgr->deinit();
+    }
+#endif
+
     CLOGI("free buffer done");
 
     return NO_ERROR;
@@ -8051,10 +9808,17 @@ void ExynosCamera::releaseRecordingFrame(const void *opaque)
 
     if (m_recordingCallbackHeap == NULL) {
         CLOGW("recordingCallbackHeap equals NULL");
-        return;
+        /* The received native_handle must be closed */
+        /* return; */
     }
 
     struct VideoNativeHandleMetadata *releaseMetadata = (struct VideoNativeHandleMetadata *) opaque;
+
+    if (releaseMetadata == NULL) {
+        CLOGW("releaseMetadata is NULL");
+        return;
+    }
+
     native_handle_t *releaseHandle = NULL;
     int releaseBufferIndex = -1;
 
@@ -8071,12 +9835,11 @@ void ExynosCamera::releaseRecordingFrame(const void *opaque)
      * data[2]: bufferIndex
      */
     releaseHandle = releaseMetadata->pHandle;
-    if (releaseHandle == NULL) {
-        CLOGE("Invalid releaseHandle");
-        goto CLEAN;
-    }
-
     releaseBufferIndex = releaseHandle->data[2];
+#ifdef TIME_LOGGER_RECORDING_ENABLE
+    TIME_LOGGER_UPDATE(m_cameraId, releaseBufferIndex, PIPE_MCSC2, INTERVAL, RECORDING_RELEASE_FRAME, true);
+    TIME_LOGGER_UPDATE(m_cameraId, releaseBufferIndex, PIPE_MCSC2, DURATION, RECORDING_RELEASE_FRAME, true);
+#endif
     if (releaseBufferIndex >= m_recordingBufferCount) {
         CLOGW("Invalid VideoBufferIndex %d",
                 releaseBufferIndex);
@@ -8093,16 +9856,19 @@ void ExynosCamera::releaseRecordingFrame(const void *opaque)
         m_releaseRecordingBuffer(releaseBufferIndex);
     } else {
 #ifdef SAMSUNG_HYPER_MOTION
-        if (m_parameters->getHyperMotionMode() == true) {
-            m_putBuffers(m_hyperMotion_BufferMgr, releaseBufferIndex);
+        if (m_parameters != NULL) {
+            if (m_parameters->getHyperMotionMode() == true) {
+                m_putBuffers(m_hyperMotion_BufferMgr, releaseBufferIndex);
+            }
         }
 #endif
 #ifdef SUPPORT_SW_VDIS
-        if (m_swVDIS_Mode == true) {
+        int cameraId = getCameraIdInternal();
+		if (m_swVDIS_Mode && (m_swVDIS_ModeDual == false || (m_swVDIS_ModeDual == true && cameraId != CAMERA_ID_BACK_1))) {
             m_putBuffers(m_swVDIS_BufferMgr, releaseBufferIndex);
         }
 #endif
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         if (m_parameters->getDualCameraMode() == true) {
             m_releaseRecordingBuffer(releaseBufferIndex);
         }
@@ -8123,6 +9889,13 @@ CLEAN:
         native_handle_delete(releaseHandle);
     }
 
+    if (releaseMetadata != NULL) {
+        m_releaseRecordingCallbackHeap(releaseMetadata);
+    }
+
+#ifdef TIME_LOGGER_RECORDING_ENABLE
+    TIME_LOGGER_UPDATE(m_cameraId, releaseBufferIndex, PIPE_MCSC2, DURATION, RECORDING_RELEASE_FRAME, false);
+#endif
     return;
 }
 
@@ -8134,7 +9907,6 @@ bool ExynosCamera::m_monitorThreadFunc(void)
     struct timeval dqTime;
     uint64_t *timeInterval;
     int *countRenew;
-    int camId = getCameraIdInternal();
     int ret = NO_ERROR;
     int loopCount = 0;
 
@@ -8159,12 +9931,20 @@ bool ExynosCamera::m_monitorThreadFunc(void)
     }
 
     pipeIdFlite = m_getBayerPipeId();
-    enum NODE_TYPE dstPos = m_previewFrameFactory->getNodeType(PIPE_VC0);
 
-    if (m_parameters->is3aaIspOtf() == true) {
-        pipeIdErrorCheck = PIPE_3AA;
+    if (IS_OUTPUT_NODE(m_previewFrameFactory, PIPE_MCSC)) {
+        pipeIdErrorCheck = PIPE_MCSC;
     } else {
-        pipeIdErrorCheck = PIPE_ISP;
+        if (m_parameters->isTpuMcscOtf() && IS_OUTPUT_NODE(m_previewFrameFactory, PIPE_TPU))
+            pipeIdErrorCheck = PIPE_TPU;
+        else if (m_parameters->isIspTpuOtf() && IS_OUTPUT_NODE(m_previewFrameFactory, PIPE_ISP))
+            pipeIdErrorCheck = PIPE_ISP;
+        else if (m_parameters->isIspMcscOtf() && IS_OUTPUT_NODE(m_previewFrameFactory, PIPE_ISP))
+            pipeIdErrorCheck = PIPE_ISP;
+        else if (m_parameters->is3aaIspOtf() && IS_OUTPUT_NODE(m_previewFrameFactory, PIPE_3AA))
+            pipeIdErrorCheck = PIPE_3AA;
+        else
+            pipeIdErrorCheck = pipeIdFlite;
     }
 
 #ifdef MONITOR_LOG_SYNC
@@ -8221,8 +10001,24 @@ bool ExynosCamera::m_monitorThreadFunc(void)
     m_previewFrameFactory->getThreadState(&threadState, pipeIdErrorCheck);
     m_previewFrameFactory->getThreadRenew(&countRenew, pipeIdErrorCheck);
 
-    if (m_parameters->getSamsungCamera() && ((*threadState == ERROR_POLLING_DETECTED) || (*countRenew > ERROR_DQ_BLOCKED_COUNT))) {
+    if (m_parameters->getSamsungCamera() && ((*threadState == ERROR_POLLING_DETECTED) || (*countRenew > ERROR_DQ_BLOCKED_COUNT))
+#ifdef USE_DUAL_CAMERA
+            && !(m_parameters->getDualCameraMode() == true &&
+                (m_parameters->getDualStandbyMode() == ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_POST ||
+                m_parameters->getDualStandbyMode() == ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR ||
+                m_parameters->getFlagForceSwitchingOnly() == true))
+#endif
+       ) {
+#ifdef ERROR_ESD_STATE_COUNT
+        m_esdErrorCount++;
+        CLOGD("ESD Detected. threadState(%d) *countRenew(%d) esdErrorCount(%d)", *threadState, *countRenew, m_esdErrorCount);
+#else
         CLOGD("ESD Detected. threadState(%d) *countRenew(%d)", *threadState, *countRenew);
+#endif
+
+#ifdef ERROR_ESD_STATE_COUNT
+        if (m_esdErrorCount == 1) {
+#endif
         m_dump();
 
 #ifdef SAMSUNG_TN_FEATURE
@@ -8244,6 +10040,11 @@ bool ExynosCamera::m_monitorThreadFunc(void)
         }
 #endif
 
+        ret = m_previewFrameFactory->setControl(V4L2_CID_IS_CAMERA_TYPE, IS_COLD_RESET, PIPE_3AA);
+        if (ret < 0) {
+            CLOGE("PIPE_%d V4L2_CID_IS_CAMERA_TYPE fail, ret(%d)", PIPE_3AA, ret);
+        }
+
 #ifdef CAMERA_GED_FEATURE
         /* in GED */
         /* skip error callback */
@@ -8255,13 +10056,20 @@ bool ExynosCamera::m_monitorThreadFunc(void)
         /* android_printAssert(NULL, LOG_TAG, "killed by itself"); */
 #endif
 
-        ret = m_previewFrameFactory->setControl(V4L2_CID_IS_CAMERA_TYPE, IS_COLD_RESET, PIPE_3AA);
-        if (ret < 0) {
-            CLOGE("PIPE_%d V4L2_CID_IS_CAMERA_TYPE fail, ret(%d)", PIPE_3AA, ret);
+#ifdef ERROR_ESD_STATE_COUNT
+        } else {
+            if (*countRenew > ERROR_DQ_BLOCKED_COUNT * 5) {
+                android_printAssert(NULL, LOG_TAG, "assert, An ESD error cocurred consecutively");
+                return false;
+            }
         }
-
+#else
         return false;
+#endif
     } else {
+#ifdef ERROR_ESD_STATE_COUNT
+        m_esdErrorCount = 0;
+#endif
         CLOGV("(%d)", *threadState);
     }
 
@@ -8329,7 +10137,14 @@ bool ExynosCamera::m_monitorThreadFunc(void)
     CLOGV("Thread IntervalTime [%lld]", (long long)*timeInterval);
     CLOGV("Thread Renew Count [%d]", *countRenew);
 
-    m_previewFrameFactory->incThreadRenew(pipeIdErrorCheck);
+#ifdef USE_DUAL_CAMERA
+    if (!(m_parameters->getDualCameraMode() == true &&
+             (m_parameters->getDualStandbyMode() == ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_POST ||
+             m_parameters->getDualStandbyMode() == ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR)))
+#endif
+    {
+        m_previewFrameFactory->incThreadRenew(pipeIdErrorCheck);
+    }
 
     return true;
 }
@@ -8351,6 +10166,20 @@ bool ExynosCamera::m_autoFocusThreadFunc(void)
 {
     CLOGI(" -IN-");
 
+#ifdef USE_DUAL_CAMERA
+    /* skip af control in specific sync mode per camera */
+    int masterCameraId, slaveCameraId;
+    getDualCameraId(&masterCameraId, &slaveCameraId);
+    if (m_parameters->getDualCameraMode() == true &&
+            /* master cam / switch mode */
+            ((m_cameraId == masterCameraId &&
+              m_parameters->getDualCameraSyncType() == SYNC_TYPE_SWITCH) ||
+            /* slave cam / not switch mode */
+             (m_cameraId == slaveCameraId &&
+              m_parameters->getDualCameraSyncType() == SYNC_TYPE_BYPASS)))
+            return false;
+#endif
+
     bool afResult = false;
     int focusMode = 0;
     ExynosCameraActivityAutofocus *autoFocusMgr = m_exynosCameraActivityControl->getAutoFocusMgr();
@@ -8361,7 +10190,7 @@ bool ExynosCamera::m_autoFocusThreadFunc(void)
      * caller of cancelAutoFocus() which both want to grab the same lock
      * in CameraServices layer.
      */
-
+/* HACK : For front touch AF
     if (getCameraIdInternal() == CAMERA_ID_FRONT) {
         if (m_parameters->msgTypeEnabled(CAMERA_MSG_FOCUS)) {
             if (m_notifyCb != NULL) {
@@ -8375,6 +10204,9 @@ bool ExynosCamera::m_autoFocusThreadFunc(void)
         }
         return false;
     } else if (getCameraIdInternal() == CAMERA_ID_BACK_1) {
+*/
+        if (getCameraIdInternal() == CAMERA_ID_BACK_1) {
+
         /*
          * enable AF for dual sensor camera.
          * when infinity, fixed : use old af blocking code.
@@ -8449,12 +10281,27 @@ bool ExynosCamera::m_autoFocusThreadFunc(void)
                 }
             }
 #endif
-
-            CLOGD("CAMERA_MSG_FOCUS(%d) mode(%d)", afFinalResult, focusMode);
-            m_autoFocusLock.unlock();
-            m_notifyCb(CAMERA_MSG_FOCUS, afFinalResult, 0, m_callbackCookie);
-            m_autoFocusLock.lock();
-            m_flagAFDone = true;
+#ifdef SAMSUNG_DUAL_SOLUTION
+            if (m_parameters->getDualCameraMode() == true &&
+                m_parameters->getDualCameraSyncType() == SYNC_TYPE_SYNC) {
+                CLOGD("[Fusion] AF done!!(%d)", afFinalResult);
+                int state =  m_parameters->checkDualAfState(getCameraIdInternal(), afFinalResult);
+                if (state != -1) {
+                    CLOGD("CAMERA_MSG_FOCUS(%d) mode(%d)", state, focusMode);
+                    m_autoFocusLock.unlock();
+                    m_notifyCb(CAMERA_MSG_FOCUS, state, 0, m_callbackCookie);
+                    m_autoFocusLock.lock();
+                    m_flagAFDone = true;
+                }
+            }else
+#endif
+            {
+                CLOGD("CAMERA_MSG_FOCUS(%d) mode(%d)", afFinalResult, focusMode);
+                m_autoFocusLock.unlock();
+                m_notifyCb(CAMERA_MSG_FOCUS, afFinalResult, 0, m_callbackCookie);
+                m_autoFocusLock.lock();
+                m_flagAFDone = true;
+            }
         } else {
             CLOGD("m_notifyCb is NULL mode(%d)", focusMode);
         }
@@ -8497,7 +10344,6 @@ done:
 bool ExynosCamera::m_autoFocusContinousThreadFunc(void)
 {
     int ret = 0;
-    int index = 0;
     uint32_t frameCnt = 0;
     uint32_t count = 0;
 
@@ -8509,6 +10355,10 @@ bool ExynosCamera::m_autoFocusContinousThreadFunc(void)
     if (ret < 0) {
         /* TODO: We need to make timeout duration depends on FPS */
         if (ret == TIMED_OUT) {
+#ifdef USE_DUAL_CAMERA
+        if (!(m_parameters->getDualCameraMode() == true &&
+             m_parameters->getDualStandbyMode() == ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR))
+#endif
             CLOGW("wait timeout");
         } else {
             CLOGE("wait and pop fail, ret(%d)", ret);
@@ -8528,6 +10378,20 @@ bool ExynosCamera::m_autoFocusContinousThreadFunc(void)
     if(m_autoFocusRunning) {
         return true;
     }
+
+#ifdef USE_DUAL_CAMERA
+    /* skip af control in specific sync mode per camera */
+    int masterCameraId, slaveCameraId;
+    getDualCameraId(&masterCameraId, &slaveCameraId);
+    if (m_parameters->getDualCameraMode() == true &&
+            /* master cam / switch mode */
+            ((m_cameraId == masterCameraId &&
+              m_parameters->getDualCameraSyncType() == SYNC_TYPE_SWITCH) ||
+            /* slave cam / not switch mode */
+             (m_cameraId == slaveCameraId &&
+              m_parameters->getDualCameraSyncType() == SYNC_TYPE_BYPASS)))
+            return true;
+#endif
 
 #ifdef SAMSUNG_TN_FEATURE
     /* Continuous Auto-focus */
@@ -8556,10 +10420,18 @@ bool ExynosCamera::m_autoFocusContinousThreadFunc(void)
 
             if (m_notifyCb != NULL && m_parameters->msgTypeEnabled(CAMERA_MSG_FOCUS)
                 && (prev_afstatus != afstatus)) {
-                CLOGD("CAMERA_MSG_FOCUS(%d) mode(%d)",
-                    afResult, m_parameters->getFocusMode());
-                m_notifyCb(CAMERA_MSG_FOCUS, afResult, 0, m_callbackCookie);
-                autoFocusMgr->displayAFStatus();
+#ifdef SAMSUNG_DUAL_SOLUTION
+                if (!(m_parameters->getDualCameraMode() == true &&
+                    m_parameters->getDualCameraSyncType() == SYNC_TYPE_SYNC &&
+                    m_cameraId == slaveCameraId))
+#endif
+                {
+                    CLOGD("CAMERA_MSG_FOCUS(%d) mode(%d)",
+                            afResult, m_parameters->getFocusMode());
+                    m_notifyCb(CAMERA_MSG_FOCUS, afResult, 0, m_callbackCookie);
+                }
+                if (afstatus == FOCUS_RESULT_FAIL || afstatus == FOCUS_RESULT_SUCCESS)
+                    autoFocusMgr->displayAFStatus();
             }
         }
     } else {
@@ -8620,7 +10492,10 @@ status_t ExynosCamera::m_getBufferManager(uint32_t pipeId, ExynosCameraBufferMan
         break;
     case PIPE_VC0:
         bufMgrList[0] = NULL;
-        bufMgrList[1] = &m_bayerBufferMgr;
+        if (m_parameters->getUsePureBayerReprocessing() == false)
+            bufMgrList[1] = &m_fliteBufferMgr;
+        else
+            bufMgrList[1] = &m_bayerBufferMgr;
         break;
     case PIPE_3AA_ISP:
         bufMgrList[0] = &m_3aaBufferMgr;
@@ -8645,7 +10520,7 @@ status_t ExynosCamera::m_getBufferManager(uint32_t pipeId, ExynosCameraBufferMan
         if (m_parameters->getTpuEnabledMode() == true) {
             bufMgrList[1] = &m_hwDisBufferMgr;
         } else {
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
             if (m_parameters->getDualCameraMode() == true)
                 bufMgrList[1] = &m_fusionBufferMgr;
             else
@@ -8657,7 +10532,7 @@ status_t ExynosCamera::m_getBufferManager(uint32_t pipeId, ExynosCameraBufferMan
         bufMgrList[0] = &m_ispBufferMgr;
         bufMgrList[1] = &m_scpBufferMgr;
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
        if (m_parameters->getDualCameraMode() == true)
             bufMgrList[1] = &m_fusionBufferMgr;
 #endif
@@ -8672,7 +10547,7 @@ status_t ExynosCamera::m_getBufferManager(uint32_t pipeId, ExynosCameraBufferMan
     case PIPE_SCP:
         bufMgrList[0] = NULL;
         bufMgrList[1] = &m_scpBufferMgr;
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         if (m_parameters->getDualCameraMode() == true)
             bufMgrList[1] = &m_fusionBufferMgr;
 #endif
@@ -8682,11 +10557,15 @@ status_t ExynosCamera::m_getBufferManager(uint32_t pipeId, ExynosCameraBufferMan
         bufMgrList[0] = NULL;
         bufMgrList[1] = &m_previewCallbackBufferMgr;
         break;
+    case PIPE_VRA:
+        bufMgrList[0] = &m_vraBufferMgr;
+        bufMgrList[1] = NULL;
+        break;
     case PIPE_GSC:
         bufMgrList[0] = &m_scpBufferMgr;
         bufMgrList[1] = &m_scpBufferMgr;
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         if (m_parameters->getDualCameraMode() == true)
             bufMgrList[1] = &m_fusionBufferMgr;
 #endif
@@ -8698,7 +10577,11 @@ status_t ExynosCamera::m_getBufferManager(uint32_t pipeId, ExynosCameraBufferMan
         bufMgrList[1] = &m_postPictureBufferMgr;
         break;
 #endif
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
+    case PIPE_SYNC_SWITCHING:
+        bufMgrList[0] = &m_ispBufferMgr;
+        bufMgrList[1] = NULL;
+        break;
     case PIPE_SYNC:
         bufMgrList[0] = &m_fusionBufferMgr;
         bufMgrList[1] = NULL;
@@ -8736,7 +10619,7 @@ status_t ExynosCamera::m_getBufferManager(uint32_t pipeId, ExynosCameraBufferMan
         bufMgrList[0] = NULL;
         bufMgrList[1] = &m_sccReprocessingBufferMgr;
         break;
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     case PIPE_SYNC_REPROCESSING:
         bufMgrList[0] = &m_sccReprocessingBufferMgr;
         bufMgrList[1] = NULL;
@@ -8763,6 +10646,12 @@ status_t ExynosCamera::m_getBufferManager(uint32_t pipeId, ExynosCameraBufferMan
         bufMgrList[0] = NULL;
         bufMgrList[1] = &m_sccReprocessingBufferMgr;
         break;
+#ifdef USE_REMOSAIC_CAPTURE
+    case PIPE_REMOSAIC_REPROCESSING:
+        bufMgrList[0] = &m_bayerBufferMgr;
+        bufMgrList[1] = &m_bayerBufferMgr;
+        break;
+#endif
     default:
         CLOGE(" Unknown pipeId(%d)", pipeId);
         bufMgrList[0] = NULL;
@@ -9018,7 +10907,7 @@ done:
 bool ExynosCamera::m_RawCaptureDumpThreadFunc(void)
 {
     ExynosCameraAutoTimer autoTimer(__FUNCTION__);
-    CLOGI("");
+    CLOGI("[RAWDUMP_CAP]");
 
     int ret = 0;
     int sensorMaxW, sensorMaxH;
@@ -9031,6 +10920,9 @@ bool ExynosCamera::m_RawCaptureDumpThreadFunc(void)
     ExynosCameraFrameSP_sptr_t newFrame = NULL;
     ExynosCameraFrameSP_sptr_t inListFrame = NULL;
     unsigned int fliteFcount = 0;
+    int dstPos = 0;
+    time_t rawtime;
+    struct tm *timeinfo;
 
     ret = m_RawCaptureDumpQ->waitAndPopProcessQ(&newFrame);
     if (ret < 0) {
@@ -9044,29 +10936,55 @@ bool ExynosCamera::m_RawCaptureDumpThreadFunc(void)
     }
 
     bayerPipeId = newFrame->getFirstEntity()->getPipeId();
-    ret = newFrame->getDstBuffer(bayerPipeId, &bayerBuffer);
+
+#if defined(DEBUG_RAWDUMP_DIRTY_BAYER)
+    dstPos = m_previewFrameFactory->getNodeType(PIPE_3AC);
+    ret = newFrame->getDstBuffer(bayerPipeId, &bayerBuffer, dstPos);
+	if (ret != NO_ERROR) {
+		CLOGE("getDstBuffer failed, frame(%d) pipeId(%d) pos(%d)", newFrame->getFrameCount(), bayerPipeId, dstPos);
+	}
+	ret = m_getBufferManager(PIPE_3AC, &bufferMgr, DST_BUFFER_DIRECTION);
+
+    ret = bufferMgr->putBuffer(bayerBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL);
+    if (ret < 0) {
+        CLOGE("putIndex is %d", bayerBuffer.index);
+        bufferMgr->printBufferState();
+        bufferMgr->printBufferQState();
+    }
+#endif
+
+#if defined(DEBUG_RAWDUMP_DIRTY_BAYER)
+    dstPos = m_previewFrameFactory->getNodeType(PIPE_VC0);
+#else
+    if (m_parameters->getUsePureBayerReprocessing() == true)
+        dstPos = m_previewFrameFactory->getNodeType(PIPE_VC0);
+    else
+        dstPos = m_previewFrameFactory->getNodeType(PIPE_3AC);
+#endif
+
+    ret = newFrame->getDstBuffer(bayerPipeId, &bayerBuffer, dstPos);
 
     if (bayerPipeId == PIPE_3AA &&
         m_parameters->isFlite3aaOtf() == true) {
         ret = m_getBufferManager(PIPE_VC0, &bufferMgr, DST_BUFFER_DIRECTION);
-    } else
-
-    // update for capture meta data.
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-    if (m_parameters->getDualCameraMode() == true) {
-        struct camera2_shot_ext temp_shot_ext;
-        newFrame->getMetaData(&temp_shot_ext);
-
-        if (m_parameters->setFusionInfo(&temp_shot_ext) != NO_ERROR) {
-            CLOGE("DEBUG(%s[%d]):m_parameters->setFusionInfo() fail", __FUNCTION__, __LINE__);
+    } else {
+        // update for capture meta data.
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true) {
+            struct camera2_shot_ext temp_shot_ext;
+            newFrame->getMetaData(&temp_shot_ext);
+            if (m_parameters->setFusionInfo(&temp_shot_ext) != NO_ERROR) {
+                CLOGE("DEBUG(%s[%d]):m_parameters->setFusionInfo() fail", __FUNCTION__, __LINE__);
+            }
         }
-    }
 #endif
-    {
-        ret = m_getBufferManager(bayerPipeId, &bufferMgr, DST_BUFFER_DIRECTION);
+        {
+            ret = m_getBufferManager(bayerPipeId, &bufferMgr, DST_BUFFER_DIRECTION);
+        }
     }
 
     /* Rawdump capture is available in pure bayer only */
+    CLOGD("[RAWDUMP_CAP] get frameCount. pureBayerReproc = %d", m_parameters->getUsePureBayerReprocessing());
     if (m_parameters->getUsePureBayerReprocessing() == true) {
         camera2_shot_ext *shot_ext = NULL;
         shot_ext = (camera2_shot_ext *)bayerBuffer.addr[bayerBuffer.getMetaPlaneIndex()];
@@ -9084,12 +11002,16 @@ bool ExynosCamera::m_RawCaptureDumpThreadFunc(void)
     }
 
     memset(filePath, 0, sizeof(filePath));
-    snprintf(filePath, sizeof(filePath), "/data/media/0/RawCapture%d_%d.raw",
-        m_parameters->getCameraId(), fliteFcount);
+    time(&rawtime);
+    timeinfo = localtime(&rawtime);
+    snprintf(filePath, sizeof(filePath), "/data/media/0/Raw%d_%02d%02d%02d_%02d%02d%02d.raw",
+        m_cameraId, timeinfo->tm_year+1900, timeinfo->tm_mon+1, timeinfo->tm_mday,
+        timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+
     /* Pure Bayer Buffer Size == MaxPictureSize + Sensor Margin == Max Sensor Size */
     m_parameters->getMaxSensorSize(&sensorMaxW, &sensorMaxH);
 
-    CLOGD("Raw Dump start (%s)", filePath);
+    CLOGD("[RAWDUMP_CAP]Raw Dump start (%s)", filePath);
 
     bRet = dumpToFile((char *)filePath,
         bayerBuffer.addr[0],
@@ -9125,7 +11047,7 @@ CLEAN:
 }
 #endif
 
-status_t ExynosCamera::m_getBayerBuffer(uint32_t pipeId, ExynosCameraBuffer *buffer,
+ExynosCameraFrameSelector::result_t ExynosCamera::m_getBayerBuffer(uint32_t pipeId, ExynosCameraBuffer *buffer,
                                             ExynosCameraFrameSP_dptr_t frame,
                                             camera2_shot_ext *updateDmShot
 #ifdef SUPPORT_DEPTH_MAP
@@ -9146,15 +11068,29 @@ status_t ExynosCamera::m_getBayerBuffer(uint32_t pipeId, ExynosCameraBuffer *buf
     int funcRetryCount = 0;
     int retryCount = 30; /* 200ms x 30 */
     camera2_shot_ext *shot_ext = NULL;
+#ifdef LLS_REPROCESSING
     camera2_stream *shot_stream = NULL;
+#endif
     ExynosCameraFrameSP_sptr_t inListFrame = NULL;
     ExynosCameraFrameSP_sptr_t bayerFrame = NULL;
+    ExynosCameraFrameSelector::result_t result;
     ExynosCameraBuffer *saveBuffer = NULL;
     ExynosCameraBuffer tempBuffer;
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    ExynosCameraBuffer *pureSaveBuffer = NULL;
+    ExynosCameraBuffer *purebuffer = NULL;
+    ExynosCameraBuffer pureTempBuffer;
+    ExynosCameraBuffer pureBayerBuffer;
+#endif
     ExynosRect srcRect, dstRect;
     entity_buffer_state_t buffer_state = ENTITY_BUFFER_STATE_ERROR;
 #ifdef LLS_REPROCESSING
     unsigned int fliteFcount = 0;
+#endif
+
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    pureBayerBuffer.index = -2;
+    purebuffer = &pureBayerBuffer;
 #endif
 
     m_parameters->getPictureBayerCropSize(&srcRect, &dstRect);
@@ -9175,6 +11111,7 @@ BAYER_RETRY:
         CLOGD("Emergency stop");
         m_reprocessingCounter.clearCount();
         m_pictureEnabled = false;
+        result = ExynosCameraFrameSelector::RESULT_NO_FRAME;
         goto CLEAN;
     }
 
@@ -9192,8 +11129,9 @@ BAYER_RETRY:
 
     m_captureSelector->setWaitTime(200000000);
 #ifdef RAWDUMP_CAPTURE
+    CLOGD("[RAWDUMP_CAP] selectFrames. Push bayerFrame to RawDumpQ and mode off.");
     for (int i = 0; i < 2; i++) {
-        bayerFrame = m_captureSelector->selectFrames(m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount, m_previewFrameFactory->getNodeType(PIPE_VC0));
+        result = m_captureSelector->selectFrames(bayerFrame, m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount, m_previewFrameFactory->getNodeType(PIPE_VC0));
 
         if(i == 0) {
             m_RawCaptureDumpQ->pushProcessQ(&bayerFrame);
@@ -9205,7 +11143,7 @@ BAYER_RETRY:
 #ifdef SAMSUNG_QUICKSHOT
     if (m_parameters->getQuickShot() && m_quickShotStart) {
         for (int i = 0; i < FRAME_SKIP_COUNT_QUICK_SHOT; i++) {
-            bayerFrame = m_captureSelector->selectFrames(m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount, dstPos);
+            result = m_captureSelector->selectFrames(bayerFrame, m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount, dstPos);
         }
     } else
 #endif
@@ -9234,25 +11172,40 @@ BAYER_RETRY:
             }
         }
 #endif
-        bayerFrame = m_captureSelector->selectFrames(m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount, dstPos);
+        result = m_captureSelector->selectFrames(bayerFrame, m_reprocessingCounter.getCount(), pipeId, isSrc, retryCount, dstPos);
     }
 #ifdef SAMSUNG_QUICKSHOT
     m_quickShotStart = false;
 #endif
 #endif
-    if (bayerFrame == NULL) {
+
+    switch (result) {
+    case ExynosCameraFrameSelector::RESULT_NO_FRAME:
         CLOGE("bayerFrame is NULL");
-        ret = INVALID_OPERATION;
-        goto CLEAN;
+        return result;
+        break;
+    case ExynosCameraFrameSelector::RESULT_SKIP_FRAME:
+        CLOGW("skip bayerFrame");
+        return result;
+        break;
+    case ExynosCameraFrameSelector::RESULT_HAS_FRAME:
+        if (bayerFrame == NULL) {
+            CLOGE("bayerFrame is NULL!!");
+            goto CLEAN;
+        }
+        /* set the frame */
+        frame = bayerFrame;
+        break;
+    default:
+        CLOG_ASSERT("invalid select result!! result:%d", result);
+        break;
     }
 
-    /* set the frame */
-    frame = bayerFrame;
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == true &&
             frame->getFrameType() == FRAME_TYPE_INTERNAL) {
-        buffer->index = -1;
-        return ret;
+        frame = NULL;
+        return ExynosCameraFrameSelector::RESULT_SKIP_FRAME;
     }
 #endif
 
@@ -9260,9 +11213,44 @@ BAYER_RETRY:
     m_parameters->setSetfileYuvRange();
 #endif
 
+#if !defined(DEBUG_RAWDUMP)
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    if (bayerFrame->getRequest(PIPE_VC0) == true) {
+        ret = bayerFrame->getDstBuffer(pipeId, purebuffer, m_previewFrameFactory->getNodeType(PIPE_VC0));
+        if (ret < 0) {
+            CLOGE(" getDstBuffer(pipeId(%d) dstPos(%d)) fail, ret(%d)", pipeId, m_previewFrameFactory->getNodeType(PIPE_VC0), ret);
+            goto CLEAN;
+        }
+
+        if (m_parameters->getDNGCaptureModeOn() == false) {
+            if (purebuffer->index != -2 && m_fliteBufferMgr != NULL) {
+                m_putBuffers(m_fliteBufferMgr, purebuffer->index);
+                CLOGD("[DNG] m_putBuffers for m_fliteBufferMgr");
+            }
+        }
+    }
+#endif
+#endif
+
+#if defined(RAWDUMP_CAPTURE) && defined(DEBUG_RAWDUMP_DIRTY_BAYER)
+    if (bayerFrame->getRequest(PIPE_VC0) == true) {
+        ret = bayerFrame->getDstBuffer(pipeId, purebuffer, m_previewFrameFactory->getNodeType(PIPE_VC0));
+        if (ret < 0) {
+            CLOGE(" getDstBuffer(pipeId(%d) dstPos(%d)) fail, ret(%d)", pipeId, m_previewFrameFactory->getNodeType(PIPE_VC0), ret);
+            goto CLEAN;
+        }
+
+        if (purebuffer->index != -2 && m_fliteBufferMgr != NULL) {
+            m_putBuffers(m_fliteBufferMgr, purebuffer->index);
+            CLOGD("[RAW] m_putBuffers for m_fliteBufferMgr");
+        }
+    }
+#endif
+
     ret = bayerFrame->getDstBuffer(pipeId, buffer, dstPos);
     if (ret < 0) {
         CLOGE(" getDstBuffer(pipeId(%d) dstPos(%d)) fail, ret(%d)", pipeId, dstPos, ret);
+        result = ExynosCameraFrameSelector::RESULT_NO_FRAME;
         goto CLEAN;
     }
 
@@ -9273,7 +11261,7 @@ BAYER_RETRY:
             CLOGE("Failed to setDstBuffer. PIPE_%d, CAPTURE_NODE_%d", pipeId, m_previewFrameFactory->getNodeType(PIPE_VC1));
         }
 
-        if (!(m_parameters->getDepthCallbackOnCapture() && m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21)
+        if (!(m_parameters->getDepthCallbackOnCapture() && m_nv21CaptureEnabled)
             && m_parameters->getDepthCallbackOnPreview()
             && depthMapbuffer->index != -2 && m_depthMapBufferMgr != NULL) {
             CLOGD("put depthMapbuffer->index(%d)", depthMapbuffer->index);
@@ -9286,6 +11274,7 @@ BAYER_RETRY:
     if (updateDmShot == NULL) {
         CLOGE("updateDmShot is NULL");
         ret = BAD_VALUE;
+        result = ExynosCameraFrameSelector::RESULT_NO_FRAME;
         goto CLEAN;
     }
 
@@ -9310,6 +11299,13 @@ BAYER_RETRY:
         if (buffer->index != -2 && m_bayerBufferMgr != NULL)
             m_putBuffers(m_bayerBufferMgr, buffer->index);
 
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+        if (bayerFrame->getRequest(PIPE_VC0) == true && purebuffer->index != -2 && m_fliteBufferMgr != NULL) {
+            m_putBuffers(m_fliteBufferMgr, purebuffer->index);
+            CLOGD("[DNG] m_putBuffers for m_fliteBufferMgr");
+        }
+#endif
+
         if (bayerFrame != NULL) {
             bayerFrame->frameUnlock();
             ret = m_searchFrameFromList(&m_processList, bayerFrame->getFrameCount(), inListFrame, &m_processListLock);
@@ -9319,6 +11315,7 @@ BAYER_RETRY:
                 CLOGD("Selected frame(%d) is not available! buffer_state(%d)",
                          bayerFrame->getFrameCount(), buffer_state);
                 bayerFrame = NULL;
+                result = ExynosCameraFrameSelector::RESULT_NO_FRAME;
             }
         }
         goto BAYER_RETRY;
@@ -9347,6 +11344,13 @@ BAYER_RETRY:
         if (buffer->index != -2 && m_bayerBufferMgr != NULL)
             m_putBuffers(m_bayerBufferMgr, buffer->index);
 
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+        if (bayerFrame->getRequest(PIPE_VC0) == true && purebuffer->index != -2 && m_fliteBufferMgr != NULL) {
+            m_putBuffers(m_fliteBufferMgr, purebuffer->index);
+            CLOGD("[DNG] m_putBuffers for m_fliteBufferMgr");
+        }
+#endif
+
 #ifdef SUPPORT_DEPTH_MAP
         if (depthMapbuffer->index != -2 && m_depthMapBufferMgr != NULL)
             m_putBuffers(m_depthMapBufferMgr, depthMapbuffer->index);
@@ -9362,6 +11366,7 @@ BAYER_RETRY:
                          bayerFrame->getFrameCount(),
                         (int) shot_ext->shot.dm.sensor.exposureTime);
                 bayerFrame = NULL;
+                result = ExynosCameraFrameSelector::RESULT_NO_FRAME;
             }
         }
         goto BAYER_RETRY;
@@ -9374,6 +11379,13 @@ BAYER_RETRY:
             buffer = &tempBuffer;
             tempBuffer.index = -2;
 
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+            if (m_parameters->getDNGCaptureModeOn() == true) {
+                pureSaveBuffer = purebuffer;
+                purebuffer = &pureTempBuffer;
+                pureTempBuffer.index = -2;
+            }
+#endif
             if (bayerFrame != NULL) {
                 bayerFrame->frameUnlock();
                 ret = m_searchFrameFromList(&m_processList, bayerFrame->getFrameCount(), inListFrame, &m_processListLock);
@@ -9381,6 +11393,7 @@ BAYER_RETRY:
                     CLOGE("searchFrameFromList fail");
                 } else {
                     bayerFrame = NULL;
+                    result = ExynosCameraFrameSelector::RESULT_NO_FRAME;
                 }
             }
             goto BAYER_RETRY;
@@ -9392,12 +11405,23 @@ BAYER_RETRY:
 #else
         ret = addBayerBuffer(buffer, saveBuffer, &dstRect);
 #endif
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+        if (m_parameters->getDNGCaptureModeOn() == true)
+            ret = addBayerBuffer(purebuffer, pureSaveBuffer, &dstRect);
+#endif
         if (ret < 0) {
             CLOGE("addBayerBufferPacked() fail");
         }
 
         if (buffer->index != -2 && m_bayerBufferMgr != NULL)
             m_putBuffers(m_bayerBufferMgr, buffer->index);
+
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+        if (m_parameters->getDNGCaptureModeOn() == true && purebuffer->index != -2 && m_fliteBufferMgr != NULL) {
+            m_putBuffers(m_fliteBufferMgr, purebuffer->index);
+            CLOGD("[DNG] m_putBuffers for m_fliteBufferMgr %d %d", purebuffer->index, m_longExposureRemainCount);
+        }
+#endif
 
         if (bayerFrame != NULL) {
             bayerFrame->frameUnlock();
@@ -9408,7 +11432,6 @@ BAYER_RETRY:
                 CLOGD("Selected frame(%d, %d msec) delete.",
                          bayerFrame->getFrameCount(),
                         (int) shot_ext->shot.dm.sensor.exposureTime);
-                bayerFrame = NULL;
             }
         }
 
@@ -9425,17 +11448,56 @@ BAYER_RETRY:
 
 #ifdef CAMERA_ADD_BAYER_ENABLE
         if (m_ionClient >= 0)
+#ifdef USE_LIB_ION_LEGACY
             ion_sync_fd(m_ionClient, buffer->fd[0]);
+#else
+            exynos_ion_sync_fd(m_ionClient, buffer->fd[0]);
+#endif
+#endif
+
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+        if (m_parameters->getDNGCaptureModeOn() == true) {
+            purebuffer = pureSaveBuffer;
+            pureSaveBuffer = NULL;
+
+#ifdef CAMERA_ADD_BAYER_ENABLE
+            if (m_ionClient >= 0)
+#ifdef USE_LIB_ION_LEGACY
+                ion_sync_fd(m_ionClient, purebuffer->fd[0]);
+#else
+                exynos_ion_sync_fd(m_ionClient, purebuffer->fd[0]);
+#endif
+#endif
+        }
 #endif
     }
+
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    if (m_parameters->getDNGCaptureModeOn() == true) {
+        CLOGD("[DNG] Push pure bayer to DNG Thread %d", purebuffer->index);
+        m_dngFrameNumber = getMetaDmRequestFrameCount(updateDmShot);
+        m_DNGCaptureThread->run();
+        m_dngCaptureQ->pushProcessQ(purebuffer);
+    }
+#if 0
+    {
+        char filePath[70];
+        int width, height = 0;
+        m_parameters->getHwSensorSize(&width, &height);
+        CLOGD("[DNG] getHwSensorSize(%d x %d), /data/media/0/bayer_%d.raw", width, height, buffer->index);
+        memset(filePath, 0, sizeof(filePath));
+        snprintf(filePath, sizeof(filePath), "/data/media/0/bayer_%d.raw", buffer->index);
+        dumpToFile((char *)filePath, buffer->addr[0], width * height * 2);
+    }
+#endif
+#endif
 
     if (m_parameters->getCaptureExposureTime() > CAMERA_PREVIEW_EXPOSURE_TIME_LIMIT) {
         if (m_pictureThread->isRunning() == false) {
             ret = m_pictureThread->run();
             if (ret < 0) {
                 CLOGE("couldn't run picture thread, ret(%d)", ret);
-                return INVALID_OPERATION;
-
+                return ExynosCameraFrameSelector::RESULT_NO_FRAME;
             }
         }
 
@@ -9443,7 +11505,7 @@ BAYER_RETRY:
             ret = m_jpegCallbackThread->run();
             if (ret < 0) {
                 CLOGE("couldn't run jpeg callback thread, ret(%d)", ret);
-                return INVALID_OPERATION;
+                return ExynosCameraFrameSelector::RESULT_NO_FRAME;
             }
         }
     }
@@ -9466,7 +11528,7 @@ BAYER_RETRY:
 
         CLOGD(" LLS Capture ...ing(hal : %d / driver : %d)",
             bayerFrame->getFrameCount(), fliteFcount);
-        return ret;
+        return result;
     }
 #endif
 
@@ -9477,6 +11539,17 @@ CLEAN:
         m_putBuffers(m_bayerBufferMgr, saveBuffer->index);
         saveBuffer->index = -2;
     }
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    if (m_parameters->getDNGCaptureModeOn() == true) {
+        if (pureSaveBuffer != NULL
+            && pureSaveBuffer->index != -2
+            && m_fliteBufferMgr != NULL) {
+            CLOGD("[DNG] [PUTBUFFER]");
+            m_putBuffers(m_fliteBufferMgr, pureSaveBuffer->index);
+            pureSaveBuffer->index = -2;
+        }
+    }
+#endif
 
 #ifdef LLS_REPROCESSING
     if (m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS
@@ -9492,14 +11565,13 @@ CLEAN:
         int funcRet = m_searchFrameFromList(&m_processList, bayerFrame->getFrameCount(), inListFrame, &m_processListLock);
         if (funcRet < 0) {
             CLOGE("searchFrameFromList fail");
-            ret = INVALID_OPERATION;
         } else {
             CLOGD(" Selected frame(%d) complete, Delete", bayerFrame->getFrameCount());
             bayerFrame = NULL;
         }
     }
 
-    return ret;
+    return result;
 }
 
 /* vision */
@@ -9509,18 +11581,22 @@ status_t ExynosCamera::m_startVisionInternal(void)
 
     CLOGI("IN");
 
-    uint32_t minFrameNum = FRONT_NUM_BAYER_BUFFERS;
+    uint32_t minFrameNum = 0;
     int ret = 0;
+    int pipeId = PIPE_FLITE;
     ExynosCameraFrameSP_sptr_t newFrame = NULL;
     ExynosCameraBuffer dstBuf;
+    ExynosCameraBufferManager *fliteBufferManager[MAX_NODE];
+    ExynosCameraBufferManager **tempBufferManager;
 
-    m_fliteFrameCount = 0;
-    m_3aa_ispFrameCount = 0;
-    m_ispFrameCount = 0;
-    m_sccFrameCount = 0;
-    m_scpFrameCount = 0;
+    for (int i = 0; i < MAX_NODE; i++) {
+        fliteBufferManager[i] = NULL;
+    }
+
     m_displayPreviewToggle = 1;
     m_fdCallbackToggle = 0;
+
+    minFrameNum = m_exynosconfig->current->pipeInfo.prepare[pipeId];
 
     ret = m_visionFrameFactory->initPipes();
     if (ret < 0) {
@@ -9532,13 +11608,13 @@ status_t ExynosCamera::m_startVisionInternal(void)
         m_visionFps = 10;
         m_visionAe = 0x2A;
 
-        ret = m_visionFrameFactory->setControl(V4L2_CID_SENSOR_SET_FRAME_RATE, m_visionFps, PIPE_FLITE);
+        ret = m_visionFrameFactory->setControl(V4L2_CID_SENSOR_SET_FRAME_RATE, m_visionFps, pipeId);
         if (ret < 0)
             CLOGE("FLITE setControl fail, ret(%d)", ret);
 
         CLOGD("m_visionFps(%d)", m_visionFps);
 
-        ret = m_visionFrameFactory->setControl(V4L2_CID_SENSOR_SET_AE_TARGET, m_visionAe, PIPE_FLITE);
+        ret = m_visionFrameFactory->setControl(V4L2_CID_SENSOR_SET_AE_TARGET, m_visionAe, pipeId);
         if (ret < 0)
             CLOGE("FLITE setControl fail, ret(%d)", ret);
 
@@ -9553,49 +11629,66 @@ status_t ExynosCamera::m_startVisionInternal(void)
         m_irLedOnTime = m_parameters->getIrLedOnTime();
         m_visionFps = 30;
 
-        ret = m_visionFrameFactory->setControl(V4L2_CID_SENSOR_SET_FRAME_RATE, m_visionFps, PIPE_FLITE);
+        ret = m_visionFrameFactory->setControl(V4L2_CID_SENSOR_SET_FRAME_RATE, m_visionFps, pipeId);
         if (ret < 0)
             CLOGE("FLITE setControl fail, ret(%d)", ret);
 
-        ret = m_visionFrameFactory->setControl(V4L2_CID_SENSOR_SET_SHUTTER, m_shutterSpeed, PIPE_FLITE);
+        ret = m_visionFrameFactory->setControl(V4L2_CID_SENSOR_SET_SHUTTER, m_shutterSpeed, pipeId);
         if (ret < 0) {
             CLOGE("FLITE setControl fail, ret(%d)", ret);
             CLOGD("m_shutterSpeed(%d)", m_shutterSpeed);
         }
 
-        ret = m_visionFrameFactory->setControl(V4L2_CID_SENSOR_SET_GAIN, m_gain, PIPE_FLITE);
+        ret = m_visionFrameFactory->setControl(V4L2_CID_SENSOR_SET_GAIN, m_gain, pipeId);
         if (ret < 0) {
             CLOGE("FLITE setControl fail, ret(%d)", ret);
             CLOGD("m_gain(%d)", m_gain);
         }
- 
-        ret = m_visionFrameFactory->setControl(V4L2_CID_IRLED_SET_WIDTH, m_irLedWidth, PIPE_FLITE);
+
+        ret = m_visionFrameFactory->setControl(V4L2_CID_IRLED_SET_WIDTH, m_irLedWidth, pipeId);
           if (ret < 0) {
             CLOGE("FLITE setControl fail, ret(%d)", ret);
             CLOGD("m_irLedWidth(%d)", m_irLedWidth);
         }
 
-        ret = m_visionFrameFactory->setControl(V4L2_CID_IRLED_SET_DELAY, m_irLedDelay, PIPE_FLITE);
+        ret = m_visionFrameFactory->setControl(V4L2_CID_IRLED_SET_DELAY, m_irLedDelay, pipeId);
          if (ret < 0) {
             CLOGE("FLITE setControl fail, ret(%d)", ret);
             CLOGD("m_irLedDelay(%d)", m_irLedDelay);
         }
 
-        ret = m_visionFrameFactory->setControl(V4L2_CID_IRLED_SET_CURRENT, m_irLedCurrent, PIPE_FLITE);
+        ret = m_visionFrameFactory->setControl(V4L2_CID_IRLED_SET_CURRENT, m_irLedCurrent, pipeId);
           if (ret < 0) {
             CLOGE("FLITE setControl fail, ret(%d)", ret);
             CLOGD("m_irLedCurrent(%d)", m_irLedCurrent);
         }
 
-        ret = m_visionFrameFactory->setControl(V4L2_CID_IRLED_SET_ONTIME, m_irLedOnTime, PIPE_FLITE);
+        ret = m_visionFrameFactory->setControl(V4L2_CID_IRLED_SET_ONTIME, m_irLedOnTime, pipeId);
            if (ret < 0) {
             CLOGE("FLITE setControl fail, ret(%d)", ret);
             CLOGD("m_irLedOnTime(%d)", m_irLedOnTime);
         }
     }
 
+    tempBufferManager = fliteBufferManager;
+
+    tempBufferManager[m_visionFrameFactory->getNodeType(PIPE_FLITE)] = m_3aaBufferMgr;
+    tempBufferManager[m_visionFrameFactory->getNodeType(PIPE_VC0)] = m_bayerBufferMgr;
+
+    for (int i = 0; i < MAX_NODE; i++) {
+        /* If even one buffer slot is valid. call setBufferManagerToPipe() */
+        if (fliteBufferManager[i] != NULL) {
+            ret = m_visionFrameFactory->setBufferManagerToPipe(fliteBufferManager, pipeId);
+            if (ret != NO_ERROR) {
+                CLOGE("m_visionFrameFactory->setBufferManagerToPipe(fliteBufferManager, %d) failed", pipeId);
+                return ret;
+            }
+            break;
+        }
+    }
+
     for (uint32_t i = 0; i < minFrameNum; i++) {
-        ret = m_generateFrameVision(i, newFrame);
+        ret = m_generateFrameVision(-1, newFrame);
         if (ret < 0) {
             CLOGE("generateFrame fail");
             return ret;
@@ -9605,11 +11698,10 @@ status_t ExynosCamera::m_startVisionInternal(void)
             return ret;
         }
 
-        m_fliteFrameCount++;
-
-        m_setupEntity(PIPE_FLITE, newFrame);
-        m_visionFrameFactory->setOutputFrameQToPipe(m_pipeFrameVisionDoneQ, PIPE_FLITE);
-        m_visionFrameFactory->pushFrameToPipe(newFrame, PIPE_FLITE);
+        m_setupEntity(pipeId, newFrame);
+        m_visionFrameFactory->setFrameDoneQToPipe(m_mainSetupQ[INDEX(pipeId)], pipeId);
+        m_visionFrameFactory->setOutputFrameQToPipe(m_pipeFrameVisionDoneQ, pipeId);
+        m_visionFrameFactory->pushFrameToPipe(newFrame, pipeId);
     }
 
     /* prepare pipes */
@@ -9654,6 +11746,10 @@ status_t ExynosCamera::m_stopVisionInternal(void)
         /* return ret; */
     }
 
+    for (int i = 0; i < MAX_NUM_PIPES; i++) {
+        m_mainSetupQ[i]->release();
+    }
+
     CLOGD("clear process Frame list");
     ret = m_clearList(&m_processList, &m_processListLock);
     if (ret < 0) {
@@ -9662,12 +11758,6 @@ status_t ExynosCamera::m_stopVisionInternal(void)
     }
 
     m_clearList(m_pipeFrameVisionDoneQ);
-
-    m_fliteFrameCount = 0;
-    m_3aa_ispFrameCount = 0;
-    m_ispFrameCount = 0;
-    m_sccFrameCount = 0;
-    m_scpFrameCount = 0;
 
     m_previewEnabled = false;
     m_parameters->setPreviewRunning(m_previewEnabled);
@@ -9720,24 +11810,37 @@ status_t ExynosCamera::m_setVisionBuffers(void)
     int ret = 0;
     unsigned int bytesPerLine[EXYNOS_CAMERA_BUFFER_MAX_PLANES] = {0};
     unsigned int planeSize[EXYNOS_CAMERA_BUFFER_MAX_PLANES]    = {0};
-    int hwPreviewW, hwPreviewH;
-    int hwSensorW, hwSensorH;
-    int hwPictureW, hwPictureH;
-
-    int previewMaxW, previewMaxH;
-    int sensorMaxW, sensorMaxH;
+    int batchSize = 1;
 
     int planeCount  = 2;
-    int minBufferCount = 1;
     int maxBufferCount = 1;
 
     exynos_camera_buffer_type_t type;
 
+    planeCount      = 2;
+    planeSize[0]    = 32 * 64 * 2;
+    batchSize       = 1;
     if (m_scenario == SCENARIO_SECURE) {
-        maxBufferCount = RESERVED_NUM_SECURE_BUFFERS;
-        m_bayerBufferMgr->setContigBufCount(RESERVED_NUM_SECURE_BUFFERS);
+        maxBufferCount = m_exynosconfig->current->reservedBufInfo.num_buffers[CONFIG_RESERVED::SECURE];
+    } else {
+        maxBufferCount = m_exynosconfig->current->reservedBufInfo.num_buffers[CONFIG_RESERVED::BAYER];
+    }
+    type = EXYNOS_CAMERA_BUFFER_ION_NONCACHED_TYPE;
 
+    ret = m_allocBuffers(m_3aaBufferMgr, planeCount, planeSize, bytesPerLine,
+                         maxBufferCount, batchSize, true, false);
+    if (ret != NO_ERROR) {
+        CLOGE("m_3aaBufferMgr m_allocBuffers(bufferCount=%d) fail",
+            maxBufferCount);
+        return ret;
+    }
+
+    if (m_scenario == SCENARIO_SECURE) {
+        maxBufferCount = m_exynosconfig->current->reservedBufInfo.num_buffers[CONFIG_RESERVED::SECURE];
+
+        m_bayerBufferMgr->setContigBufCount(m_exynosconfig->current->reservedBufInfo.num_buffers[CONFIG_RESERVED::SECURE]);
         type = EXYNOS_CAMERA_BUFFER_ION_CACHED_RESERVED_SECURE_TYPE;
+
         planeSize[0] = SECURE_CAMERA_WIDTH * SECURE_CAMERA_HEIGHT;
 
 #ifdef SUPPORT_IRIS_PREVIEW_CALLBACK
@@ -9753,7 +11856,7 @@ status_t ExynosCamera::m_setVisionBuffers(void)
             return ret;
         }
     } else {
-        maxBufferCount = FRONT_NUM_BAYER_BUFFERS;
+        maxBufferCount = m_exynosconfig->current->reservedBufInfo.num_buffers[CONFIG_RESERVED::BAYER];
         type = EXYNOS_CAMERA_BUFFER_ION_NONCACHED_TYPE;
         planeSize[0] = VISION_WIDTH * VISION_HEIGHT;
 
@@ -9777,7 +11880,7 @@ status_t ExynosCamera::m_setVisionCallbackBuffer(void)
     int previewW = 0, previewH = 0;
     int previewFormat = 0;
     int planeCount = 1;
-    int batchSize   = m_parameters->getBatchSize(PIPE_MCSC1);
+    int batchSize   = 1;
     int bufferCount = FRONT_NUM_BAYER_BUFFERS;
     exynos_camera_buffer_type_t type = EXYNOS_CAMERA_BUFFER_ION_CACHED_TYPE;
 
@@ -9811,24 +11914,15 @@ status_t ExynosCamera::m_setVisionCallbackBuffer(void)
 bool ExynosCamera::m_visionThreadFunc(void)
 {
     int ret = 0;
-    int index = 0;
 
     int frameSkipCount = 0;
     ExynosCameraFrameEntity *entity = NULL;
     ExynosCameraFrameSP_sptr_t handleFrame = NULL;
     ExynosCameraFrameSP_sptr_t newFrame = NULL;
     ExynosCameraBuffer bayerBuffer;
+    ExynosCameraBuffer buffer;
     int pipeID = 0;
     /* to handle the high speed frame rate */
-    bool skipPreview = false;
-    int ratio = 1;
-    uint32_t minFps = 0, maxFps = 0;
-    uint32_t dispFps = EXYNOS_CAMERA_PREVIEW_FPS_REFERENCE;
-    uint32_t fvalid = 0;
-    uint32_t fcount = 0;
-    struct camera2_stream *shot_stream = NULL;
-    size_t callbackBufSize;
-    status_t statusRet = NO_ERROR;
     int fps = 0;
     int ae = 0;
     int shutterSpeed = 0;
@@ -9873,115 +11967,115 @@ bool ExynosCamera::m_visionThreadFunc(void)
 
     switch(entity->getPipeId()) {
     case PIPE_FLITE:
-        ret = handleFrame->getDstBuffer(entity->getPipeId(), &bayerBuffer);
-        if (ret < 0) {
-            CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)",
-                 entity->getPipeId(), ret);
-            return ret;
-        }
-
-#ifdef VISION_DUMP
-        char filePath[50];
-        snprintf(filePath, sizeof(filePath), "/data/media/0/DCIM/Camera/vision%02d.raw", dumpIndex);
-        CLOGD("vision dump %s", filePath);
-        if (m_scenario == SCENARIO_SECURE) {
-            dumpToFile(filePath, (char *)bayerBuffer.addr[0], SECURE_CAMERA_WIDTH * SECURE_CAMERA_HEIGHT);
-        } else {
-            dumpToFile(filePath, (char *)bayerBuffer.addr[0], VISION_WIDTH * VISION_HEIGHT);
-        }
-        dumpIndex ++;
-        if (dumpIndex > 4)
-            dumpIndex = 0;
-#endif
-
         m_parameters->getFrameSkipCount(&frameSkipCount);
 
-        if (frameSkipCount > 0) {
-            CLOGD("frameSkipCount(%d)", frameSkipCount);
-        } else {
-            /* callback */
-#ifdef SUPPORT_IRIS_PREVIEW_CALLBACK
-            if (m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME))
-#else
-            if (m_scenario != SCENARIO_SECURE && m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME))
-#endif
-            {
-                if (m_displayPreviewToggle) {
-                    ExynosCameraBuffer previewCbBuffer;
-                    camera_memory_t *previewCallbackHeap = NULL;
-                    char *srcAddr = NULL;
-                    char *dstAddr = NULL;
-                    int bufIndex = -2;
-
-                    m_previewCallbackBufferMgr->getBuffer(&bufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &previewCbBuffer);
-                    previewCallbackHeap = m_getMemoryCb(previewCbBuffer.fd[0], previewCbBuffer.size[0], 1, m_callbackCookie);
-                    if (!previewCallbackHeap || previewCallbackHeap->data == MAP_FAILED) {
-                        CLOGE("m_getMemoryCb(fd:%d, size:%d) fail",
-                                previewCbBuffer.fd[0], previewCbBuffer.size[0]);
-
-                        return INVALID_OPERATION;
-                    }
-                    memcpy(previewCallbackHeap->data, bayerBuffer.addr[0], previewCbBuffer.size[0]);
-
-                    setBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, true);
-                    m_dataCb(CAMERA_MSG_PREVIEW_FRAME, previewCallbackHeap, 0, NULL, m_callbackCookie);
-                    clearBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, true);
-
-                    previewCallbackHeap->release(previewCallbackHeap);
-
-                    m_previewCallbackBufferMgr->putBuffer(bufIndex, EXYNOS_CAMERA_BUFFER_POSITION_NONE);
-                }
+        if (handleFrame->getRequest(PIPE_VC0) == true) {
+            ret = handleFrame->getDstBuffer(entity->getPipeId(), &bayerBuffer, m_visionFrameFactory->getNodeType(PIPE_VC0));
+            if (ret != NO_ERROR) {
+                CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)", entity->getPipeId(), ret);
+                return ret;
             }
 
+            if (0 <= bayerBuffer.index) {
+                if (entity->getDstBufState(m_visionFrameFactory->getNodeType(PIPE_VC0)) == ENTITY_BUFFER_STATE_COMPLETE) {
+#ifdef VISION_DUMP
+                    char filePath[50];
+                    snprintf(filePath, sizeof(filePath), "/data/media/0/DCIM/Camera/vision%02d.raw", dumpIndex);
+                    CLOGD("vision dump %s", filePath);
+                    if (m_scenario == SCENARIO_SECURE) {
+                        dumpToFile(filePath, (char *)bayerBuffer.addr[0], SECURE_CAMERA_WIDTH * SECURE_CAMERA_HEIGHT);
+                    } else {
+                        dumpToFile(filePath, (char *)bayerBuffer.addr[0], VISION_WIDTH * VISION_HEIGHT);
+                    }
+                    dumpIndex ++;
+                    if (dumpIndex > 4)
+                        dumpIndex = 0;
+#endif
+                    if (frameSkipCount > 0) {
+                        CLOGD("frameSkipCount(%d)", frameSkipCount);
+                    } else {
+                        /* callback */
+#ifdef SUPPORT_IRIS_PREVIEW_CALLBACK
+                        if (m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME))
+#else
+                        if (m_scenario != SCENARIO_SECURE && m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME))
+#endif
+                        {
+                            if (m_displayPreviewToggle) {
+                                ExynosCameraBuffer previewCbBuffer;
+                                camera_memory_t *previewCallbackHeap = NULL;
+                                int bufIndex = -2;
+
+                                m_previewCallbackBufferMgr->getBuffer(&bufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &previewCbBuffer);
+                                previewCallbackHeap = m_getMemoryCb(previewCbBuffer.fd[0], previewCbBuffer.size[0], 1, m_callbackCookie);
+                                if (!previewCallbackHeap || previewCallbackHeap->data == MAP_FAILED) {
+                                    CLOGE("m_getMemoryCb(fd:%d, size:%d) fail",
+                                    previewCbBuffer.fd[0], previewCbBuffer.size[0]);
+
+                                    return INVALID_OPERATION;
+                                }
+                                memcpy(previewCallbackHeap->data, bayerBuffer.addr[0], previewCbBuffer.size[0]);
+
+                                setBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, true);
+                                m_dataCb(CAMERA_MSG_PREVIEW_FRAME, previewCallbackHeap, 0, NULL, m_callbackCookie);
+                                clearBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, true);
+
+                                previewCallbackHeap->release(previewCallbackHeap);
+
+                                m_previewCallbackBufferMgr->putBuffer(bufIndex, EXYNOS_CAMERA_BUFFER_POSITION_NONE);
+                            }
+                        }
 #ifdef SAMSUNG_TN_FEATURE
 #ifndef SUPPORT_IRIS_PREVIEW_CALLBACK
-            if (m_scenario == SCENARIO_SECURE && m_parameters->msgTypeEnabled(CAMERA_MSG_IRIS_DATA)) {
-                if (m_displayPreviewToggle) {
-                    camera_memory_t *fdCallbackData = NULL;
+                        if (m_scenario == SCENARIO_SECURE && m_parameters->msgTypeEnabled(CAMERA_MSG_IRIS_DATA)) {
+                            if (m_displayPreviewToggle) {
+                                camera_memory_t *fdCallbackData = NULL;
+#if 0
+                                char filePath[50];
+                                if (dumpIndex > 5 && dumpIndex <10) {
+                                    snprintf(filePath, sizeof(filePath), "/data/media/0/DCIM/Camera/iris%02d.raw", dumpIndex);
+                                    CLOGE("iris dump %s", filePath);
 
-                    fdCallbackData = m_getMemoryCb(-1, sizeof(CameraBufferFD), 1, m_callbackCookie);
-                    if (fdCallbackData == NULL) {
-                        CLOGE("m_getMemoryCb fail");
-                        return INVALID_OPERATION;
-                    }
-    
-                    ((CameraBufferFD *)fdCallbackData->data)->magic = 0x00FD42FD;
-                    ((CameraBufferFD *)fdCallbackData->data)->fd = bayerBuffer.fd[0];
-    
-                    setBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
-                    m_dataCb(CAMERA_MSG_IRIS_DATA, fdCallbackData, 0, NULL, m_callbackCookie);
-                    clearBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
-
-                    fdCallbackData->release(fdCallbackData);
-                }
-            }
-#endif			
+                                    dumpToFile(filePath, (char *)bayerBuffer.addr[0], SECURE_CAMERA_WIDTH * SECURE_CAMERA_HEIGHT);
+                    	        }
+                                dumpIndex ++;
 #endif
-            if (m_scenario == SCENARIO_SECURE) {
-                if (m_visionFps == 30) {
-                    m_displayPreviewToggle = (m_displayPreviewToggle + 1) % 2;
+                                fdCallbackData = m_getMemoryCb(-1, sizeof(CameraBufferFD), 1, m_callbackCookie);
+                                if (fdCallbackData == NULL) {
+                                    CLOGE("m_getMemoryCb fail");
+                                    return INVALID_OPERATION;
+                                }
+
+                                ((CameraBufferFD *)fdCallbackData->data)->magic = 0x00FD42FD;
+                                ((CameraBufferFD *)fdCallbackData->data)->fd = bayerBuffer.fd[0];
+
+                                setBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
+                                m_dataCb(CAMERA_MSG_IRIS_DATA, fdCallbackData, 0, NULL, m_callbackCookie);
+                                clearBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
+
+                                fdCallbackData->release(fdCallbackData);
+                            }
+                       }
+#endif
+#endif
+                        if (m_scenario == SCENARIO_SECURE) {
+                            if (m_visionFps == 30) {
+                                m_displayPreviewToggle = (m_displayPreviewToggle + 1) % 2;
+                            }
+                        }
+                    }
                 }
+
+                ret = m_putBuffers(m_bayerBufferMgr, bayerBuffer.index);
+                if (ret != NO_ERROR) {
+                    CLOGE("m_putBuffers(bufferMgr, %d) fail", bayerBuffer.index);
+                }
+            } else {
+                CLOGW("buffer is empty frame(%d) pipe(%d)", handleFrame->getFrameCount(), pipeID);
             }
+        } else {
+            CLOGE("reqeust failed frame(%d) pipe(%d) request(%d)", handleFrame->getFrameCount(), pipeID, PIPE_VC0);
         }
-
-        ret = m_putBuffers(m_bayerBufferMgr, bayerBuffer.index);
-
-        ret = m_generateFrameVision(m_fliteFrameCount, newFrame);
-        if (ret < 0) {
-            CLOGE("generateFrame fail");
-            return ret;
-        }
-
-        ret = m_setupEntity(PIPE_FLITE, newFrame);
-        if (ret < 0) {
-            CLOGE("setupEntity fail");
-            break;
-        }
-
-        m_visionFrameFactory->setOutputFrameQToPipe(m_pipeFrameVisionDoneQ, PIPE_FLITE);
-        m_visionFrameFactory->pushFrameToPipe(newFrame, PIPE_FLITE);
-        m_fliteFrameCount++;
-
         break;
     default:
         break;
@@ -9994,7 +12088,7 @@ bool ExynosCamera::m_visionThreadFunc(void)
         return ret;
     }
 
-    CLOGV("frame complete, count(%d)", handleFrame->getFrameCount());
+    CLOGD("frame complete, count(%d)", handleFrame->getFrameCount());
     ret = m_removeFrameFromList(&m_processList, handleFrame, &m_processListLock);
     if (ret < 0) {
         CLOGE("remove frame from processList fail, ret(%d)", ret);
@@ -10198,6 +12292,9 @@ int ExynosCamera::m_getSensorId(int m_cameraId)
 
 bool ExynosCamera::m_companionThreadFunc(void)
 {
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+    TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 1, DURATION, LAUNCH_SUB_COMPANION_THREAD, true);
+#endif
     CLOGI("");
     ExynosCameraDurationTimer m_timer;
     long long durationTime = 0;
@@ -10207,11 +12304,6 @@ bool ExynosCamera::m_companionThreadFunc(void)
     m_timer.start();
 
     m_companionNode = new ExynosCameraNode();
-
-    if (m_companionNode == NULL) {
-        CLOGE("companion node create failed");
-        return loop;
-    }
 
     ret = m_companionNode->create("companion", m_cameraId);
     if (ret < 0) {
@@ -10228,6 +12320,9 @@ bool ExynosCamera::m_companionThreadFunc(void)
     if (ret < 0) {
         CLOGE(" Companion Node s_input fail, ret(%d)", ret);
     }
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+    TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 1, DURATION, LAUNCH_SUB_COMPANION_THREAD, false);
+#endif
     CLOGD("Companion Node(%d) s_input)", MAIN_CAMERA_COMPANION_NUM);
 
     m_timer.stop();
@@ -10271,20 +12366,21 @@ bool ExynosCamera::m_preStartPictureInternalThreadFunc(void)
 
     m_timer.start();
     if (m_parameters->isReprocessing() == true) {
-        if (m_reprocessingFrameFactory->isCreated() == false) {
-            ret = m_reprocessingFrameFactory->create();
-            if (ret != NO_ERROR) {
-                m_timer.stop();
-                durationTime = m_timer.durationMsecs();
-                CLOGE("m_reprocessingFrameFactory->create() failed");
-                return false;
+
+        for (int i = 0; i < m_getNumOfReprocessingInstance(); i++) {
+            if (m_pReprocessingFrameFactories[i]->isCreated() == false) {
+                ret = m_pReprocessingFrameFactories[i]->create();
+                if (ret != NO_ERROR) {
+                    m_timer.stop();
+                    durationTime = m_timer.durationMsecs();
+                    CLOGE("m_reprocessingFrameFactory->create() failed");
+                    return false;
+                }
             }
-            m_pictureFrameFactory = m_reprocessingFrameFactory;
-            CLOGD("FrameFactory(pictureFrameFactory) created");
-        } else {
-            m_pictureFrameFactory = m_reprocessingFrameFactory;
-            CLOGD("FrameFactory(pictureFrameFactory) created");
         }
+
+        m_pictureFrameFactory = m_pReprocessingFrameFactories[REPROCESSING_FRAME_FACTORY_PROCESSED];
+        CLOGD("FrameFactory(pictureFrameFactory) created");
     }
     m_timer.stop();
     durationTime = m_timer.durationMsecs();
@@ -10302,6 +12398,30 @@ bool ExynosCamera::m_uniPluginThreadFunc(void)
     long long durationTime = 0;
 
     m_timer.start();
+
+#ifdef SAMSUNG_DUAL_SOLUTION
+    if (getCameraIdInternal() == CAMERA_ID_BACK) {
+        if (m_previewSolutionHandle == NULL) {
+            m_previewSolutionHandle = uni_plugin_load(DUAL_PREVIEW_PLUGIN_NAME);
+            if (m_previewSolutionHandle == NULL) {
+                CLOGE("[DUAL_PREVIEW] : DUAL_PREVIEW plugin load failed!!");
+            }
+        }
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+        if (m_captureSolutionHandle == NULL) {
+            m_captureSolutionHandle = uni_plugin_load(DUAL_CAPTURE_PLUGIN_NAME);
+            if (m_captureSolutionHandle == NULL) {
+                CLOGE("[DUAL_CAPTURE] : DUAL_CAPTURE plugin load failed!!");
+            }
+        }
+#endif
+        m_fusionPreviewWrapper->m_setSolutionHandle(m_previewSolutionHandle, m_captureSolutionHandle);
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+        m_fusionCaptureWrapper->m_setSolutionHandle(m_previewSolutionHandle, m_captureSolutionHandle);
+#endif
+    }
+#endif
+
 #ifdef SAMSUNG_LLV
 #ifdef SAMSUNG_LLV_TUNING
     m_LLVpowerLevel = UNI_PLUGIN_POWER_CONTROL_OFF;
@@ -10318,7 +12438,7 @@ bool ExynosCamera::m_uniPluginThreadFunc(void)
     m_DCpluginHandle = NULL;
     if (getCameraIdInternal() == CAMERA_ID_BACK) {
         m_DCpluginHandle = uni_plugin_load(LDC_PLUGIN_NAME);
-        if (m_DCpluginHandle == NULL){
+        if (m_DCpluginHandle == NULL) {
             CLOGE("[DC]: DC plugin load failed!!");
         }
     }
@@ -10363,17 +12483,60 @@ bool ExynosCamera::m_uniPluginThreadFunc(void)
     m_BDstatus = BLUR_DETECTION_IDLE;
 #endif
 #ifdef SAMSUNG_LLS_DEBLUR
-#ifdef FLASHED_LLS_CAPTURE
+#if defined(SAMSUNG_HIFI_LLS) || defined(FLASHED_LLS_CAPTURE)
+#ifdef SAMSUNG_HIFI_LLS
+    m_LLSpluginHandle = uni_plugin_load(HIFI_LLS_PLUGIN_NAME);
+    if (m_LLSpluginHandle == NULL) {
+        CLOGE("[LLS_MBR] HIFI LLS plugin load failed!!");
+    }
+#else /* FLASHED_LLS_CAPTURE */
     m_LLSpluginHandle = uni_plugin_load(FLASHED_LLS_PLUGIN_NAME);
     if (m_LLSpluginHandle == NULL) {
         CLOGE("[LLS_MBR] FLASHED LLS plugin load failed!!");
     }
+#endif
 #else
     m_LLSpluginHandle = uni_plugin_load(LLS_PLUGIN_NAME);
     if (m_LLSpluginHandle == NULL) {
         CLOGE("[LLS_MBR] LLS plugin load failed!!");
     }
 #endif
+#endif
+#ifdef SAMSUNG_STR_CAPTURE
+    m_STRCapturePluginHandle = NULL;
+    if (getCameraIdInternal() == CAMERA_ID_FRONT) {
+        m_STRCapturePluginHandle = uni_plugin_load(STR_CAPTURE_PLUGIN_NAME);
+        if (m_STRCapturePluginHandle == NULL) {
+            CLOGE("[STR_CAPTURE]: STR_CAPTURE plugin load failed!!");
+        }
+    }
+#endif
+#ifdef SAMSUNG_STR_PREVIEW
+    m_STRPreviewPluginHandle = NULL;
+    if (getCameraIdInternal() == CAMERA_ID_FRONT) {
+        m_STRPreviewPluginHandle = uni_plugin_load(STR_PREVIEW_PLUGIN_NAME);
+        if (m_STRPreviewPluginHandle == NULL) {
+            CLOGE("[STR_PRVIEW]: STR_PRVIEW plugin load failed!!");
+        }
+    }
+#endif
+#ifdef SUPPORT_DEPTH_MAP
+#ifdef SAMSUNG_FOCUS_PEAKING
+    m_FocusPeakingPluginHandle = NULL;
+    if (getCameraIdInternal() == CAMERA_ID_BACK) {
+        m_FocusPeakingPluginHandle = uni_plugin_load(FOCUS_PEAKING_PLUGIN_NAME);
+        if (m_FocusPeakingPluginHandle == NULL) {
+            CLOGE("[FocusPeaking]: FocusPeaking plugin load failed!!");
+        }
+    }
+#endif
+#endif
+#ifdef SAMSUNG_IDDQD
+	m_IDDQDPluginHandle = NULL;
+	m_IDDQDPluginHandle = uni_plugin_load(IDDQD_PLUGIN_NAME);
+	if (m_IDDQDPluginHandle == NULL) {
+	    CLOGE("[IDDQD]: IDDQD plugin load failed!!");
+	}
 #endif
     m_timer.stop();
     durationTime = m_timer.durationMsecs();
@@ -10395,83 +12558,113 @@ bool ExynosCamera::m_sensorListenerThreadFunc(void)
     uint32_t curMinFps = 0;
     uint32_t curMaxFps = 0;
 
+#if 0
+    /* skip the sensor listener data in slow motion mode */
     m_parameters->getPreviewFpsRange(&curMinFps, &curMaxFps);
     if(curMinFps > 60 && curMaxFps > 60)
         goto skip_sensor_listener;
+#endif
 
-    if (m_parameters->getSamsungCamera() == true
-        && m_parameters->getVtMode() == 0
+    if (m_parameters->getVtMode() == 0
 #ifdef SAMSUNG_QUICK_SWITCH
         && m_parameters->getQuickSwitchCmd() != QUICK_SWITCH_CMD_IDLE_TO_STBY
 #endif
        ) {
-        if (getCameraIdInternal() == CAMERA_ID_BACK) {
-#ifdef SAMSUNG_HRM
-            if (m_uv_rayHandle == NULL) {
-                m_uv_rayHandle = sensor_listener_load();
-                if (m_uv_rayHandle != NULL) {
-                    if (sensor_listener_enable_sensor(m_uv_rayHandle, ST_UV_RAY, 10 * 1000) < 0) {
-                        sensor_listener_unload(&m_uv_rayHandle);
-                    } else {
-                        m_parameters->m_setHRM_Hint(true);
-                    }
-                }
-            } else {
-                m_parameters->m_setHRM_Hint(true);
-            }
+        if (m_parameters->getSamsungCamera() == true) {
+            if (getCameraIdInternal() == CAMERA_ID_BACK
+#ifdef SAMSUNG_DUAL_SOLUTION
+                || (getCameraIdInternal() == CAMERA_ID_BACK_1 &&
+                    m_parameters->getDualCameraMode() == false)
 #endif
-
-#ifdef SAMSUNG_GYRO
-            if (m_gyroHandle == NULL) {
-                m_gyroHandle = sensor_listener_load();
-                if (m_gyroHandle != NULL) {
-                    /* HACK
-                     * Below event rate(7700) is set to let gyro timestamp operate
-                     * for VDIS performance. Real event rate is 10ms not 7.7ms
-                     */
-                    if (sensor_listener_enable_sensor(m_gyroHandle,ST_GYROSCOPE, 100 * 1000) < 0) {
-                        sensor_listener_unload(&m_gyroHandle);
-                    } else {
-                        m_parameters->m_setGyroHint(true);
+            ) {
+#ifdef SAMSUNG_HRM
+                if (m_uv_rayHandle == NULL) {
+                    m_uv_rayHandle = sensor_listener_load();
+                    if (m_uv_rayHandle != NULL) {
+                        if (sensor_listener_enable_sensor(m_uv_rayHandle, ST_UV_RAY, 10 * 1000) < 0) {
+                            sensor_listener_unload(&m_uv_rayHandle);
+                        } else {
+                            m_parameters->m_setHRM_Hint(true);
+                        }
                     }
+                } else {
+                    m_parameters->m_setHRM_Hint(true);
                 }
-            } else {
-                m_parameters->m_setGyroHint(true);
-            }
 #endif
 
 #ifdef SAMSUNG_ACCELEROMETER
-            if (m_accelerometerHandle == NULL) {
-                m_accelerometerHandle = sensor_listener_load();
-                if (m_accelerometerHandle != NULL) {
-                    if (sensor_listener_enable_sensor(m_accelerometerHandle,ST_ACCELEROMETER, 100 * 1000) < 0) {
-                        sensor_listener_unload(&m_accelerometerHandle);
-                    } else {
-                        m_parameters->m_setAccelerometerHint(true);
+                if (m_accelerometerHandle == NULL) {
+                    m_accelerometerHandle = sensor_listener_load();
+                    if (m_accelerometerHandle != NULL) {
+                        if (sensor_listener_enable_sensor(m_accelerometerHandle,ST_ACCELEROMETER, 100 * 1000) < 0) {
+                            sensor_listener_unload(&m_accelerometerHandle);
+                        } else {
+                            m_parameters->m_setAccelerometerHint(true);
+                        }
                     }
+                } else {
+                    m_parameters->m_setAccelerometerHint(true);
                 }
-            } else {
-                m_parameters->m_setAccelerometerHint(true);
+#endif
+            }
+
+            if (getCameraIdInternal() == CAMERA_ID_FRONT
+#ifdef SAMSUNG_COLOR_IRIS
+                && m_parameters->getShotMode() != SHOT_MODE_COLOR_IRIS
+#endif
+               ) {
+#ifdef SAMSUNG_LIGHT_IR
+                if (m_light_irHandle == NULL) {
+                    m_light_irHandle = sensor_listener_load();
+                    if (m_light_irHandle != NULL) {
+                        if (sensor_listener_enable_sensor(m_light_irHandle, ST_LIGHT_IR, 120 * 1000) < 0) {
+                            sensor_listener_unload(&m_light_irHandle);
+                        } else {
+                            m_parameters->m_setLight_IR_Hint(true);
+                        }
+                    }
+                } else {
+                    m_parameters->m_setLight_IR_Hint(true);
+                }
+#endif
+            }
+
+#ifdef SAMSUNG_GYRO
+            if ((getCameraIdInternal() == CAMERA_ID_BACK)
+#ifdef SAMSUNG_DUAL_SOLUTION
+                || (getCameraIdInternal() == CAMERA_ID_BACK_1 &&
+                    m_parameters->getDualCameraMode() == false)
+#endif
+#ifdef SAMSUNG_GYRO_FRONT
+                || (getCameraIdInternal() == CAMERA_ID_FRONT)
+#endif
+            ) {
+                if (m_gyroHandle == NULL) {
+                    m_gyroHandle = sensor_listener_load();
+                    if (m_gyroHandle != NULL) {
+                        if (sensor_listener_enable_sensor(m_gyroHandle,ST_GYROSCOPE, 100 * 1000) < 0) {
+                            sensor_listener_unload(&m_gyroHandle);
+                        } else {
+                            m_parameters->m_setGyroHint(true);
+                        }
+                    }
+                } else {
+                    m_parameters->m_setGyroHint(true);
+                }
             }
 #endif
         }
 
-        if (getCameraIdInternal() == CAMERA_ID_FRONT) {
-#ifdef SAMSUNG_LIGHT_IR
-            if (m_light_irHandle == NULL) {
-                m_light_irHandle = sensor_listener_load();
-                if (m_light_irHandle != NULL) {
-                    if (sensor_listener_enable_sensor(m_light_irHandle, ST_LIGHT_IR, 120 * 1000) < 0) {
-                        sensor_listener_unload(&m_light_irHandle);
-                    } else {
-                        m_parameters->m_setLight_IR_Hint(true);
-                    }
+#ifdef SAMSUNG_ROTATION
+        if (m_rotationHandle == NULL) {
+            m_rotationHandle = sensor_listener_load();
+            if (m_rotationHandle != NULL) {
+                if (sensor_listener_enable_sensor(m_rotationHandle, ST_ROTATION, 100 * 1000) < 0) {
+                    sensor_listener_unload(&m_rotationHandle);
                 }
-            } else {
-                m_parameters->m_setLight_IR_Hint(true);
             }
-#endif
         }
+#endif
     }
 
 skip_sensor_listener:
@@ -10585,6 +12778,19 @@ status_t ExynosCamera::m_ProgramAndProcessHLV(ExynosCameraBuffer *FrameBuffer)
         memset(&CurrentFocusArea, 0, sizeof(ExynosRect2));
         autoFocusMgr->getFocusAreas(&CurrentFocusArea, &FocusAreaWeight);
 
+#ifdef SAMSUNG_DUAL_SOLUTION
+        if (m_parameters->getDualCameraMode() == true) {
+            UniPlugin_DCVOZ_CAMERAPARAM_t *fusionParam;
+            fusionParam = m_parameters->getFusionParam();
+            if (fusionParam) {
+                CurrentFocusArea.x1 += fusionParam->PreviewImageShiftX;
+                CurrentFocusArea.y1 += fusionParam->PreviewImageShiftY;
+                CurrentFocusArea.x2 += fusionParam->PreviewImageShiftX;
+                CurrentFocusArea.y2 += fusionParam->PreviewImageShiftY;
+            }
+        }
+#endif
+
         focusData[0].FocusROILeft = CurrentFocusArea.x1;
         focusData[0].FocusROIRight = CurrentFocusArea.x2;
         focusData[0].FocusROITop = CurrentFocusArea.y1;
@@ -10654,8 +12860,12 @@ status_t ExynosCamera::m_copyMetaFrameToFrame(ExynosCameraFrameSP_sptr_t srcfram
     Mutex::Autolock lock(m_metaCopyLock);
     status_t ret = NO_ERROR;
 
+#ifdef USE_DUAL_CAMERA
+    dstframe->setSyncType(srcframe->getSyncType());
+#endif
+
     memset(m_tempshot, 0x00, sizeof(struct camera2_shot_ext));
-    if(useDm) {
+    if (useDm) {
         ret = srcframe->getDynamicMeta(m_tempshot);
         if (ret != NO_ERROR)
             CLOGE("getDynamicMeta fail, ret(%d)", ret);
@@ -10663,9 +12873,21 @@ status_t ExynosCamera::m_copyMetaFrameToFrame(ExynosCameraFrameSP_sptr_t srcfram
         ret = dstframe->storeDynamicMeta(m_tempshot);
         if (ret != NO_ERROR)
             CLOGE("storeDynamicMeta fail, ret(%d)", ret);
+
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true && srcframe->getSyncType() == SYNC_TYPE_SYNC) {
+            ret = srcframe->getDynamicMeta(m_tempshot, OUTPUT_NODE_2);
+            if (ret != NO_ERROR)
+                CLOGE("getDynamicMeta fail, ret(%d)", ret);
+
+            ret = dstframe->storeDynamicMeta(m_tempshot, OUTPUT_NODE_2);
+            if (ret != NO_ERROR)
+                CLOGE("storeDynamicMeta fail, ret(%d)", ret);
+        }
+#endif
     }
 
-    if(useUdm) {
+    if (useUdm) {
         ret = srcframe->getUserDynamicMeta(m_tempshot);
         if (ret != NO_ERROR)
             CLOGE("getUserDynamicMeta fail, ret(%d)", ret);
@@ -10673,6 +12895,18 @@ status_t ExynosCamera::m_copyMetaFrameToFrame(ExynosCameraFrameSP_sptr_t srcfram
         ret = dstframe->storeUserDynamicMeta(m_tempshot);
         if (ret != NO_ERROR)
             CLOGE("storeUserDynamicMeta fail, ret(%d)", ret);
+
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true && srcframe->getSyncType() == SYNC_TYPE_SYNC) {
+            ret = srcframe->getUserDynamicMeta(m_tempshot, OUTPUT_NODE_2);
+            if (ret != NO_ERROR)
+                CLOGE("getDynamicMeta fail, ret(%d)", ret);
+
+            ret = dstframe->storeUserDynamicMeta(m_tempshot, OUTPUT_NODE_2);
+            if (ret != NO_ERROR)
+                CLOGE("storeDynamicMeta fail, ret(%d)", ret);
+        }
+#endif
     }
 
     return NO_ERROR;
@@ -10691,15 +12925,9 @@ status_t ExynosCamera::m_startPreviewInternal(void)
     ExynosCameraBuffer dstBuf;
     ExynosCameraBufferManager *scpBufferMgr = NULL;
     int32_t reprocessingBayerMode = m_parameters->updateReprocessingBayerMode();
-    enum pipeline pipe;
     bool zoomWithScaler = false;
     int pipeId = PIPE_FLITE;
-
-    m_fliteFrameCount = 0;
-    m_3aa_ispFrameCount = 0;
-    m_ispFrameCount = 0;
-    m_sccFrameCount = 0;
-    m_scpFrameCount = 0;
+    bool flagSensorStandby = false;
     m_displayPreviewToggle = 0;
     m_fdCallbackToggle = 0;
 
@@ -10724,10 +12952,11 @@ status_t ExynosCamera::m_startPreviewInternal(void)
     ExynosCameraBufferManager *ispBufferManager[MAX_NODE];
     ExynosCameraBufferManager *disBufferManager[MAX_NODE];
     ExynosCameraBufferManager *mcscBufferManager[MAX_NODE];
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     ExynosCameraBufferManager *syncBufferManager[MAX_NODE];
     ExynosCameraBufferManager *fusionBufferManager[MAX_NODE];
 #endif
+    ExynosCameraBufferManager *vraBufferManager[MAX_NODE];
     ExynosCameraBufferManager **tempBufferManager;
 
     for (int i = 0; i < MAX_NODE; i++) {
@@ -10736,12 +12965,27 @@ status_t ExynosCamera::m_startPreviewInternal(void)
         ispBufferManager[i] = NULL;
         disBufferManager[i] = NULL;
         mcscBufferManager[i] = NULL;
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         syncBufferManager[i] = NULL;
         fusionBufferManager[i] = NULL;
 #endif
+        vraBufferManager[i] = NULL;
     }
 
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        m_parameters->clearDualCameraInformation();
+
+        /* UHD recording */
+        int videoW = 0, videoH = 0;
+        m_parameters->getVideoSize(&videoW, &videoH);
+        if ((videoW == 3840 && videoH == 2160) &&
+                m_parameters->getRecordingHint() == true) {
+            CLOGD("DUAL UHD Recording(Switching Mode)");
+            m_parameters->setForceSwitchingOnly(true);
+        }
+    }
+#endif
     m_parameters->setZoomPreviewWIthScaler(zoomWithScaler);
 
 #ifdef FPS_CHECK
@@ -10794,6 +13038,26 @@ status_t ExynosCamera::m_startPreviewInternal(void)
         m_previewFrameFactory->setRequestBayer(true);
     }
 
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    if (m_parameters->getDNGCaptureModeOn() == true) {
+        CLOGD("[DNG] Request pure bayer for DNG capture");
+        m_previewFrameFactory->setRequestBayer(true);
+        m_parameters->setUseDNGCapture(true);
+    } else {
+        m_parameters->setUseDNGCapture(false);
+    }
+#endif
+
+#ifdef DEBUG_RAWDUMP
+    m_previewFrameFactory->setRequestBayer(true);
+#endif
+
+    int width, height;
+    uint32_t minfps, maxfps;
+    m_parameters->getPreviewSize(&width, &height);
+    m_parameters->getPreviewFpsRange(&minfps, &maxfps);
+    storeSsrmCameraInfo(m_parameters->getCameraId(), width, height, (int)minfps, (int)maxfps);
+
 #ifdef SUPPORT_DEPTH_MAP
     m_previewFrameFactory->setRequest(PIPE_VC1, false);
     m_parameters->setDisparityMode(COMPANION_DISPARITY_OFF);
@@ -10822,6 +13086,13 @@ status_t ExynosCamera::m_startPreviewInternal(void)
         }
 #endif
     }
+#ifdef SAMSUNG_FOCUS_PEAKING
+    else if (m_parameters->getUseDepthMap()
+            && m_parameters->getShotMode() == SHOT_MODE_PRO_MODE) {
+        m_parameters->setDisparityMode(COMPANION_DISPARITY_CENSUS_CENTER);
+        CLOGD("[FocusPeaking] Enable setDisparityMode(COMPANION_DISPARITY_CENSUS_CENTER) ");
+    }
+#endif
 #endif
 
     if (m_parameters->isIspTpuOtf() == false && m_parameters->isIspMcscOtf() == false) {
@@ -10858,7 +13129,29 @@ status_t ExynosCamera::m_startPreviewInternal(void)
     }
 #endif
 
+#ifdef USE_VRA_GROUP
+    m_parameters->setDsInputPortId(MCSC_PORT_0);
+#endif
+
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+    if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+    {
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FASTAE_THREAD_WAIT_END, false);
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FACTORY_INIT_PIPES_START, true);
+    }
+#endif
     ret = m_previewFrameFactory->initPipes();
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+    if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+    {
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FACTORY_INIT_PIPES_START, false);
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FACTORY_INIT_PIPES_END, true);
+    }
+#endif
     if (ret < 0) {
         CLOGE("m_previewFrameFactory->initPipes() failed");
         return ret;
@@ -10866,7 +13159,7 @@ status_t ExynosCamera::m_startPreviewInternal(void)
 
     if (m_parameters->getZoomPreviewWIthScaler() == true) {
         scpBufferMgr = m_zoomScalerBufferMgr;
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     } else if (m_parameters->getDualCameraMode() == true) {
         scpBufferMgr = m_fusionBufferMgr;
 #endif
@@ -10883,8 +13176,28 @@ status_t ExynosCamera::m_startPreviewInternal(void)
 
         tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_FLITE)] = m_3aaBufferMgr;
     }
-
-    tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_VC0)] = m_bayerBufferMgr;
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+    if (m_parameters->getDNGCaptureModeOn() == true) {
+        CLOGD("[DNG] Set tempBufferManager (m_fliteBufferMgr) for DNG capture");
+        tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_VC0)] = m_fliteBufferMgr;
+    } else {
+        if (m_parameters->getUsePureBayerReprocessing() == false)
+            tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_VC0)] = m_fliteBufferMgr;
+        else
+            tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_VC0)] = m_bayerBufferMgr;
+    }
+#else
+    if (m_parameters->getUsePureBayerReprocessing() == false) {
+#ifdef USE_REMOSAIC_CAPTURE
+        if (m_parameters->isUseRemosaicCapture() == true) {
+            tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_VC0)] = m_bayerBufferMgr;
+        }
+#else
+        tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_VC0)] = m_fliteBufferMgr;
+#endif
+    } else
+        tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_VC0)] = m_bayerBufferMgr;
+#endif
 #ifdef SUPPORT_DEPTH_MAP
     tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_VC1)] = m_depthMapBufferMgr;
 #endif // SUPPORT_DEPTH_MAP
@@ -10918,12 +13231,22 @@ status_t ExynosCamera::m_startPreviewInternal(void)
 
     tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_MCSC)] = m_hwDisBufferMgr;
     tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_MCSC0)] = m_scpBufferMgr;
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-    if (m_parameters->getDualCameraMode() == true)
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraPreviewFusionMode() == true)
         tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_MCSC0)] = m_fusionBufferMgr;
 #endif
     tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_MCSC1)] = m_previewCallbackBufferMgr;
     tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_MCSC2)] = m_recordingBufferMgr;
+#ifdef USE_VRA_GROUP
+    tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_MCSC_DS)] = m_vraBufferMgr;
+#endif
+    if (m_parameters->isMcscVraOtf() == false) {
+        tempBufferManager = vraBufferManager;
+    }
+
+#ifdef USE_VRA_GROUP
+    tempBufferManager[m_previewFrameFactory->getNodeType(PIPE_VRA)] = m_vraBufferMgr;
+#endif
 
     for (int i = 0; i < MAX_NODE; i++) {
         /* If even one buffer slot is valid. call setBufferManagerToPipe() */
@@ -10990,6 +13313,21 @@ status_t ExynosCamera::m_startPreviewInternal(void)
         }
     }
 
+#ifdef USE_VRA_GROUP
+    for (int i = 0; i < MAX_NODE; i++) {
+        /* If even one buffer slot is valid. call setBufferManagerToPipe() */
+        if (vraBufferManager[i] != NULL) {
+            ret = m_previewFrameFactory->setBufferManagerToPipe(vraBufferManager, PIPE_VRA);
+            if (ret != NO_ERROR) {
+                CLOGE("m_previewFrameFactory->setBufferManagerToPipe(vraBufferManager, %d) failed",
+                     PIPE_VRA);
+                return ret;
+            }
+            break;
+        }
+    }
+#endif
+
     int flipHorizontal = m_parameters->getFlipHorizontal();
 
     CLOGD("set FlipHorizontal on preview, FlipHorizontal(%d)", flipHorizontal);
@@ -11031,9 +13369,11 @@ status_t ExynosCamera::m_startPreviewInternal(void)
     }
 #endif
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == true) {
         int pipeId = PIPE_SYNC;
+        /* default outputQ setting */
+        m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, pipeId);
 
         ret = m_getBufferManager(pipeId, &syncBufferManager[OUTPUT_NODE], SRC_BUFFER_DIRECTION);
         if (ret != NO_ERROR) {
@@ -11057,6 +13397,37 @@ status_t ExynosCamera::m_startPreviewInternal(void)
                     return ret;
                 }
                 break;
+            }
+        }
+
+        if (m_parameters->getFlagForceSwitchingOnly() == true) {
+            pipeId = PIPE_SYNC_SWITCHING;
+            /* default outputQ setting */
+            m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, pipeId);
+
+            ret = m_getBufferManager(pipeId, &syncBufferManager[OUTPUT_NODE], SRC_BUFFER_DIRECTION);
+            if (ret != NO_ERROR) {
+                CLOGE("ERR(%s[%d]):getBufferManager(SRC) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId, ret);
+                return ret;
+            }
+
+            ret = m_getBufferManager(pipeId, &syncBufferManager[CAPTURE_NODE], DST_BUFFER_DIRECTION);
+            if (ret != NO_ERROR) {
+                CLOGE("ERR(%s[%d]):getBufferManager(DST) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId, ret);
+                return ret;
+            }
+
+            for (int i = 0; i < MAX_NODE; i++) {
+                /* If even one buffer slot is valid. call setBufferManagerToPipe() */
+                if (syncBufferManager[i] != NULL) {
+                    ret = m_previewFrameFactory->setBufferManagerToPipe(syncBufferManager, pipeId);
+                    if (ret != NO_ERROR) {
+                        CLOGE("ERR(%s[%d]):m_previewFrameFactory->setBufferManagerToPipe(syncBufferManager, %d) failed",
+                                __FUNCTION__, __LINE__, pipeId);
+                        return ret;
+                    }
+                    break;
+                }
             }
         }
 
@@ -11115,6 +13486,12 @@ status_t ExynosCamera::m_startPreviewInternal(void)
             m_previewFrameFactory->setFrameDoneQToPipe(m_mainSetupQ[INDEX(pipeId)], pipeId);
         else
             m_previewFrameFactory->setFrameDoneQToPipe(m_pipeFrameDoneQ, pipeId);
+
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true &&
+                m_parameters->getFlagForceSwitchingOnly() == true)
+            m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, pipeId);
+#endif
     }
 
     if (m_parameters->is3aaIspOtf() == false)
@@ -11148,6 +13525,11 @@ status_t ExynosCamera::m_startPreviewInternal(void)
         m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, pipeId);
     }
 
+    if (m_parameters->isMcscVraOtf() == false) {
+        pipeId = PIPE_VRA;
+        m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, pipeId);
+    }
+
     minBayerFrameNum = minBayerFrameNum / m_parameters->getBatchSize(PIPE_FLITE);
     min3AAFrameNum = min3AAFrameNum / m_parameters->getBatchSize(PIPE_3AA);
 
@@ -11155,8 +13537,98 @@ status_t ExynosCamera::m_startPreviewInternal(void)
 
     CLOGD("loopFrameNum(%d), minBayerFrameNum(%d), min3AAFrameNum(%d)", loopFrameNum, minBayerFrameNum, min3AAFrameNum);
 
-    for (uint32_t i = 0; i < loopFrameNum; i++) {
-        ret = m_generateFrame(i, newFrame);
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        int masterCameraId, slaveCameraId;
+        getDualCameraId(&masterCameraId, &slaveCameraId);
+
+        m_parameters->registerDualNotifyCallback(this, &ExynosCamera::m_dualNotifyFunc);
+
+        switch (m_parameters->getDualCameraSyncType()) {
+        case SYNC_TYPE_BYPASS:
+            if (m_cameraId == slaveCameraId) {
+#ifdef DUAL_STANDBY_MODE_SLAVE
+                m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_SLAVE);
+#else
+                m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_POST);
+#endif
+            }
+            break;
+        case SYNC_TYPE_SWITCH:
+            if (m_cameraId == masterCameraId) {
+#ifdef DUAL_STANDBY_MODE_MASTER
+                m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_MASTER);
+#else
+                m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_POST);
+#endif
+            }
+            break;
+        default:
+            break;
+        }
+
+#ifdef DUAL_SMOOTH_TRANSITION_LAUNCH
+        if (m_isFirstStart == true) {
+            if (masterCameraId == m_cameraId) {
+                m_parameters->finishStartPreview(m_cameraId);
+                if (m_parameters->getDualCameraSyncType() == SYNC_TYPE_SWITCH) {
+#ifdef SAMSUNG_DUAL_SOLUTION
+                    m_parameters->setForceWide(true);
+#else
+                    m_parameters->setDualSmoothTransitionCount(DUAL_SMOOTH_TRANSITION_COUNT);
+#endif
+                    CLOGI("setting smoothTransitionCount in master");
+                }
+            } else {
+                /* in case of slave camera and not standby, forcely setting smoothTransitionCount */
+                if (m_parameters->getDualStandbyMode() == ExynosCameraParameters::DUAL_STANDBY_MODE_READY ||
+                        m_parameters->getDualStandbyMode() == ExynosCameraParameters::DUAL_STANDBY_MODE_INACTIVE) {
+#ifdef SAMSUNG_DUAL_SOLUTION
+                    m_parameters->setForceWide(true);
+#else
+                    m_parameters->setDualSmoothTransitionCount(DUAL_SMOOTH_TRANSITION_COUNT);
+#endif
+                    CLOGI("setting smoothTransitionCount in slave");
+                }
+            }
+        } else {
+            m_parameters->finishStartPreview(m_cameraId);
+        }
+#endif
+        m_parameters->setDualWakeupFinishCount(DUAL_WAKEUP_FINISH_COUNT);
+        CLOGD("standby mode(%d) syncType(%d) switchingOnly(%d)", m_parameters->getDualStandbyMode(),
+                m_parameters->getDualCameraSyncType(),
+                m_parameters->getFlagForceSwitchingOnly());
+
+        if (m_parameters->getDualStandbyMode() ==
+                ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR) {
+            flagSensorStandby = true;
+
+            /* default outputQ setting for pipe->startThread() success */
+            pipeId = PIPE_3AA;
+            if (m_parameters->isFlite3aaOtf() == true)
+                m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, pipeId);
+
+            pipeId = PIPE_ISP;
+            if (m_parameters->is3aaIspOtf() == false)
+                m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, pipeId);
+
+            pipeId = PIPE_TPU;
+            if (m_parameters->isIspTpuOtf() == false &&
+                    m_parameters->getTpuEnabledMode() == true)
+                m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, pipeId);
+
+            pipeId = PIPE_MCSC;
+            if (m_parameters->isIspTpuOtf() == false &&
+                    m_parameters->isIspMcscOtf() == false)
+                m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, pipeId);
+        }
+    }
+#endif
+
+    /* skip qbuf in sensor standby mode */
+    for (uint32_t i = 0; i < loopFrameNum && !flagSensorStandby; i++) {
+        ret = m_generateFrame(-1, newFrame);
         if (ret < 0) {
             CLOGE("generateFrame fail");
             return ret;
@@ -11174,7 +13646,6 @@ status_t ExynosCamera::m_startPreviewInternal(void)
                         PIPE_FLITE, ret);
 
             m_previewFrameFactory->pushFrameToPipe(newFrame, PIPE_FLITE);
-            m_fliteFrameCount++;
         }
 
         if (m_parameters->isFlite3aaOtf() == true) {
@@ -11184,13 +13655,11 @@ status_t ExynosCamera::m_startPreviewInternal(void)
                         PIPE_FLITE, ret);
 
             m_previewFrameFactory->pushFrameToPipe(newFrame, PIPE_3AA);
-            m_3aa_ispFrameCount++;
         }
 
 #if 0
         /* SCC */
         if(m_parameters->isSccCapture() == true) {
-            m_sccFrameCount++;
 
             if (m_parameters->isOwnScc(getCameraIdInternal()) == true) {
                 pipe = PIPE_SCC;
@@ -11208,8 +13677,6 @@ status_t ExynosCamera::m_startPreviewInternal(void)
         /* SCP */
 /* Comment out, because it included ISP */
 /*
-        m_scpFrameCount++;
-
         m_setupEntity(PIPE_SCP, newFrame);
         m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, PIPE_SCP);
         m_previewFrameFactory->pushFrameToPipe(&newFrame, PIPE_SCP);
@@ -11219,7 +13686,7 @@ status_t ExynosCamera::m_startPreviewInternal(void)
 /* Comment out, because it included ISP */
 /*
     for (uint32_t i = minFrameNum; i < INIT_SCP_BUFFERS; i++) {
-        ret = m_generateFrame(i, &newFrame);
+        ret = m_generateFrame(-1, &newFrame);
         if (ret < 0) {
             CLOGE("generateFrame fail");
             return ret;
@@ -11228,8 +13695,6 @@ status_t ExynosCamera::m_startPreviewInternal(void)
             CLOGE("new faame is NULL");
             return ret;
         }
-
-        m_scpFrameCount++;
 
         m_setupEntity(PIPE_SCP, newFrame);
         m_previewFrameFactory->setOutputFrameQToPipe(m_pipeFrameDoneQ, PIPE_SCP);
@@ -11245,15 +13710,35 @@ status_t ExynosCamera::m_startPreviewInternal(void)
     }
 
 #ifdef RAWDUMP_CAPTURE
+#ifndef DEBUG_RAWDUMP_DIRTY_BAYER
     /* s_ctrl HAL version for selecting dvfs table */
     ret = m_previewFrameFactory->setControl(V4L2_CID_IS_HAL_VERSION, IS_HAL_VER_3_2, PIPE_3AA);
     CLOGD("V4L2_CID_IS_HAL_VERSION_%d pipe(%d)", IS_HAL_VER_3_2, PIPE_3AA);
     if (ret < 0)
         CLOGW(" V4L2_CID_IS_HAL_VERSION is fail");
 #endif
+#endif
 
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+    if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+    {
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FACTORY_INIT_PIPES_END, false);
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FACTORY_START_START, true);
+    }
+#endif
     /* stream on pipes */
     ret = m_previewFrameFactory->startPipes();
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+    if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+    {
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_SENSOR_STREAM_ON, false);
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FACTORY_START_END, true);
+    }
+#endif
     if (ret < 0) {
         m_previewFrameFactory->stopPipes();
         CLOGE("startPipe fail");
@@ -11338,15 +13823,16 @@ status_t ExynosCamera::m_stopPreviewInternal(void)
 
     m_pipeFrameDoneQ->release();
 
-    m_fliteFrameCount = 0;
-    m_3aa_ispFrameCount = 0;
-    m_ispFrameCount = 0;
-    m_sccFrameCount = 0;
-    m_scpFrameCount = 0;
     m_isZSLCaptureOn = false;
 
     m_previewEnabled = false;
     m_parameters->setPreviewRunning(m_previewEnabled);
+
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        m_parameters->unregisterDualNotifyCallback();
+    }
+#endif
 
     CLOGI("OUT");
 
@@ -11391,6 +13877,14 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
     if(m_previewQ != NULL)
         m_previewQ->sendCmd(WAKE_UP);
     m_previewThread->requestExitAndWait();
+
+    if (m_previewCallbackThread->isRunning()) {
+        m_previewCallbackThread->stop();
+        if (m_previewCallbackQ != NULL) {
+            m_previewCallbackQ->sendCmd(WAKE_UP);
+        }
+        m_previewCallbackThread->requestExitAndWait();
+    }
 
     if (m_parameters->isFlite3aaOtf() == true) {
         m_mainSetupQThread[INDEX(PIPE_FLITE)]->stop();
@@ -11451,8 +13945,13 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
         m_clearList(m_previewQ);
     }
 
+    if (m_previewCallbackQ != NULL) {
+        m_clearList(m_previewCallbackQ);
+    }
+
 #ifdef SUPPORT_SW_VDIS
-    if (m_swVDIS_Mode) {
+    int cameraId = getCameraIdInternal();
+    if (m_swVDIS_Mode && (m_swVDIS_ModeDual == false || (m_swVDIS_ModeDual == true && cameraId != CAMERA_ID_BACK_1))) {
         if (m_swVDIS_BufferMgr != NULL)
             m_swVDIS_BufferMgr->deinit();
 
@@ -11503,8 +14002,10 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
     if (m_bayerBufferMgr != NULL) {
         m_bayerBufferMgr->resetBuffers();
     }
-    if (m_bayerBufferMgr != NULL && reservedMemoryCount > 0) {
-        m_bayerBufferMgr->deinit();
+    if (reservedMemoryCount > 0) {
+        if (m_bayerBufferMgr != NULL) {
+            m_bayerBufferMgr->deinit();
+        }
     }
 #ifdef SUPPORT_DEPTH_MAP
     if (m_depthMapBufferMgr != NULL) {
@@ -11523,6 +14024,9 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
             m_ispBufferMgr->deinit();
         }
 #endif
+    }
+    if (m_vraBufferMgr != NULL) {
+        m_vraBufferMgr->deinit();
     }
     if (m_hwDisBufferMgr != NULL) {
 #if defined (USE_ISP_BUFFER_SIZE_TO_BDS)
@@ -11544,14 +14048,14 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
         m_ispReprocessingBufferMgr->resetBuffers();
     }
     if (m_sccReprocessingBufferMgr != NULL) {
-        m_sccReprocessingBufferMgr->deinit();
+        m_sccReprocessingBufferMgr->deinit(m_cameraId);
     }
 
     if (m_postPictureBufferMgr != NULL) {
         if (m_postPictureBufferMgr->getContigBufCount() != 0) {
-            m_postPictureBufferMgr->deinit();
+            m_postPictureBufferMgr->deinit(m_cameraId);
         } else {
-            m_postPictureBufferMgr->resetBuffers();
+            m_postPictureBufferMgr->resetBuffers(m_cameraId);
         }
     }
 
@@ -11561,18 +14065,25 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
     }
 #endif
 
+#ifdef SAMSUNG_STR_CAPTURE
+    if (m_strCaptureBufferMgr != NULL) {
+        m_strCaptureBufferMgr->resetBuffers();
+    }
+#endif
+
     if (m_thumbnailBufferMgr != NULL) {
-        m_thumbnailBufferMgr->resetBuffers();
+        m_thumbnailBufferMgr->deinit(m_cameraId);
     }
 
     if (m_gscBufferMgr != NULL) {
         m_gscBufferMgr->resetBuffers();
     }
     if (m_jpegBufferMgr != NULL) {
-        m_jpegBufferMgr->resetBuffers();
-    }
-    if (m_jpegBufferMgr != NULL && reservedMemoryCount > 0) {
-        m_jpegBufferMgr->deinit();
+        m_jpegBufferMgr->resetBuffers(m_cameraId);
+
+        if (reservedMemoryCount > 0) {
+            m_jpegBufferMgr->deinit(m_cameraId);
+        }
     }
 
     if (m_recordingBufferMgr != NULL) {
@@ -11590,7 +14101,7 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
     if (m_zoomScalerBufferMgr != NULL) {
         m_zoomScalerBufferMgr->deinit();
     }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     if (m_fusionBufferMgr != NULL) {
         m_fusionBufferMgr->deinit();
     }
@@ -11612,7 +14123,7 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
         if (m_bayerBufferMgr != NULL) {
             m_bayerBufferMgr->deinit();
         }
-#ifdef DEBUG_RAWDUMP
+#if defined(SAMSUNG_DNG_DIRTY_BAYER) || defined(DEBUG_RAWDUMP_DIRTY_BAYER)
         if (m_parameters->getUsePureBayerReprocessing() == false) {
             if (m_fliteBufferMgr != NULL) {
                 m_fliteBufferMgr->deinit();
@@ -11624,6 +14135,10 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
         }
         if (m_ispBufferMgr != NULL) {
             m_ispBufferMgr->deinit();
+        }
+
+        if (m_vraBufferMgr != NULL) {
+            m_vraBufferMgr->deinit();
         }
 
         if (m_hwDisBufferMgr != NULL) {
@@ -11652,7 +14167,7 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
     m_flagThreadStop = false;
 
 #ifdef SAMSUNG_COMPANION
-    if(isCompanion(getCameraIdInternal()) == true) {
+    if (m_use_companion == true) {
         if (m_parameters->getSceneMode() == SCENE_MODE_HDR)
             m_parameters->checkSceneRTHdr(true);
         else
@@ -11732,15 +14247,12 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
         m_mainSetupQThread[INDEX(PIPE_3AA)]->run(PRIORITY_URGENT_DISPLAY);
     }
 
-    if (m_facedetectThread->isRunning() == false)
-        m_facedetectThread->run();
-
     if (m_monitorThread->isRunning() == false)
         m_monitorThread->run(PRIORITY_DEFAULT);
 
     m_disablePreviewCB = false;
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     int masterCameraId, slaveCameraId;
     getDualCameraId(&masterCameraId, &slaveCameraId);
     if (m_parameters->getDualCameraMode() == false ||
@@ -11748,8 +14260,11 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
             m_cameraId == masterCameraId)) {
         /* don't start previewThread in slave camera for dual camera */
 #endif
-    m_previewThread->run(PRIORITY_DISPLAY);
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+        if (m_facedetectThread->isRunning() == false)
+            m_facedetectThread->run();
+
+        m_previewThread->run(PRIORITY_DISPLAY);
+#ifdef USE_DUAL_CAMERA
     }
 #endif
 
@@ -11765,7 +14280,9 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
        To avoid the thread creation performance issue, threads in reprocessing pipes
        must be run with run&wait mode */
     bool needOneShotMode = (m_parameters->getHighResolutionCallbackMode() == false);
-    m_reprocessingFrameFactory->setThreadOneShotMode(reprocessingHeadPipeId, needOneShotMode);
+    for (int i = 0; i < m_getNumOfReprocessingInstance(); i++) {
+        m_pReprocessingFrameFactories[i]->setThreadOneShotMode(reprocessingHeadPipeId, needOneShotMode);
+    }
 
     return err;
 }
@@ -11797,19 +14314,10 @@ status_t ExynosCamera::m_startPictureInternal(void)
     else
         mcscContainedPipeId = PIPE_3AA_REPROCESSING;
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     ExynosCameraBufferManager *syncBufferManager[MAX_NODE];
     ExynosCameraBufferManager *fusionBufferManager[MAX_NODE];
 #endif
-
-    for (int i = 0; i < MAX_NODE; i++) {
-        taaBufferManager[i] = NULL;
-        ispBufferManager[i] = NULL;
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-        syncBufferManager[i] = NULL;
-        fusionBufferManager[i] = NULL;
-#endif
-    }
 
     if (m_zslPictureEnabled == true) {
         CLOGD(" zsl picture is already initialized");
@@ -11817,12 +14325,10 @@ status_t ExynosCamera::m_startPictureInternal(void)
     }
 
     if (m_parameters->isReprocessing() == true) {
+        int flipHorizontal = m_parameters->getFlipHorizontal();
+        CLOGD("set FlipHorizontal on capture, FlipHorizontal(%d)", flipHorizontal);
+
         m_parameters->getThumbnailSize(&thumbnailW, &thumbnailH);
-        if (thumbnailW > 0 && thumbnailH > 0) {
-            m_reprocessingFrameFactory->setRequest(PIPE_MCSC4_REPROCESSING, true);
-        } else {
-            m_reprocessingFrameFactory->setRequest(PIPE_MCSC4_REPROCESSING, false);
-        }
 
         ret = m_setReprocessingBuffer();
         if (ret != NO_ERROR) {
@@ -11830,209 +14336,246 @@ status_t ExynosCamera::m_startPictureInternal(void)
             return ret;
         }
 
-        if (m_reprocessingFrameFactory->isCreated() == false) {
-            ret = m_reprocessingFrameFactory->create();
-            if (ret != NO_ERROR) {
-                CLOGE("m_reprocessingFrameFactory->create() failed");
+        bool bPureBayerReprocessing = m_parameters->getUsePureBayerReprocessing();
+        bool bReprocessing3aaIspOTF = m_parameters->isReprocessing3aaIspOTF();
+
+        for (int i = 0; i < m_getNumOfReprocessingInstance(); i++) {
+
+             for (int i = 0; i < MAX_NODE; i++) {
+                 taaBufferManager[i] = NULL;
+                 ispBufferManager[i] = NULL;
+#ifdef USE_DUAL_CAMERA
+                 syncBufferManager[i] = NULL;
+                 fusionBufferManager[i] = NULL;
+#endif
+             }
+
+
+            //Second instance is for pure bayer reprocessing
+            if (i == REPROCESSING_FRAME_FACTORY_PURE_REMOSAIC) {
+                bPureBayerReprocessing = true;
+                bReprocessing3aaIspOTF = true;
+
+                reprocessingHeadPipeId = PIPE_3AA_REPROCESSING;
+            }
+
+            m_reprocessingFrameFactory = m_pReprocessingFrameFactories[i];
+
+            if (m_reprocessingFrameFactory == NULL) {
+                CLOGE("reprocessingFrameFactory[%d] is NULL", i);
+                continue;
+            }
+
+            if (thumbnailW > 0 && thumbnailH > 0) {
+                m_reprocessingFrameFactory->setRequest(PIPE_MCSC4_REPROCESSING, true);
+            } else {
+                m_reprocessingFrameFactory->setRequest(PIPE_MCSC4_REPROCESSING, false);
+            }
+
+            if (m_reprocessingFrameFactory->isCreated() == false) {
+                ret = m_reprocessingFrameFactory->create();
+                if (ret != NO_ERROR) {
+                    CLOGE("m_reprocessingFrameFactory->create() failed");
+                    return ret;
+                }
+
+                m_pictureFrameFactory = m_reprocessingFrameFactory;
+                CLOGD("FrameFactory(pictureFrameFactory) created");
+            } else {
+                m_pictureFrameFactory = m_reprocessingFrameFactory;
+                CLOGD("FrameFactory(pictureFrameFactory) created");
+            }
+
+            enum NODE_TYPE nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC1_REPROCESSING);
+            m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, flipHorizontal, mcscContainedPipeId, nodeType);
+
+            nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC3_REPROCESSING);
+            m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, flipHorizontal, mcscContainedPipeId, nodeType);
+
+            nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC4_REPROCESSING);
+            m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, flipHorizontal, mcscContainedPipeId, nodeType);
+
+#ifdef USE_MULTI_FACING_SINGLE_CAMERA
+            if (m_parameters->getCameraDirection() == CAMERA_FACING_DIRECTION_BACK) {
+                nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC1_REPROCESSING);
+                m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, !flipHorizontal, mcscContainedPipeId, nodeType);
+                m_reprocessingFrameFactory->setControl(V4L2_CID_VFLIP, 1, mcscContainedPipeId, nodeType);
+
+                nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC3_REPROCESSING);
+                m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, !flipHorizontal, mcscContainedPipeId, nodeType);
+                m_reprocessingFrameFactory->setControl(V4L2_CID_VFLIP, 1, mcscContainedPipeId, nodeType);
+
+                nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC4_REPROCESSING);
+                m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, !flipHorizontal, mcscContainedPipeId, nodeType);
+                m_reprocessingFrameFactory->setControl(V4L2_CID_VFLIP, 1, mcscContainedPipeId, nodeType);
+             }
+#endif
+
+            /* If we want set buffer namanger from m_getBufferManager, use this */
+#if 0
+            ret = m_getBufferManager(PIPE_3AA_REPROCESSING, bufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_3AA_REPROCESSING)], SRC_BUFFER_DIRECTION);
+            if (ret < 0) {
+                CLOGE("getBufferManager() fail, pipeId(%d), ret(%d)", PIPE_3AA_REPROCESSING, ret);
                 return ret;
             }
 
-            m_pictureFrameFactory = m_reprocessingFrameFactory;
-            CLOGD("FrameFactory(pictureFrameFactory) created");
-        } else {
-            m_pictureFrameFactory = m_reprocessingFrameFactory;
-            CLOGD("FrameFactory(pictureFrameFactory) created");
-        }
-
-        int flipHorizontal = m_parameters->getFlipHorizontal();
-
-        CLOGD("set FlipHorizontal on capture, FlipHorizontal(%d)", flipHorizontal);
-
-        enum NODE_TYPE nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC1_REPROCESSING);
-        m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, flipHorizontal, mcscContainedPipeId, nodeType);
-
-        nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC3_REPROCESSING);
-        m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, flipHorizontal, mcscContainedPipeId, nodeType);
-
-        nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC4_REPROCESSING);
-        m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, flipHorizontal, mcscContainedPipeId, nodeType);
-
-#ifdef USE_MULTI_FACING_SINGLE_CAMERA
-        if (m_parameters->getCameraDirection() == CAMERA_FACING_DIRECTION_BACK) {
-            nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC1_REPROCESSING);
-            m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, !flipHorizontal, mcscContainedPipeId, nodeType);
-            m_reprocessingFrameFactory->setControl(V4L2_CID_VFLIP, 1, mcscContainedPipeId, nodeType);
-
-            nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC3_REPROCESSING);
-            m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, !flipHorizontal, mcscContainedPipeId, nodeType);
-            m_reprocessingFrameFactory->setControl(V4L2_CID_VFLIP, 1, mcscContainedPipeId, nodeType);
-
-            nodeType = m_reprocessingFrameFactory->getNodeType(PIPE_MCSC4_REPROCESSING);
-            m_reprocessingFrameFactory->setControl(V4L2_CID_HFLIP, !flipHorizontal, mcscContainedPipeId, nodeType);
-            m_reprocessingFrameFactory->setControl(V4L2_CID_VFLIP, 1, mcscContainedPipeId, nodeType);
-         }
-#endif
-
-        /* If we want set buffer namanger from m_getBufferManager, use this */
-#if 0
-        ret = m_getBufferManager(PIPE_3AA_REPROCESSING, bufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_3AA_REPROCESSING)], SRC_BUFFER_DIRECTION);
-        if (ret < 0) {
-            CLOGE("getBufferManager() fail, pipeId(%d), ret(%d)", PIPE_3AA_REPROCESSING, ret);
-            return ret;
-        }
-
-        ret = m_getBufferManager(PIPE_3AA_REPROCESSING, bufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_3AP_REPROCESSING)], DST_BUFFER_DIRECTION);
-        if (ret < 0) {
-            CLOGE("getBufferManager() fail, pipeId(%d), ret(%d)", PIPE_3AP_REPROCESSING, ret);
-            return ret;
-        }
+            ret = m_getBufferManager(PIPE_3AA_REPROCESSING, bufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_3AP_REPROCESSING)], DST_BUFFER_DIRECTION);
+            if (ret < 0) {
+                CLOGE("getBufferManager() fail, pipeId(%d), ret(%d)", PIPE_3AP_REPROCESSING, ret);
+                return ret;
+            }
 #else
-        tempBufferManager = taaBufferManager;
+            tempBufferManager = taaBufferManager;
 
-        if (m_parameters->getUsePureBayerReprocessing() == true) {
-            tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_3AA_REPROCESSING)] = m_bayerBufferMgr;
-            tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_3AP_REPROCESSING)] = m_ispReprocessingBufferMgr;
-        }
+            if (bPureBayerReprocessing == true) {
+                tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_3AA_REPROCESSING)] = m_bayerBufferMgr;
+                tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_3AP_REPROCESSING)] = m_ispReprocessingBufferMgr;
+            }
 
-        if (m_parameters->getUsePureBayerReprocessing() == false
-            || m_parameters->isReprocessing3aaIspOTF() == false)
-            tempBufferManager = ispBufferManager;
+            if (bPureBayerReprocessing == false
+                || bReprocessing3aaIspOTF == false)
+                tempBufferManager = ispBufferManager;
 
-        tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_ISP_REPROCESSING)] = m_ispReprocessingBufferMgr;
-        tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_ISPC_REPROCESSING)] = m_sccReprocessingBufferMgr;
-        tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_MCSC1_REPROCESSING)] = m_postPictureBufferMgr;
-        tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_MCSC3_REPROCESSING)] = m_sccReprocessingBufferMgr;
-        tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_MCSC4_REPROCESSING)] = m_thumbnailBufferMgr;
-        tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_HWFC_JPEG_SRC_REPROCESSING)] = m_sccReprocessingBufferMgr;
-        tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_HWFC_THUMB_SRC_REPROCESSING)] = m_thumbnailBufferMgr;
-        tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_HWFC_JPEG_DST_REPROCESSING)] = m_jpegBufferMgr;
-        tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_HWFC_THUMB_DST_REPROCESSING)] = m_thumbnailBufferMgr;
+            tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_ISP_REPROCESSING)] = m_ispReprocessingBufferMgr;
+            tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_ISPC_REPROCESSING)] = m_sccReprocessingBufferMgr;
+            tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_MCSC1_REPROCESSING)] = m_postPictureBufferMgr;
+            tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_MCSC3_REPROCESSING)] = m_sccReprocessingBufferMgr;
+            tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_MCSC4_REPROCESSING)] = m_thumbnailBufferMgr;
+            tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_HWFC_JPEG_SRC_REPROCESSING)] = m_sccReprocessingBufferMgr;
+            tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_HWFC_THUMB_SRC_REPROCESSING)] = m_thumbnailBufferMgr;
+            tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_HWFC_JPEG_DST_REPROCESSING)] = m_jpegBufferMgr;
+            tempBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_HWFC_THUMB_DST_REPROCESSING)] = m_thumbnailBufferMgr;
 #endif
 
-        if (m_parameters->getUsePureBayerReprocessing() == true) {
+            if (bPureBayerReprocessing == true) {
+                for (int i = 0; i < MAX_NODE; i++) {
+                    /* If even one buffer slot is valid. call setBufferManagerToPipe() */
+                    if (taaBufferManager[i] != NULL) {
+                        ret = m_reprocessingFrameFactory->setBufferManagerToPipe(taaBufferManager, PIPE_3AA_REPROCESSING);
+                        if (ret != NO_ERROR) {
+                            CLOGE("m_reprocessingFrameFactory->setBufferManagerToPipe(taaBufferManager, %d) failed",
+                                    PIPE_3AA_REPROCESSING);
+                            return ret;
+                        }
+                        break;
+                    }
+                }
+            }
+
             for (int i = 0; i < MAX_NODE; i++) {
                 /* If even one buffer slot is valid. call setBufferManagerToPipe() */
-                if (taaBufferManager[i] != NULL) {
-                    ret = m_reprocessingFrameFactory->setBufferManagerToPipe(taaBufferManager, PIPE_3AA_REPROCESSING);
+                if (ispBufferManager[i] != NULL) {
+                    ret = m_reprocessingFrameFactory->setBufferManagerToPipe(ispBufferManager, PIPE_ISP_REPROCESSING);
                     if (ret != NO_ERROR) {
-                        CLOGE("m_reprocessingFrameFactory->setBufferManagerToPipe(taaBufferManager, %d) failed",
-                                PIPE_3AA_REPROCESSING);
+                        CLOGE("m_reprocessingFrameFactory->setBufferManagerToPipe(ispBufferManager, %d) failed",
+                                 PIPE_ISP_REPROCESSING);
+                        return ret;
+                    }
+                    break;
+                }
+            }
+
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true) {
+            int pipeId = PIPE_SYNC_REPROCESSING;
+
+            /* default outputQ setting */
+            m_reprocessingFrameFactory->setOutputFrameQToPipe(m_syncReprocessingQ, pipeId);
+
+            ret = m_getBufferManager(pipeId, &syncBufferManager[OUTPUT_NODE], SRC_BUFFER_DIRECTION);
+            if (ret != NO_ERROR) {
+                CLOGE("ERR(%s[%d]):getBufferManager(SRC) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId, ret);
+                return ret;
+            }
+
+            ret = m_getBufferManager(pipeId, &syncBufferManager[CAPTURE_NODE], DST_BUFFER_DIRECTION);
+            if (ret != NO_ERROR) {
+                CLOGE("ERR(%s[%d]):getBufferManager(DST) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId, ret);
+                return ret;
+            }
+
+            for (int i = 0; i < MAX_NODE; i++) {
+                /* If even one buffer slot is valid. call setBufferManagerToPipe() */
+                if (syncBufferManager[i] != NULL) {
+                    ret = m_reprocessingFrameFactory->setBufferManagerToPipe(syncBufferManager, pipeId);
+                    if (ret != NO_ERROR) {
+                        CLOGE("ERR(%s[%d]):m_reprocessingFrameFactory->setBufferManagerToPipe(syncBufferManager, %d) failed",
+                            __FUNCTION__, __LINE__, pipeId);
+                        return ret;
+                    }
+                    break;
+                }
+            }
+
+            pipeId = PIPE_FUSION_REPROCESSING;
+
+            ret = m_getBufferManager(pipeId, &fusionBufferManager[OUTPUT_NODE], SRC_BUFFER_DIRECTION);
+            if (ret != NO_ERROR) {
+                CLOGE("ERR(%s[%d]):getBufferManager(SRC) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId, ret);
+                return ret;
+            }
+
+            ret = m_getBufferManager(pipeId, &fusionBufferManager[CAPTURE_NODE], DST_BUFFER_DIRECTION);
+            if (ret != NO_ERROR) {
+                CLOGE("ERR(%s[%d]):getBufferManager(DST) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId, ret);
+                return ret;
+            }
+
+            for (int i = 0; i < MAX_NODE; i++) {
+                /* If even one buffer slot is valid. call setBufferManagerToPipe() */
+                if (fusionBufferManager[i] != NULL) {
+                    ret = m_reprocessingFrameFactory->setBufferManagerToPipe(fusionBufferManager, pipeId);
+                    if (ret != NO_ERROR) {
+                        CLOGE("ERR(%s[%d]):m_reprocessingFrameFactory->setBufferManagerToPipe(fusionBufferManager, %d) failed",
+                            __FUNCTION__, __LINE__, pipeId);
                         return ret;
                     }
                     break;
                 }
             }
         }
-
-        for (int i = 0; i < MAX_NODE; i++) {
-            /* If even one buffer slot is valid. call setBufferManagerToPipe() */
-            if (ispBufferManager[i] != NULL) {
-                ret = m_reprocessingFrameFactory->setBufferManagerToPipe(ispBufferManager, PIPE_ISP_REPROCESSING);
-                if (ret != NO_ERROR) {
-                    CLOGE("m_reprocessingFrameFactory->setBufferManagerToPipe(ispBufferManager, %d) failed",
-                             PIPE_ISP_REPROCESSING);
-                    return ret;
-                }
-                break;
-            }
-        }
-
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-    if (m_parameters->getDualCameraMode() == true) {
-        int pipeId = PIPE_SYNC_REPROCESSING;
-
-        ret = m_getBufferManager(pipeId, &syncBufferManager[OUTPUT_NODE], SRC_BUFFER_DIRECTION);
-        if (ret != NO_ERROR) {
-            CLOGE("ERR(%s[%d]):getBufferManager(SRC) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId, ret);
-            return ret;
-        }
-
-        ret = m_getBufferManager(pipeId, &syncBufferManager[CAPTURE_NODE], DST_BUFFER_DIRECTION);
-        if (ret != NO_ERROR) {
-            CLOGE("ERR(%s[%d]):getBufferManager(DST) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId, ret);
-            return ret;
-        }
-
-        for (int i = 0; i < MAX_NODE; i++) {
-            /* If even one buffer slot is valid. call setBufferManagerToPipe() */
-            if (syncBufferManager[i] != NULL) {
-                ret = m_reprocessingFrameFactory->setBufferManagerToPipe(syncBufferManager, pipeId);
-                if (ret != NO_ERROR) {
-                    CLOGE("ERR(%s[%d]):m_reprocessingFrameFactory->setBufferManagerToPipe(syncBufferManager, %d) failed",
-                        __FUNCTION__, __LINE__, pipeId);
-                    return ret;
-                }
-                break;
-            }
-        }
-
-        pipeId = PIPE_FUSION_REPROCESSING;
-
-        ret = m_getBufferManager(pipeId, &fusionBufferManager[OUTPUT_NODE], SRC_BUFFER_DIRECTION);
-        if (ret != NO_ERROR) {
-            CLOGE("ERR(%s[%d]):getBufferManager(SRC) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId, ret);
-            return ret;
-        }
-
-        ret = m_getBufferManager(pipeId, &fusionBufferManager[CAPTURE_NODE], DST_BUFFER_DIRECTION);
-        if (ret != NO_ERROR) {
-            CLOGE("ERR(%s[%d]):getBufferManager(DST) fail, pipeId(%d), ret(%d)", __FUNCTION__, __LINE__, pipeId, ret);
-            return ret;
-        }
-
-        for (int i = 0; i < MAX_NODE; i++) {
-            /* If even one buffer slot is valid. call setBufferManagerToPipe() */
-            if (fusionBufferManager[i] != NULL) {
-                ret = m_reprocessingFrameFactory->setBufferManagerToPipe(fusionBufferManager, pipeId);
-                if (ret != NO_ERROR) {
-                    CLOGE("ERR(%s[%d]):m_reprocessingFrameFactory->setBufferManagerToPipe(fusionBufferManager, %d) failed",
-                        __FUNCTION__, __LINE__, pipeId);
-                    return ret;
-                }
-                break;
-            }
-        }
-    }
 #endif
 
 #ifdef USE_ODC_CAPTURE
-        if (m_parameters->getODCCaptureMode()) {
-            ExynosCameraBufferManager *tpuBufferManager[MAX_NODE];
-            tpuBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_TPU1)] = m_sccReprocessingBufferMgr;
-            tpuBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_TPU1C)] = m_sccReprocessingBufferMgr;
-            ret = m_reprocessingFrameFactory->setBufferManagerToPipe(tpuBufferManager, PIPE_TPU1);
-            if (ret != NO_ERROR) {
-                CLOGE("m_reprocessingFrameFactory->setBufferManagerToPipe(ispBufferManager, %d) failed",
-                        PIPE_3AA_REPROCESSING);
-                return ret;
+            if (m_parameters->getODCCaptureMode()) {
+                ExynosCameraBufferManager *tpuBufferManager[MAX_NODE];
+                tpuBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_TPU1)] = m_sccReprocessingBufferMgr;
+                tpuBufferManager[m_reprocessingFrameFactory->getNodeType(PIPE_TPU1C)] = m_sccReprocessingBufferMgr;
+                ret = m_reprocessingFrameFactory->setBufferManagerToPipe(tpuBufferManager, PIPE_TPU1);
+                if (ret != NO_ERROR) {
+                    CLOGE("m_reprocessingFrameFactory->setBufferManagerToPipe(ispBufferManager, %d) failed",
+                            PIPE_3AA_REPROCESSING);
+                    return ret;
+                }
             }
-        }
 #endif
 
-        ret = m_reprocessingFrameFactory->initPipes();
-        if (ret < 0) {
-            CLOGE("m_reprocessingFrameFactory->initPipes() failed");
-            return ret;
+            ret = m_reprocessingFrameFactory->initPipes();
+            if (ret < 0) {
+                CLOGE("m_reprocessingFrameFactory->initPipes() failed");
+                return ret;
+            }
+
+            ret = m_reprocessingFrameFactory->preparePipes();
+            if (ret < 0) {
+                CLOGE("m_reprocessingFrameFactory preparePipe fail");
+                return ret;
+            }
+
+            /* stream on pipes */
+            ret = m_reprocessingFrameFactory->startPipes();
+            if (ret < 0) {
+                CLOGE("m_reprocessingFrameFactory startPipe fail");
+                return ret;
+            }
+
+            /* On High-resolution callback scenario, the reprocessing works with specific fps.
+               To avoid the thread creation performance issue, threads in reprocessing pipes
+               must be run with run&wait mode */
+            bool needOneShotMode = (m_parameters->getHighResolutionCallbackMode() == false);
+            m_reprocessingFrameFactory->setThreadOneShotMode(reprocessingHeadPipeId, needOneShotMode);
         }
 
-        ret = m_reprocessingFrameFactory->preparePipes();
-        if (ret < 0) {
-            CLOGE("m_reprocessingFrameFactory preparePipe fail");
-            return ret;
-        }
-
-        /* stream on pipes */
-        ret = m_reprocessingFrameFactory->startPipes();
-        if (ret < 0) {
-            CLOGE("m_reprocessingFrameFactory startPipe fail");
-            return ret;
-        }
-
-        /* On High-resolution callback scenario, the reprocessing works with specific fps.
-           To avoid the thread creation performance issue, threads in reprocessing pipes
-           must be run with run&wait mode */
-        bool needOneShotMode = (m_parameters->getHighResolutionCallbackMode() == false);
-        m_reprocessingFrameFactory->setThreadOneShotMode(reprocessingHeadPipeId, needOneShotMode);
     }
 
     m_zslPictureEnabled = true;
@@ -12062,6 +14605,10 @@ status_t ExynosCamera::m_stopPictureInternal(void)
     m_LDCaptureThread->join();
 #endif
 
+#ifdef USE_MSC_CAPTURE
+    m_MscCaptureThread->join();
+#endif
+
 #ifdef SAMSUNG_MAGICSHOT
     if (m_parameters->getShotMode() == SHOT_MODE_MAGIC) {
         m_postPictureCallbackThread->join();
@@ -12079,9 +14626,11 @@ status_t ExynosCamera::m_stopPictureInternal(void)
     }
 
     if (m_zslPictureEnabled == true) {
-        ret = m_reprocessingFrameFactory->stopPipes();
-        if (ret < 0) {
-            CLOGE("m_reprocessingFrameFactory0>stopPipe() fail");
+        for (int i = 0; i < m_getNumOfReprocessingInstance(); i++) {
+            ret = m_pReprocessingFrameFactories[i]->stopPipes();
+            if (ret < 0) {
+                CLOGE("m_reprocessingFrameFactory0>stopPipe() fail");
+            }
         }
     }
 
@@ -12100,7 +14649,7 @@ status_t ExynosCamera::m_stopPictureInternal(void)
     m_dstIspReprocessingQ->release();
     m_dstGscReprocessingQ->release();
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     m_syncReprocessingQ->release();
     m_fusionReprocessingQ->release();
 #endif
@@ -12143,12 +14692,10 @@ status_t ExynosCamera::m_stopPictureInternal(void)
         m_jpegSaveQ[threadNum]->release();
     }
 
-    if (m_highResolutionCallbackQ != NULL) {
-        if (m_highResolutionCallbackQ->getSizeOfProcessQ() > 0){
-            CLOGD("m_highResolutionCallbackQ->getSizeOfProcessQ(%d). release the highResolutionCallbackQ.",
-                 m_highResolutionCallbackQ->getSizeOfProcessQ());
-            m_highResolutionCallbackQ->release();
-        }
+    if (m_highResolutionCallbackQ->getSizeOfProcessQ() != 0){
+        CLOGD("m_highResolutionCallbackQ->getSizeOfProcessQ(%d). release the highResolutionCallbackQ.",
+             m_highResolutionCallbackQ->getSizeOfProcessQ());
+        m_highResolutionCallbackQ->release();
     }
 
 #ifdef USE_ODC_CAPTURE
@@ -12179,6 +14726,7 @@ status_t ExynosCamera::m_stopPictureInternal(void)
     }
 
     m_zslPictureEnabled = false;
+    m_nv21CaptureEnabled = false;
 
     /* TODO: need timeout */
     return NO_ERROR;
@@ -12186,30 +14734,160 @@ status_t ExynosCamera::m_stopPictureInternal(void)
 
 status_t ExynosCamera::m_doPreviewToCallbackFunc(
         int32_t pipeId,
-        ExynosCameraFrameSP_sptr_t newFrame,
         ExynosCameraBuffer previewBuf,
-        ExynosCameraBuffer callbackBuf,
-        bool copybuffer)
+        ExynosCameraBuffer callbackBuf)
 {
-    CLOGV(" converting preview to callback buffer copybuffer(%d)", copybuffer);
+    CLOGV(" converting preview to callback buffer");
 
     int ret = 0;
     status_t statusRet = NO_ERROR;
 
-    int hwPreviewW = 0, hwPreviewH = 0;
     int hwPreviewFormat = m_parameters->getHwPreviewFormat();
     bool useCSC = m_parameters->getCallbackNeedCSC();
+    ExynosCameraFrameSP_sptr_t newFrame = NULL;
+
+    if (m_flagThreadStop == true || m_previewEnabled == false) {
+        CLOGE(" preview was stopped!");
+        statusRet = INVALID_OPERATION;
+        goto done;
+    }
+
+    if (useCSC) {
+        int pushFrameCnt = 0, doneFrameCnt = 0;
+        int retryCnt = 5;
+        bool isOldFrame = false;
+        ExynosRect srcRect, dstRect;
+
+        newFrame = m_previewFrameFactory->createNewFrameOnlyOnePipe(pipeId);
+        if (newFrame == NULL) {
+            CLOGE("newFrame is NULL");
+            goto done;
+        }
+
+        m_calcPreviewGSCRect(&srcRect, &dstRect);
+        newFrame->setSrcRect(pipeId, &srcRect);
+        newFrame->setDstRect(pipeId, &dstRect);
+
+        ret = m_setupEntity(pipeId, newFrame, &previewBuf, &callbackBuf);
+        if (ret < 0) {
+            CLOGE("setupEntity fail, pipeId(%d), ret(%d)",
+                     pipeId, ret);
+            statusRet = INVALID_OPERATION;
+            goto done;
+        }
+        m_previewFrameFactory->setOutputFrameQToPipe(m_previewCallbackGscFrameDoneQ, pipeId);
+        m_previewFrameFactory->pushFrameToPipe(newFrame, pipeId);
+
+        pushFrameCnt = newFrame->getFrameCount();
+
+        do {
+            isOldFrame = false;
+            retryCnt--;
+
+            CLOGV("wait preview callback output");
+            ret = m_previewCallbackGscFrameDoneQ->waitAndPopProcessQ(&newFrame);
+            if (ret < 0) {
+                CLOGE("wait and pop fail, ret(%d)", ret);
+                if (ret == TIMED_OUT && retryCnt > 0) {
+                    continue;
+                } else {
+                    /* TODO: doing exception handling */
+                    statusRet = INVALID_OPERATION;
+                    goto done;
+                }
+            }
+            if (newFrame == NULL) {
+                CLOGE("newFrame is NULL");
+                statusRet = INVALID_OPERATION;
+                goto done;
+            }
+
+            doneFrameCnt = newFrame->getFrameCount();
+            if (doneFrameCnt < pushFrameCnt) {
+                isOldFrame = true;
+                CLOGD("Frame Count(%d/%d), retryCnt(%d)",
+                     pushFrameCnt, doneFrameCnt, retryCnt);
+            }
+        } while ((ret == TIMED_OUT || isOldFrame == true) && (retryCnt > 0));
+        CLOGV("preview callback done");
+
+#if 0
+        int remainedH = m_orgPreviewRect.h - dst_height;
+
+        if (remainedH != 0) {
+            char *srcAddr = NULL;
+            char *dstAddr = NULL;
+            int planeDiver = 1;
+
+            for (int plane = 0; plane < 2; plane++) {
+                planeDiver = (plane + 1) * 2 / 2;
+
+                srcAddr = previewBuf.virt.extP[plane] + (ALIGN_UP(hwPreviewW, CAMERA_16PX_ALIGN) * dst_crop_height / planeDiver);
+                dstAddr = callbackBuf->virt.extP[plane] + (m_orgPreviewRect.w * dst_crop_height / planeDiver);
+
+                for (int i = 0; i < remainedH; i++) {
+                    memcpy(dstAddr, srcAddr, (m_orgPreviewRect.w / planeDiver));
+
+                    srcAddr += (ALIGN_UP(hwPreviewW, CAMERA_16PX_ALIGN) / planeDiver);
+                    dstAddr += (m_orgPreviewRect.w                   / planeDiver);
+                }
+            }
+        }
+#endif
+    } else { /* neon memcpy */
+        char *srcAddr = NULL;
+        char *dstAddr = NULL;
+        int planeCount = getYuvPlaneCount(hwPreviewFormat);
+        if (planeCount <= 0) {
+            CLOGE("getYuvPlaneCount(%d) fail", hwPreviewFormat);
+            statusRet = INVALID_OPERATION;
+            goto done;
+    }
+
+    dstAddr = callbackBuf.addr[0];
+    /* TODO : have to consider all fmt(planes) and stride */
+    for (int plane = 0; plane < planeCount; plane++) {
+        srcAddr = previewBuf.addr[plane];
+        memcpy(dstAddr, srcAddr, previewBuf.size[plane]);
+        dstAddr = dstAddr + previewBuf.size[plane];
+
+            if (m_ionClient >= 0)
+#ifdef USE_LIB_ION_LEGACY
+                ion_sync_fd(m_ionClient, callbackBuf.fd[plane]);
+#else
+                exynos_ion_sync_fd(m_ionClient, callbackBuf.fd[plane]);
+#endif
+        }
+    }
+done:
+
+    if (newFrame != NULL) {
+        newFrame = NULL;
+    }
+
+    return statusRet;
+}
+
+status_t ExynosCamera::m_previewCallbackFunc(ExynosCameraFrameSP_sptr_t newFrame, bool needBufferRelease)
+{
+    status_t statusRet = NO_ERROR;
 
     ExynosCameraDurationTimer probeTimer;
     int probeTimeMSEC;
-    uint32_t fcount = 0;
+    int ret = 0;
     camera_frame_metadata_t m_Metadata;
-
-    m_parameters->getHwPreviewSize(&hwPreviewW, &hwPreviewH);
-
-    ExynosRect srcRect, dstRect;
+    ExynosCameraBuffer callbackBuf;
+    int pipeId = PIPE_MCSC0;
 
     camera_memory_t *previewCallbackHeap = NULL;
+
+    callbackBuf.index = -2;
+
+    ret = newFrame->getSrcBuffer(pipeId, &callbackBuf);
+    if (ret < 0) {
+        CLOGE("getDstBuffer fail, ret(%d)", ret);
+    }
+
     previewCallbackHeap = m_getMemoryCb(callbackBuf.fd[0], callbackBuf.size[0], 1, m_callbackCookie);
     if (!previewCallbackHeap || previewCallbackHeap->data == MAP_FAILED) {
         CLOGE("m_getMemoryCb(%d) fail", callbackBuf.size[0]);
@@ -12217,127 +14895,13 @@ status_t ExynosCamera::m_doPreviewToCallbackFunc(
         goto done;
     }
 
-    if (!copybuffer) {
-        ret = m_setCallbackBufferInfo(&callbackBuf, (char *)previewCallbackHeap->data);
-        if (ret < 0) {
-            CLOGE(" setCallbackBufferInfo fail, ret(%d)", ret);
-            statusRet = INVALID_OPERATION;
-            goto done;
-        }
-
-        if (m_flagThreadStop == true || m_previewEnabled == false) {
-            CLOGE(" preview was stopped!");
-            statusRet = INVALID_OPERATION;
-            goto done;
-        }
-
-        memset(&m_Metadata, 0, sizeof(camera_frame_metadata_t));
-#ifdef SAMSUNG_TN_FEATURE
+    memset(&m_Metadata, 0, sizeof(camera_frame_metadata_t));
 #ifdef SAMSUNG_TIMESTAMP_BOOT
-        m_Metadata.timestamp = newFrame->getTimeStampBoot();
+    m_Metadata.timestamp = newFrame->getTimeStampBoot();
 #else
-        m_Metadata.timestamp = newFrame->getTimeStamp();
+    m_Metadata.timestamp = newFrame->getTimeStamp();
 #endif
-        CLOGV(" timestamp:%lldms!", (long long)m_Metadata.timestamp);
-#endif
-
-        ret = m_calcPreviewGSCRect(&srcRect, &dstRect);
-
-        if (useCSC) {
-            int pushFrameCnt = 0, doneFrameCnt = 0;
-            int retryCnt = 5;
-            bool isOldFrame = false;
-
-            ret = newFrame->setSrcRect(pipeId, &srcRect);
-            ret = newFrame->setDstRect(pipeId, &dstRect);
-
-            ret = m_setupEntity(pipeId, newFrame, &previewBuf, &callbackBuf);
-            if (ret < 0) {
-                CLOGE("setupEntity fail, pipeId(%d), ret(%d)",
-                         pipeId, ret);
-                statusRet = INVALID_OPERATION;
-                goto done;
-            }
-            m_previewFrameFactory->setOutputFrameQToPipe(m_previewCallbackGscFrameDoneQ, pipeId);
-            m_previewFrameFactory->pushFrameToPipe(newFrame, pipeId);
-
-            pushFrameCnt = newFrame->getFrameCount();
-
-            do {
-                isOldFrame = false;
-                retryCnt--;
-
-                CLOGV("wait preview callback output");
-                ret = m_previewCallbackGscFrameDoneQ->waitAndPopProcessQ(&newFrame);
-                if (ret < 0) {
-                    CLOGE("wait and pop fail, ret(%d)", ret);
-                    if (ret == TIMED_OUT && retryCnt > 0) {
-                        continue;
-                    } else {
-                        /* TODO: doing exception handling */
-                        statusRet = INVALID_OPERATION;
-                        goto done;
-                    }
-                }
-                if (newFrame == NULL) {
-                    CLOGE("newFrame is NULL");
-                    statusRet = INVALID_OPERATION;
-                    goto done;
-                }
-
-                doneFrameCnt = newFrame->getFrameCount();
-                if (doneFrameCnt < pushFrameCnt) {
-                    isOldFrame = true;
-                    CLOGD("Frame Count(%d/%d), retryCnt(%d)",
-                         pushFrameCnt, doneFrameCnt, retryCnt);
-                }
-            } while ((ret == TIMED_OUT || isOldFrame == true) && (retryCnt > 0));
-            CLOGV("preview callback done");
-
-#if 0
-            int remainedH = m_orgPreviewRect.h - dst_height;
-
-            if (remainedH != 0) {
-                char *srcAddr = NULL;
-                char *dstAddr = NULL;
-                int planeDiver = 1;
-
-                for (int plane = 0; plane < 2; plane++) {
-                    planeDiver = (plane + 1) * 2 / 2;
-
-                    srcAddr = previewBuf.virt.extP[plane] + (ALIGN_UP(hwPreviewW, CAMERA_16PX_ALIGN) * dst_crop_height / planeDiver);
-                    dstAddr = callbackBuf->virt.extP[plane] + (m_orgPreviewRect.w * dst_crop_height / planeDiver);
-
-                    for (int i = 0; i < remainedH; i++) {
-                        memcpy(dstAddr, srcAddr, (m_orgPreviewRect.w / planeDiver));
-
-                        srcAddr += (ALIGN_UP(hwPreviewW, CAMERA_16PX_ALIGN) / planeDiver);
-                        dstAddr += (m_orgPreviewRect.w                   / planeDiver);
-                    }
-                }
-            }
-#endif
-        } else { /* neon memcpy */
-            char *srcAddr = NULL;
-            char *dstAddr = NULL;
-            int planeCount = getYuvPlaneCount(hwPreviewFormat);
-            if (planeCount <= 0) {
-                CLOGE("getYuvPlaneCount(%d) fail", hwPreviewFormat);
-                statusRet = INVALID_OPERATION;
-                goto done;
-            }
-
-            /* TODO : have to consider all fmt(planes) and stride */
-            for (int plane = 0; plane < planeCount; plane++) {
-                srcAddr = previewBuf.addr[plane];
-                dstAddr = callbackBuf.addr[plane];
-                memcpy(dstAddr, srcAddr, callbackBuf.size[plane]);
-
-                if (m_ionClient >= 0)
-                    ion_sync_fd(m_ionClient, callbackBuf.fd[plane]);
-            }
-        }
-    }
+    CLOGV("timestamp:%jd ms!", m_Metadata.timestamp);
 
     probeTimer.start();
     if (m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME) &&
@@ -12351,29 +14915,118 @@ status_t ExynosCamera::m_doPreviewToCallbackFunc(
             setBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
             m_dataCb(CAMERA_MSG_PREVIEW_FRAME, previewCallbackHeap, 0, &m_Metadata, m_callbackCookie);
             clearBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
-        } else {
+        }
+#ifdef SAMSUNG_LIVE_OUTFOCUS
+        else if (m_parameters->getShotMode() == SHOT_MODE_LIVE_OUTFOCUS) {
+            setBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
+            m_dataCb(CAMERA_MSG_PREVIEW_FRAME, previewCallbackHeap, 0, &m_Metadata, m_callbackCookie);
+            clearBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
+        }
+#endif
+        else {
             setBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
             m_dataCb(CAMERA_MSG_PREVIEW_FRAME, previewCallbackHeap, 0, NULL, m_callbackCookie);
             clearBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
         }
     }
+
+#ifdef SAMSUNG_COLOR_IRIS
+    if ((getCameraIdInternal() == CAMERA_ID_FRONT) && (m_parameters->msgTypeEnabled(CAMERA_MSG_IRIS_PREVIEW_DATA))) {
+        camera_memory_t *fdCallbackData = NULL;
+
+        fdCallbackData = m_getMemoryCb(-1, sizeof(CameraBufferFD), 1, m_callbackCookie);
+        if (fdCallbackData == NULL) {
+            CLOGE("m_getMemoryCb fail");
+            goto done;
+        }
+
+#if 0
+        char filePath[50];
+        if (dumpIndex >5 && dumpIndex <15) {
+            snprintf(filePath, sizeof(filePath), "/data/media/0/DCIM/Camera/colorIRIS%02d.raw", dumpIndex);
+            CLOGE("iris dump %s", filePath);
+
+            dumpToFile(filePath,  (char *)callbackBuf.addr[0], 752 * 1328 * 1.5);
+        }
+        dumpIndex ++;
+#endif
+
+        ((CameraBufferFD *)fdCallbackData->data)->magic = 0x00FD42FD;
+        ((CameraBufferFD *)fdCallbackData->data)->fd = callbackBuf.fd[0];
+        CLOGV("FRONT_CAMERA CAMERA_MSG_IRIS_PREVIEW_DATA Callback");
+
+        setBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
+        m_dataCb(CAMERA_MSG_IRIS_PREVIEW_DATA, fdCallbackData, 0, NULL, m_callbackCookie);
+        clearBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
+
+        fdCallbackData->release(fdCallbackData);
+   }
+#endif
+
     probeTimer.stop();
-    getStreamFrameCount((struct camera2_stream *)previewBuf.addr[2], &fcount);
     probeTimeMSEC = (int)probeTimer.durationMsecs();
 
     if (probeTimeMSEC > 33 && probeTimeMSEC <= 66)
-        CLOGV("(%d) duration time(%5d msec)", fcount, (int)probeTimer.durationMsecs());
+        CLOGV("duration time(%5d msec)", (int)probeTimer.durationMsecs());
     else if(probeTimeMSEC > 66)
-        CLOGD("(%d) duration time(%5d msec)", fcount, (int)probeTimer.durationMsecs());
+        CLOGD("duration time(%5d msec)", (int)probeTimer.durationMsecs());
     else
-        CLOGV("(%d) duration time(%5d msec)", fcount, (int)probeTimer.durationMsecs());
+        CLOGV("duration time(%5d msec)", (int)probeTimer.durationMsecs());
 
 done:
     if (previewCallbackHeap != NULL) {
         previewCallbackHeap->release(previewCallbackHeap);
     }
 
+    if (needBufferRelease && callbackBuf.index >= 0) {
+        ret = m_putBuffers(m_previewCallbackBufferMgr, callbackBuf.index);
+        if (ret != NO_ERROR) {
+            CLOGE("Preview callback buffer return fail");
+        }
+    }
+
     return statusRet;
+}
+
+bool ExynosCamera::m_previewCallbackThreadFunc(void)
+{
+    bool loop = true;
+    int ret = 0;
+    ExynosCameraFrameSP_sptr_t newFrame = NULL;
+
+    CLOGV("wait m_previewCallbackQ output");
+    ret = m_previewCallbackQ->waitAndPopProcessQ(&newFrame);
+    if (m_flagThreadStop == true || ret == TIMED_OUT) {
+        CLOGI("m_flagThreadStop(%d)", m_flagThreadStop);
+
+        if (newFrame != NULL) {
+            newFrame = NULL;
+        }
+
+        return false;
+    }
+    if (ret < 0) {
+        CLOGE("wait and pop fail, ret(%d)", ret);
+        goto done;
+    }
+
+    if (newFrame == NULL) {
+        CLOGE("frame is NULL");
+        goto done;
+    }
+
+    ret = m_previewCallbackFunc(newFrame, true);
+    if (ret < 0) {
+        CLOGE("m_previewCallbackFunc fail");
+    }
+
+done:
+
+    if (newFrame != NULL) {
+        newFrame = NULL;
+    }
+
+    return loop;
 }
 
 status_t ExynosCamera::m_doCallbackToPreviewFunc(
@@ -12384,7 +15037,6 @@ status_t ExynosCamera::m_doCallbackToPreviewFunc(
 {
     CLOGV(" converting callback to preview buffer");
 
-    int ret = 0;
     status_t statusRet = NO_ERROR;
 
     int hwPreviewW = 0, hwPreviewH = 0;
@@ -12392,21 +15044,6 @@ status_t ExynosCamera::m_doCallbackToPreviewFunc(
     bool useCSC = m_parameters->getCallbackNeedCSC();
 
     m_parameters->getHwPreviewSize(&hwPreviewW, &hwPreviewH);
-
-    camera_memory_t *previewCallbackHeap = NULL;
-    previewCallbackHeap = m_getMemoryCb(callbackBuf.fd[0], callbackBuf.size[0], 1, m_callbackCookie);
-    if (!previewCallbackHeap || previewCallbackHeap->data == MAP_FAILED) {
-        CLOGE("m_getMemoryCb(%d) fail", callbackBuf.size[0]);
-        statusRet = INVALID_OPERATION;
-        goto done;
-    }
-
-    ret = m_setCallbackBufferInfo(&callbackBuf, (char *)previewCallbackHeap->data);
-    if (ret < 0) {
-        CLOGE(" setCallbackBufferInfo fail, ret(%d)", ret);
-        statusRet = INVALID_OPERATION;
-        goto done;
-    }
 
     if (m_flagThreadStop == true || m_previewEnabled == false) {
         CLOGE(" preview was stopped!");
@@ -12454,20 +15091,22 @@ status_t ExynosCamera::m_doCallbackToPreviewFunc(
         }
 
         /* TODO : have to consider all fmt(planes) and stride */
+        srcAddr = callbackBuf.addr[0];
         for (int plane = 0; plane < planeCount; plane++) {
-            srcAddr = callbackBuf.addr[plane];
             dstAddr = previewBuf.addr[plane];
-            memcpy(dstAddr, srcAddr, callbackBuf.size[plane]);
+            memcpy(dstAddr, srcAddr, previewBuf.size[plane]);
+            srcAddr = srcAddr + previewBuf.size[plane];
 
             if (m_ionClient >= 0)
+#ifdef USE_LIB_ION_LEGACY
                 ion_sync_fd(m_ionClient, previewBuf.fd[plane]);
+#else
+                exynos_ion_sync_fd(m_ionClient, previewBuf.fd[plane]);
+#endif
         }
     }
 
 done:
-    if (previewCallbackHeap != NULL) {
-        previewCallbackHeap->release(previewCallbackHeap);
-    }
 
     return statusRet;
 }
@@ -12483,10 +15122,8 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
     int retryIsp = 0;
     ExynosCameraFrameSP_sptr_t bayerFrame = NULL;
     ExynosCameraFrameSP_sptr_t newFrame = NULL;
-    ExynosCameraFrameEntity *entity = NULL;
+    ExynosCameraFrameSelector::result_t result;
     camera2_shot_ext *shot_ext = NULL;
-    camera2_stream *shot_stream = NULL;
-    uint32_t bayerFrameCount = 0;
     struct camera2_node_output output_crop_info;
 
     ExynosCameraBufferManager *bufferMgr = NULL;
@@ -12501,19 +15138,23 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
 #ifdef SUPPORT_DEPTH_MAP
     ExynosCameraBuffer depthMapBuffer;
 #endif
-    bool reprocessingSuccess = false;
-    camera2_shot_ext *updateDmShot = new struct camera2_shot_ext;
-    if (updateDmShot == NULL) {
-        CLOGE("alloc updateDmShot failed");
-        goto CLEAN_FRAME;
-    }
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+    ExynosRect mainRoiRect, subRoiRect;
+    int zoomLevel = 0;
+#endif
 
+    camera2_shot_ext *updateDmShot = new struct camera2_shot_ext;
     memset(updateDmShot, 0x0, sizeof(struct camera2_shot_ext));
 
     bayerBuffer.index = -2;
     ispReprocessingBuffer.index = -2;
 #ifdef SUPPORT_DEPTH_MAP
     depthMapBuffer.index = -2;
+#endif
+
+#ifdef USE_DUAL_CAMERA
+    int masterCameraId, slaveCameraId;
+    getDualCameraId(&masterCameraId, &slaveCameraId);
 #endif
 
     /*
@@ -12526,6 +15167,31 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
             prePictureDonePipeId = PIPE_ISP_REPROCESSING;
     } else {
         prePictureDonePipeId = PIPE_ISP_REPROCESSING;
+    }
+
+#ifdef USE_REMOSAIC_CAPTURE
+    m_sensorModeSwitchThread->join();
+
+    m_parameters->setRemosaicCaptureMode(ExynosCamera1Parameters::REMOSAIC_CAPTURE_MODE_NONE);
+    if (m_parameters->getAvailableRemosaicCapture() == true) {
+        prePictureDonePipeId = PIPE_3AA_REPROCESSING;
+
+        //m_parameters->setUsePureBayerReprocessing(true);
+        //m_parameters->updateReprocessingBayerMode();
+
+        m_parameters->setRemosaicCaptureMode(ExynosCamera1Parameters::REMOSAIC_CAPTURE_MODE_PURE_BAYER);
+        m_reprocessingFrameFactory = m_pReprocessingFrameFactories[REPROCESSING_FRAME_FACTORY_PURE_REMOSAIC];
+
+        CLOGD("Run sensorModeSwitchThread");
+        m_sensorModeSwitchThread->run();
+    } else
+#endif
+    {
+        m_reprocessingFrameFactory = m_pReprocessingFrameFactories[REPROCESSING_FRAME_FACTORY_PROCESSED];
+    }
+
+    if (m_reprocessingFrameFactory == NULL) {
+        CLOGE("m_reprocessingFrameFactory is NULL!!!!");
     }
 
     if (m_parameters->getHighResolutionCallbackMode() == true) {
@@ -12554,39 +15220,13 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
     }
 #endif
 
-    /* Check available buffer */
-    ret = m_getBufferManager(prePictureDonePipeId, &bufferMgr, DST_BUFFER_DIRECTION);
-    if (ret != NO_ERROR) {
-        CLOGE("Failed to getBufferManager. pipeId %d direciton %d ret %d",
-                prePictureDonePipeId, DST_BUFFER_DIRECTION, ret);
-        goto CLEAN;
-    }
-
-    if (bufferMgr != NULL) {
-        ret = m_checkBufferAvailable(prePictureDonePipeId, bufferMgr);
-        if (ret != NO_ERROR) {
-            CLOGE("Failed to wait available buffer. pipeId %d ret %d",
-                    prePictureDonePipeId, ret);
-            goto CLEAN;
-        }
-    }
-
-    if (m_parameters->isUseHWFC() == true && m_parameters->getHWFCEnable() == true) {
-        ret = m_checkBufferAvailable(PIPE_HWFC_JPEG_DST_REPROCESSING, m_jpegBufferMgr);
-        if (ret != NO_ERROR) {
-            CLOGE("Failed to wait available JPEG buffer. ret %d",
-                     ret);
-            goto CLEAN;
-        }
-
-        ret = m_checkBufferAvailable(PIPE_HWFC_THUMB_SRC_REPROCESSING, m_thumbnailBufferMgr);
-        if (ret != NO_ERROR) {
-            CLOGE("Failed to wait available THUMB buffer. ret %d",
-                     ret);
-            goto CLEAN;
-        }
-    }
-
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true &&
+                m_cameraId == slaveCameraId &&
+                m_parameters->getDualCameraReprocessingSyncType() == SYNC_TYPE_SYNC) {
+        CLOGD("don't call fast shutter callback!!");
+    } else {
+#endif
     if (m_isZSLCaptureOn
 #ifdef OIS_CAPTURE
         || m_OISCaptureShutterEnabled
@@ -12596,6 +15236,14 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
         m_shutterCallbackThread->join();
         m_shutterCallbackThread->run();
     }
+#ifdef USE_DUAL_CAMERA
+    }
+#endif
+
+#ifdef USE_REMOSAIC_CAPTURE
+    CLOGD("Join sensorModeSwitchThread");
+    m_sensorModeSwitchThread->join();
+#endif
 
     /* Check available buffer */
     ret = m_getBufferManager(prePictureDonePipeId, &bufferMgr, DST_BUFFER_DIRECTION);
@@ -12606,11 +15254,13 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
     }
 
     if (bufferMgr != NULL) {
-        ret = m_checkBufferAvailable(prePictureDonePipeId, bufferMgr);
-        if (ret < 0) {
-            CLOGE("Failed to wait available buffer. pipeId %d ret %d",
-                    prePictureDonePipeId, ret);
-            goto CLEAN;
+        if (m_parameters->getHighResolutionCallbackMode() == false) {
+            ret = m_checkBufferAvailable(prePictureDonePipeId, bufferMgr);
+            if (ret < 0) {
+                CLOGE("Failed to wait available buffer. pipeId %d ret %d",
+                        prePictureDonePipeId, ret);
+                goto CLEAN;
+            }
         }
     }
 
@@ -12631,7 +15281,7 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
     }
 
     /* Get Bayer buffer for reprocessing */
-    ret = m_getBayerBuffer(m_getBayerPipeId(), &bayerBuffer, bayerFrame, updateDmShot
+    result = m_getBayerBuffer(m_getBayerPipeId(), &bayerBuffer, bayerFrame, updateDmShot
 #ifdef SUPPORT_DEPTH_MAP
                             , &depthMapBuffer
 #endif
@@ -12647,27 +15297,47 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
         CLOGE("getHwSensorSize(%d x %d)", width, height);
 
         memset(filePath, 0, sizeof(filePath));
-        snprintf(filePath, sizeof(filePath), "/data/bayer_%d.raw", bayerBuffer.index);
+        snprintf(filePath, sizeof(filePath), "/data/media/0/bayer_%d.raw", bayerBuffer.index);
 
-        dumpToFile((char *)filePath, bayerBuffer.addr[0], width * height * 2);
+        dumpToFile((char *)filePath, bayerBuffer.addr[0], bayerBuffer.size[0]);
     }
 #endif
 
-    if (ret < 0) {
-        CLOGE(" getBayerBuffer fail, ret(%d)", ret);
+    switch (result) {
+    case ExynosCameraFrameSelector::RESULT_NO_FRAME:
+        CLOGE(" getBayerBuffer fail");
         goto CLEAN_FRAME;
+        break;
+    case ExynosCameraFrameSelector::RESULT_SKIP_FRAME:
+        CLOGW("skip selectedFrame");
+        break;
+    case ExynosCameraFrameSelector::RESULT_HAS_FRAME:
+        if (bayerBuffer.index == -2) {
+            CLOGE(" getBayerBuffer fail. buffer index is -2");
+            goto CLEAN_FRAME;
+        }
+        break;
+    default:
+        CLOG_ASSERT("invalid select result!! result:%d", result);
+        break;
     }
 
-    if (bayerBuffer.index == -2) {
-        CLOGE(" getBayerBuffer fail. buffer index is -2");
-        goto CLEAN_FRAME;
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        if (bayerFrame == NULL || result == ExynosCameraFrameSelector::RESULT_SKIP_FRAME) {
+            CLOGW("skip takePicture in this camera for dual");
+            m_captureLock.lock();
+            m_pictureEnabled = false;
+            m_captureLock.unlock();
+            m_reprocessingCounter.clearCount();
+            m_pictureCounter.clearCount();
+            m_jpegCounter.clearCount();
+            m_yuvcallbackCounter.clearCount();
+            m_terminatePictureThreads(false);
+            goto CLEAN_FRAME;
+        }
     }
-
-    if (m_parameters->getCaptureExposureTime() != 0
-        && m_stopLongExposure == true) {
-        CLOGD(" Emergency stop");
-        goto CLEAN_FRAME;
-    }
+#endif
 
 #ifdef SAMSUNG_LBP
     if (m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_NONE && m_isLBPon == true) {
@@ -12684,6 +15354,46 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
     }
 #endif
 
+#ifdef USE_DUAL_CAMERA
+    /* takePicture will be running in only master for burst mode / flash */
+    if (m_cameraId == masterCameraId &&
+            m_parameters->getDualCameraReprocessingSyncType() == SYNC_TYPE_SYNC &&
+            ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST) ||
+             (m_parameters->getFlashMode() == FLASH_MODE_ON) ||
+             (m_exynosCameraActivityControl->getFlashMgr()->getNeedCaptureFlash() == true &&
+                     m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_NONE)
+#ifdef SAMSUNG_DUAL_SOLUTION
+                || (m_parameters->getForceWide() == true)
+                || (m_parameters->getFusionCaptureMode(m_cameraId, false) == false)
+#endif
+    )) {
+        bayerFrame->setReprocessingSyncType(SYNC_TYPE_BYPASS);
+    } else {
+        bayerFrame->setReprocessingSyncType(m_parameters->getDualCameraReprocessingSyncType());
+    }
+
+    CLOGD("bayer frame(fcount:%d, sync:%d, reprocessingSync:%d), currentSync(%d/%d)",
+            bayerFrame->getFrameCount(),
+            bayerFrame->getSyncType(),
+            bayerFrame->getReprocessingSyncType(),
+            m_parameters->getDualCameraSyncType(),
+            m_parameters->getDualCameraReprocessingSyncType());
+
+    if (m_parameters->getDualCameraMode() == true &&
+            bayerFrame->getReprocessingSyncType() == SYNC_TYPE_SYNC) {
+        CLOGD("this frame is sync frame(%d)", bayerFrame->getFrameCount());
+        if (m_parameters->isReprocessing() == true) {
+            m_reprocessingFrameFactory->setRequest(PIPE_MCSC1_REPROCESSING, true);
+            m_reprocessingFrameFactory->setRequest(PIPE_MCSC3_REPROCESSING, false);
+            m_reprocessingFrameFactory->setRequest(PIPE_MCSC4_REPROCESSING, false);
+            if (m_parameters->isUseHWFC()) {
+                m_reprocessingFrameFactory->setRequest(PIPE_HWFC_JPEG_DST_REPROCESSING, false);
+                m_reprocessingFrameFactory->setRequest(PIPE_HWFC_THUMB_DST_REPROCESSING, false);
+                CLOGD("disable hwFC request");
+            }
+        }
+    } else {
+#endif
 #ifdef LLS_STUNR
     if (m_parameters->getLLSStunrMode() && m_reprocessingCounter.getCount() > 1) {
         m_reprocessingFrameFactory->setRequest(PIPE_MCSC1_REPROCESSING, false);
@@ -12695,6 +15405,19 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
     } else
 #endif
     {
+#ifdef USE_ODC_CAPTURE
+    if (m_parameters->getODCCaptureEnable()) {
+        m_reprocessingFrameFactory->setRequest(PIPE_MCSC1_REPROCESSING, false);
+        m_reprocessingFrameFactory->setRequest(PIPE_MCSC3_REPROCESSING, true);
+        m_reprocessingFrameFactory->setRequest(PIPE_MCSC4_REPROCESSING, false);
+        m_reprocessingFrameFactory->setRequest(PIPE_HWFC_JPEG_SRC_REPROCESSING, false);
+        m_reprocessingFrameFactory->setRequest(PIPE_HWFC_THUMB_SRC_REPROCESSING, false);
+        m_reprocessingFrameFactory->setRequest(PIPE_HWFC_JPEG_DST_REPROCESSING, false);
+        m_reprocessingFrameFactory->setRequest(PIPE_HWFC_THUMB_DST_REPROCESSING, false);
+
+        CLOGD("ODC capture: HWFC enable but, JPEG disable");
+    } else {
+#endif
     if (m_parameters->getOutPutFormatNV21Enable()) {
        if ((m_parameters->getSeriesShotCount() == m_reprocessingCounter.getCount() && m_parameters->getSeriesShotMode() > 0)
 #ifdef SAMSUNG_LLS_DEBLUR
@@ -12703,8 +15426,11 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
 #ifdef SAMSUNG_LENS_DC
             || m_parameters->getLensDCEnable()
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+            || m_parameters->getSTRCaptureEnable()
+#endif
             || m_parameters->getHighResolutionCallbackMode()
-            || m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21
+            || m_nv21CaptureEnabled
         ) {
             if (m_parameters->isReprocessing() == true) {
                 m_reprocessingFrameFactory->setRequest(PIPE_MCSC1_REPROCESSING, true);
@@ -12721,36 +15447,28 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
         if((m_parameters->getSeriesShotCount() == m_reprocessingCounter.getCount() && m_parameters->getSeriesShotMode() > 0)
             || (m_parameters->getSeriesShotCount() == 0)) {
             if (m_parameters->isReprocessing() == true) {
-                m_reprocessingFrameFactory->setRequest(PIPE_MCSC3_REPROCESSING, true);
-                m_reprocessingFrameFactory->setRequest(PIPE_MCSC4_REPROCESSING, true);
-                if (m_parameters->isUseHWFC()) {
-#ifdef USE_ODC_CAPTURE
-                    if (m_parameters->getODCCaptureEnable()) {
-                        m_reprocessingFrameFactory->setRequest(PIPE_HWFC_JPEG_SRC_REPROCESSING, false);
-                        m_reprocessingFrameFactory->setRequest(PIPE_HWFC_THUMB_SRC_REPROCESSING, false);
-                        CLOGD("disable JPEG request");
-
-                    } else
-#endif
-                    {
+                    m_reprocessingFrameFactory->setRequest(PIPE_MCSC3_REPROCESSING, true);
+                    m_reprocessingFrameFactory->setRequest(PIPE_MCSC4_REPROCESSING, true);
+                    if (m_parameters->isUseHWFC()) {
+                        m_reprocessingFrameFactory->setRequest(PIPE_HWFC_JPEG_SRC_REPROCESSING, true);
+                        m_reprocessingFrameFactory->setRequest(PIPE_HWFC_THUMB_SRC_REPROCESSING, true);
                         m_reprocessingFrameFactory->setRequest(PIPE_HWFC_JPEG_DST_REPROCESSING, true);
                         m_reprocessingFrameFactory->setRequest(PIPE_HWFC_THUMB_DST_REPROCESSING, true);
                         CLOGD("enable hwFC request");
                     }
-                }
 
-                if (m_parameters->getIsThumbnailCallbackOn()
+                    if (m_parameters->getIsThumbnailCallbackOn()
 #ifdef SAMSUNG_MAGICSHOT
-                    || m_parameters->getShotMode() == SHOT_MODE_MAGIC
+                        || m_parameters->getShotMode() == SHOT_MODE_MAGIC
 #endif
 #ifdef SAMSUNG_BD
-                    || m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST
+                        || m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST
 #endif
-                ) {
-                    m_reprocessingFrameFactory->setRequest(PIPE_MCSC1_REPROCESSING, true);
-                } else {
-                    m_reprocessingFrameFactory->setRequest(PIPE_MCSC1_REPROCESSING, false);
-                }
+                    ) {
+                        m_reprocessingFrameFactory->setRequest(PIPE_MCSC1_REPROCESSING, true);
+                    } else {
+                        m_reprocessingFrameFactory->setRequest(PIPE_MCSC1_REPROCESSING, false);
+                    }
                 }
         } else {
             if (m_parameters->getSeriesShotCount() == m_reprocessingCounter.getCount()) {
@@ -12767,7 +15485,13 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
             }
         }
     }
+#ifdef USE_ODC_CAPTURE
     }
+#endif
+    }
+#ifdef USE_DUAL_CAMERA
+    } /* USE_DUAL_CAMERA */
+#endif
 
     CLOGD("bayerBuffer index %d", bayerBuffer.index);
 
@@ -12788,9 +15512,18 @@ bool ExynosCamera::m_reprocessingPrePictureInternal(void)
             && m_reprocessingCounter.getCount() > 1)
 #endif
     ) {
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true &&
+                m_cameraId == slaveCameraId &&
+                m_parameters->getDualCameraReprocessingSyncType() == SYNC_TYPE_SYNC) {
+            CLOGD("don't call fast shutter callback!!");
+        } else {
+#endif
         m_shutterCallbackThread->join();
         m_shutterCallbackThread->run();
-
+#ifdef USE_DUAL_CAMERA
+        }
+#endif
 #ifdef BURST_CAPTURE
         if (m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_BURST)
             m_burstShutterLocation = BURST_SHUTTER_PREPICTURE_DONE;
@@ -12828,41 +15561,69 @@ if ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
         goto CLEAN_FRAME;
     }
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-    if (m_parameters->getDualCameraMode() == true &&
-            newFrame->getFrameType() == FRAME_TYPE_INTERNAL) {
-        CLOGI("it's internal frame(reprocessing:%d, bayer:%d)",
-                newFrame->getFrameCount(),
-                bayerFrame->getFrameCount());
-
-        ret = m_insertFrameToList(&m_postProcessList, newFrame, &m_postProcessListLock);
-        if (ret != NO_ERROR) {
-            CLOGE("[F%d]Failed to insert frame into m_postProcessList",
-                    newFrame->getFrameCount());
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        if (result == ExynosCameraFrameSelector::RESULT_SKIP_FRAME) {
+            newFrame->setFrameType(FRAME_TYPE_INTERNAL);
+            newFrame->setFrameState(FRAME_STATE_SKIPPED);
         }
 
-        ret = m_reprocessingFrameFactory->startInitialThreads();
+        ret = m_reprocessingFrameFactory->startThread(PIPE_SYNC_REPROCESSING);
         if (ret < 0) {
-            CLOGE("startInitialThreads fail");
+            CLOGE("startThread(PIPE_SYNC_REPROCESSING fail");
         }
 
-        m_dstSccReprocessingQ->pushProcessQ(&newFrame);
-        reprocessingSuccess = true;
+        if (newFrame->getFrameType() == FRAME_TYPE_INTERNAL) {
+            CLOGI("it's internal frame(frameSelResult:%d, reprocessing:%d, bayer:%d)",
+                    result,
+                    newFrame->getFrameCount(),
+                    (bayerFrame != NULL) ? bayerFrame->getFrameCount() : -1);
 
-        goto reprocessing_internal_frame;
-    }
+            ret = m_insertFrameToList(&m_postProcessList, newFrame, &m_postProcessListLock);
+            if (ret != NO_ERROR) {
+                CLOGE("[F%d]Failed to insert frame into m_postProcessList",
+                        newFrame->getFrameCount());
+            }
+
+            m_dstSccReprocessingQ->pushProcessQ(&newFrame);
+
+            m_reprocessingCounter.decCount();
+
+            CLOGI("reprocessing complete, remaining count(%d)",
+                    m_reprocessingCounter.getCount());
+
+            goto reprocessing_internal_frame;
+        }
+     }
 #endif
 
 #ifndef RAWDUMP_CAPTURE
 #ifdef DEBUG_RAWDUMP
-    if (m_parameters->checkBayerDumpEnable() && (m_parameters->getUsePureBayerReprocessing() == true)) {
+    if (m_parameters->checkBayerDumpEnable() && bayerFrame->getRequest(PIPE_VC0) == true) {
         int sensorMaxW, sensorMaxH;
         int sensorMarginW, sensorMarginH;
         bool bRet;
         char filePath[70];
+        time_t rawtime;
+        struct tm* timeinfo;
+        ExynosCameraBuffer pureBayerBuffer;
+
+        if (m_parameters->getUsePureBayerReprocessing() == false) {
+            ret = bayerFrame->getDstBuffer(m_getBayerPipeId(), &pureBayerBuffer, m_previewFrameFactory->getNodeType(PIPE_VC0));
+            if (ret < 0) {
+                CLOGE(" getDstBuffer(pipeId(%d) dstPos(%d)) fail, ret(%d)", m_getBayerPipeId() , m_previewFrameFactory->getNodeType(PIPE_VC0), ret);
+                goto CLEAN;
+            }
+        } else {
+            pureBayerBuffer = bayerBuffer;
+        }
 
         memset(filePath, 0, sizeof(filePath));
-        snprintf(filePath, sizeof(filePath), "/data/media/0/RawCapture%d_%d.raw",m_cameraId, m_fliteFrameCount);
+        time(&rawtime);
+        timeinfo = localtime(&rawtime);
+        snprintf(filePath, sizeof(filePath), "/data/media/0/Raw%d_%d_%02d%02d%02d_%02d%02d%02d.raw",
+            m_cameraId, bayerFrame->getFrameCount(), timeinfo->tm_year+1900, timeinfo->tm_mon+1, timeinfo->tm_mday,
+            timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
         if (m_parameters->getUsePureBayerReprocessing() == true) {
             /* Pure Bayer Buffer Size == MaxPictureSize + Sensor Margin == Max Sensor Size */
             m_parameters->getMaxSensorSize(&sensorMaxW, &sensorMaxH);
@@ -12870,13 +15631,17 @@ if ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
             m_parameters->getMaxPictureSize(&sensorMaxW, &sensorMaxH);
         }
 
-        CLOGE(" Sensor (%d x %d)", sensorMaxW, sensorMaxH);
+        CLOGD("[RAWDUMP] Dump Sensor (%d x %d) : %s", sensorMaxW, sensorMaxH, filePath);
 
         bRet = dumpToFile((char *)filePath,
-            bayerBuffer.addr[0],
-            sensorMaxW * sensorMaxH * 2);
+                pureBayerBuffer.addr[0],
+                sensorMaxW * sensorMaxH * 2);
         if (bRet != true)
             CLOGE("couldn't make a raw file");
+
+        /* release buffer after dump */
+        if (m_parameters->getUsePureBayerReprocessing() == false)
+            m_putBuffers(m_fliteBufferMgr, pureBayerBuffer.index);
     }
 #endif /* DEBUG_RAWDUMP */
 #endif
@@ -12935,6 +15700,58 @@ if ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
         m_parameters->getThumbnailSize(&sizeControlInfo.thumbnailSize.w,
                                     &sizeControlInfo.thumbnailSize.h);
 
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+        if (m_parameters->getDualCameraMode()) {
+            m_fusionCaptureWrapper->m_setSyncType(m_parameters->getDualCameraReprocessingSyncType());
+            m_fusionCaptureWrapper->m_setCameraParam((UniPlugin_DCVOZ_CAMERAPARAM_t*)m_parameters->getFusionParam());
+            mainRoiRect.w = output_crop_info.cropRegion[2];
+            mainRoiRect.h = output_crop_info.cropRegion[3];
+            m_parameters->getHwPictureSize(&subRoiRect.w, &subRoiRect.h);
+
+            if (m_parameters->getDualCameraReprocessingSyncType() != SYNC_TYPE_SWITCH && getCameraId() == CAMERA_ID_BACK_1)
+                zoomLevel = bayerFrame->getZoom(OUTPUT_NODE_2);
+            else
+                zoomLevel = bayerFrame->getZoom(OUTPUT_NODE_1);
+            m_fusionCaptureWrapper->m_setCurZoomRatio(getCameraId(), m_parameters->getZoomRatio(getCameraId(), zoomLevel));
+            m_fusionCaptureWrapper->m_setCurViewRatio(getCameraId(), m_parameters->getZoomOrgRatio(zoomLevel));
+            if (m_parameters->isUseNewCropRect()) {
+                 m_fusionCaptureWrapper->m_calRoiRect(getCameraId(), mainRoiRect, subRoiRect);
+            }
+        }
+#endif
+
+#if defined(SAMSUNG_HIFI_LLS) || defined(SR_CAPTURE)
+            bool isLlsSrEnabled = false;
+#ifdef SAMSUNG_HIFI_LLS
+            if (m_parameters->getLDCaptureMode())
+                isLlsSrEnabled = true;
+#endif
+#ifdef SR_CAPTURE
+            if (m_parameters->getSROn())
+                isLlsSrEnabled = true;
+#endif
+            if (isLlsSrEnabled &&
+                 (m_parameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_ALWAYS_ON ||
+                  m_parameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC)
+            ) {
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+            if (m_parameters->isUseNewCropRect()) {
+                ExynosRect DualRect;
+                m_parameters->getDualCropRect(&DualRect);
+                sizeControlInfo.pictureSize.w = ALIGN_UP(DualRect.w, 16);
+                sizeControlInfo.pictureSize.h = ALIGN_UP(DualRect.h, 16);
+                m_sr_cropped_width = sizeControlInfo.pictureSize.w;
+                m_sr_cropped_height = sizeControlInfo.pictureSize.h;
+            } else
+#endif
+            {
+            sizeControlInfo.pictureSize.w = ALIGN_UP(sizeControlInfo.bdsSize.w, 16);
+            sizeControlInfo.pictureSize.h = ALIGN_UP(sizeControlInfo.bdsSize.h, 16);
+            m_sr_cropped_width = sizeControlInfo.pictureSize.w;
+            m_sr_cropped_height = sizeControlInfo.pictureSize.h;
+            }
+        }
+#endif
         updateNodeGroupInfo(PIPE_ISP_REPROCESSING, m_parameters,
                             sizeControlInfo, &node_group_info);
 
@@ -12998,18 +15815,24 @@ if ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
         /* push frame to SCC pipe */
         m_reprocessingFrameFactory->pushFrameToPipe(newFrame, pipe);
     } else {
+#ifdef USE_REMOSAIC_CAPTURE
+        if (m_parameters->getRemosaicCaptureMode() == ExynosCamera1Parameters::REMOSAIC_CAPTURE_MODE_PURE_BAYER)
+            pipe = PIPE_3AA_REPROCESSING;
+        else
+#endif
         if (m_parameters->isReprocessing3aaIspOTF() == false) {
             pipe = PIPE_ISP_REPROCESSING;
 
             m_getBufferManager(pipe, &bufferMgr, DST_BUFFER_DIRECTION);
 
-            ret = m_checkBufferAvailable(pipe, bufferMgr);
-            if (ret < 0) {
-                CLOGE(" Waiting buffer timeout, pipeId(%d), ret(%d)",
-                            pipe, ret);
-                goto CLEAN_FRAME;
+            if (m_parameters->getHighResolutionCallbackMode() == false) {
+                ret = m_checkBufferAvailable(pipe, bufferMgr);
+                if (ret < 0) {
+                    CLOGE(" Waiting buffer timeout, pipeId(%d), ret(%d)",
+                                pipe, ret);
+                    goto CLEAN_FRAME;
+                }
             }
-
         } else {
             pipe = PIPE_3AA_REPROCESSING;
         }
@@ -13033,13 +15856,11 @@ if ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
             {
                 m_reprocessingFrameFactory->setFrameDoneQToPipe(m_dstSccReprocessingQ, pipe);
             }
-
         }
-
     }
 
 #ifdef SAMSUNG_DNG
-    if (m_parameters->getDNGCaptureModeOn() == true) {
+    if (m_parameters->getUsePureBayerReprocessing() == true && m_parameters->getDNGCaptureModeOn() == true) {
         CLOGD("[DNG]Push frame to dngCaptureQ (fcount %d)",
                  getMetaDmRequestFrameCount(updateDmShot));
         m_dngFrameNumber = getMetaDmRequestFrameCount(updateDmShot);
@@ -13070,15 +15891,15 @@ if ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
         } else
 #endif
         {
-        CLOGD(" push frame(%d) to postPictureList",
-            newFrame->getFrameCount());
+            CLOGD(" push frame(%d) to postPictureList",
+                newFrame->getFrameCount());
 
-        ret = m_insertFrameToList(&m_postProcessList, newFrame, &m_postProcessListLock);
-        if (ret != NO_ERROR) {
-            CLOGE("[F%d]Failed to insert frame into m_postProcessList",
-                    newFrame->getFrameCount());
-            goto CLEAN_FRAME;
-        }
+            ret = m_insertFrameToList(&m_postProcessList, newFrame, &m_postProcessListLock);
+            if (ret != NO_ERROR) {
+                CLOGE("[F%d]Failed to insert frame into m_postProcessList",
+                        newFrame->getFrameCount());
+                goto CLEAN_FRAME;
+            }
         }
     }
 
@@ -13241,6 +16062,16 @@ if ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
                     CLOGE("failed to wait for dng bayer copy done, ret(%d), retry(%d)",
                              ret, retry);
                 }
+
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+                /* put pure bayer buffer */
+                ret = m_putBuffers(m_fliteBufferMgr, dngBayerBuffer.index);
+                if (ret < 0) {
+                    CLOGE(" VC0 src putBuffer fail, index(%d), ret(%d)",
+                        dngBayerBuffer.index, ret);
+                    goto CLEAN;
+                }
+#endif
             }
 #endif
             /* put bayer buffer */
@@ -13331,13 +16162,13 @@ if ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
                 && m_parameters->getSeriesShotMode() != SERIES_SHOT_MODE_BURST) {
                 dng_thumbnail_t *dngThumbnailBuf = NULL;
                 unsigned int thumbBufSize = 0;
-                int thumbnailW = 0, thumbnailH = 0;
+                int maxThumbnailW = 0, maxThumbnailH = 0;
                 struct camera2_dm *dm = new struct camera2_dm;
 
-                m_parameters->getThumbnailSize(&thumbnailW, &thumbnailH);
+                m_parameters->getMaxThumbnailSize(&maxThumbnailW, &maxThumbnailH);
                 newFrame->getDynamicMeta(dm);
 
-                dngThumbnailBuf = m_parameters->createDngThumbnailBuffer(thumbnailW * thumbnailH * 2);
+                dngThumbnailBuf = m_parameters->createDngThumbnailBuffer(maxThumbnailW * maxThumbnailH * 2);
                 if (dngThumbnailBuf->buf && yuvBuffer.addr[0]) {
                     memcpy(dngThumbnailBuf->buf, yuvBuffer.addr[0], yuvBuffer.size[0]);
                     dngThumbnailBuf->size = yuvBuffer.size[0];
@@ -13367,8 +16198,10 @@ if ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
             }
         }
 
-        /* it's success */
-        reprocessingSuccess = true;
+        m_reprocessingCounter.decCount();
+
+        CLOGI("reprocessing complete, remaining count(%d)",
+                m_reprocessingCounter.getCount());
 
         if (m_hdrEnabled) {
             ExynosCameraActivitySpecialCapture *m_sCaptureMgr;
@@ -13396,15 +16229,16 @@ if ((m_parameters->getSeriesShotMode() == SERIES_SHOT_MODE_LLS ||
         }
     } while ((ret == TIMED_OUT || isOldFrame == true) && retryIsp < 200 && m_flagThreadStop != true);
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
 reprocessing_internal_frame:
 #endif
-    if (reprocessingSuccess == true) {
-        m_reprocessingCounter.decCount();
 
-        CLOGI("reprocessing complete, remaining count(%d)",
-                m_reprocessingCounter.getCount());
+#ifdef USE_REMOSAIC_CAPTURE
+    if (m_parameters->getSwitchSensor() == true) {
+        CLOGD("Run sensorModeSwitchThread");
+        m_sensorModeSwitchThread->run();
     }
+#endif //USE_REMOSAIC_CAPTURE
 
     if ((m_parameters->getHighResolutionCallbackMode() == true) &&
         (m_highResolutionCallbackRunning == true)) {
@@ -13452,10 +16286,32 @@ CLEAN_FRAME:
         }
 #endif
 
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+        if (m_parameters->getDNGCaptureModeOn() == true) {
+            ret = newFrame->getDstBuffer(bayerPipeId, &bayerBuffer,
+                m_pictureFrameFactory->getNodeType(PIPE_VC0));
+
+            if (bayerBuffer.index != -2 && m_fliteBufferMgr != NULL) {
+                ret = m_putBuffers(m_fliteBufferMgr, bayerBuffer.index);
+                if (ret != NO_ERROR) {
+                    CLOGE("Failed to put DepthMap buffer to bufferMgr");
+                }
+            }
+        }
+#endif
+
         newFrame = NULL;
     }
 
 CLEAN:
+#ifdef USE_REMOSAIC_CAPTURE
+    m_sensorModeSwitchThread->join();
+    if (m_parameters->getSwitchSensor() == true) {
+        CLOGD("Run sensorModeSwitchThread at CLEAN");
+        m_sensorModeSwitchThread->run();
+    }
+#endif
+
     if (newFrame != NULL) {
         bayerBuffer.index = -2;
         ret = m_getBufferManager(bayerPipeId, &bufferMgr, SRC_BUFFER_DIRECTION);
@@ -13467,6 +16323,20 @@ CLEAN:
             CLOGI(" wait m_DNGCaptureThread");
             m_DNGCaptureThread->requestExitAndWait();
         }
+
+#ifdef SAMSUNG_DNG_DIRTY_BAYER
+        if (m_parameters->getDNGCaptureModeOn() == true) {
+            ret = newFrame->getDstBuffer(bayerPipeId, &bayerBuffer,
+                m_pictureFrameFactory->getNodeType(PIPE_VC0));
+
+            if (bayerBuffer.index != -2 && m_fliteBufferMgr != NULL) {
+                ret = m_putBuffers(m_fliteBufferMgr, bayerBuffer.index);
+                if (ret != NO_ERROR) {
+                    CLOGE("Failed to put DepthMap buffer to bufferMgr");
+                }
+            }
+        }
+#endif
 #endif
         if (bufferMgr != NULL) {
             ret = newFrame->getSrcBuffer(bayerPipeId, &bayerBuffer);
@@ -13575,9 +16445,8 @@ bool ExynosCamera::m_pictureThreadFunc(void)
 
     int ret = 0;
     int loop = false;
-    int bufIndex = -2;
     int retryCountGSC = 4;
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     int masterCameraId, slaveCameraId;
     int retryCountSync = 4;
     int retryCountFusion = 4;
@@ -13590,8 +16459,6 @@ bool ExynosCamera::m_pictureThreadFunc(void)
     struct camera2_stream *shot_stream = NULL;
     ExynosRect srcRect, dstRect;
     int pictureW = 0, pictureH = 0, pictureFormat = 0;
-    int hwPictureW = 0, hwPictureH = 0, hwPictureFormat = 0;
-    int buffer_idx = m_getShotBufferIdex();
     float zoomRatio = m_parameters->getZoomRatio(0) / 1000;
 
     sccReprocessingBuffer.index = -2;
@@ -13600,31 +16467,6 @@ bool ExynosCamera::m_pictureThreadFunc(void)
     int pipeId_gsc = 0;
     int bayerPipeId = 0;
     bool isSrc = false;
-
-    if (m_parameters->isReprocessing() == true) {
-        if (m_parameters->isReprocessing3aaIspOTF() == false)
-            pipeId_scc = (m_parameters->isOwnScc(getCameraIdInternal()) == true) ? PIPE_SCC_REPROCESSING : PIPE_ISP_REPROCESSING;
-        else
-            pipeId_scc = PIPE_3AA_REPROCESSING;
-
-        pipeId_gsc = PIPE_GSC_REPROCESSING;
-        isSrc = true;
-    } else {
-        switch (getCameraIdInternal()) {
-            case CAMERA_ID_FRONT:
-                if (m_parameters->getDualMode() == true) {
-                    pipeId_scc = PIPE_3AA;
-                } else {
-                    pipeId_scc = (m_parameters->isOwnScc(getCameraIdInternal()) == true) ? PIPE_SCC : PIPE_ISPC;
-                }
-                pipeId_gsc = PIPE_GSC_PICTURE;
-                break;
-            default:
-                CLOGE("Current picture mode is not yet supported, CameraId(%d), reprocessing(%d)",
-                    getCameraIdInternal(), m_parameters->isReprocessing());
-                break;
-        }
-    }
 
     /* wait SCC */
     CLOGI("wait SCC output");
@@ -13678,6 +16520,31 @@ bool ExynosCamera::m_pictureThreadFunc(void)
         newFrame->setMetaDataEnable(true);
     }
 
+    if (m_parameters->isReprocessing() == true) {
+        if (m_parameters->isReprocessing3aaIspOTF() == false)
+            pipeId_scc = (m_parameters->isOwnScc(getCameraIdInternal()) == true) ? PIPE_SCC_REPROCESSING : PIPE_ISP_REPROCESSING;
+        else
+            pipeId_scc = PIPE_3AA_REPROCESSING;
+
+        pipeId_gsc = PIPE_GSC_REPROCESSING;
+        isSrc = true;
+    } else {
+        switch (getCameraIdInternal()) {
+            case CAMERA_ID_FRONT:
+                if (m_parameters->getDualMode() == true) {
+                    pipeId_scc = PIPE_3AA;
+                } else {
+                    pipeId_scc = (m_parameters->isOwnScc(getCameraIdInternal()) == true) ? PIPE_SCC : PIPE_ISPC;
+                }
+                pipeId_gsc = PIPE_GSC_PICTURE;
+                break;
+            default:
+                CLOGE("Current picture mode is not yet supported, CameraId(%d), reprocessing(%d)",
+                    getCameraIdInternal(), m_parameters->isReprocessing());
+                break;
+        }
+    }
+
     /*
      * When Non-reprocessing scenario does not setEntityState,
      * because Non-reprocessing scenario share preview and capture frames
@@ -13691,6 +16558,158 @@ bool ExynosCamera::m_pictureThreadFunc(void)
     }
 
     CLOGI("SCC output done, frame Count(%d)", newFrame->getFrameCount());
+
+#ifdef USE_DUAL_CAMERA
+    /* in case of sync mode, do processing sync->fusion */
+    if (m_parameters->getDualCameraMode() == true &&
+        newFrame->getSyncType() == SYNC_TYPE_SYNC) {
+        int picturePipeId = PIPE_MCSC3_REPROCESSING;
+        getDualCameraId(&masterCameraId, &slaveCameraId);
+
+        /* define picture buffer pipeID (mcsc1 or mcsc3) */
+        if (newFrame->getRequest(PIPE_MCSC3_REPROCESSING) == true) {
+            picturePipeId = PIPE_MCSC3_REPROCESSING;
+        } else if (newFrame->getRequest(PIPE_MCSC1_REPROCESSING) == true) {
+            picturePipeId = PIPE_MCSC1_REPROCESSING;
+        } else {
+            CLOGE("invalid frame(%d) request!!", newFrame->getFrameCount());
+            goto CLEAN;
+        }
+
+        CLOGI("frame(%d), pipe(%d), nodeIndex(%d) request!!", newFrame->getFrameCount(),
+                picturePipeId, m_reprocessingFrameFactory->getNodeType(picturePipeId));
+
+        /* 1. push the frame to sync pipe [prepareReprocessingBeforeSyncPipe] */
+        ret = m_prepareBeforeSync(pipeId_scc, PIPE_SYNC_REPROCESSING, newFrame,
+                m_reprocessingFrameFactory->getNodeType(picturePipeId),
+                m_reprocessingFrameFactory, m_syncReprocessingQ, true);
+        if (ret != NO_ERROR) {
+            CLOGE("m_prepareBeforeSync(pipeId(%d/%d), frameCount(%d), dstPos(%d), isReprocessing(%d) fail",
+                    pipeId_scc, PIPE_SYNC_REPROCESSING, newFrame->getFrameCount(),
+                    m_reprocessingFrameFactory->getNodeType(picturePipeId), true);
+            goto CLEAN;
+        }
+
+        /* 2. in slave camera, all job for reprocesing is complete */
+        if (m_cameraId == slaveCameraId) {
+            m_captureLock.lock();
+            m_pictureEnabled = false;
+            m_captureLock.unlock();
+
+            m_yuvcallbackCounter.decCount();
+            m_pictureCounter.decCount();
+            m_jpegCounter.decCount();
+            CLOGD(" Picture frame delete(%d)", newFrame->getFrameCount());
+
+            newFrame->frameUnlock();
+
+            ret = m_removeFrameFromList(&m_postProcessList, newFrame, &m_postProcessListLock);
+            if (ret != NO_ERROR) {
+                CLOGE("Failed to removeFrameFromList. framecount %d ret %d",
+                        newFrame->getFrameCount(), ret);
+            }
+
+            newFrame = NULL;
+            goto CLEAN;
+        } else if (m_cameraId == masterCameraId &&
+                newFrame->getFrameType() == FRAME_TYPE_INTERNAL) {
+            newFrame->frameUnlock();
+
+            ret = m_removeFrameFromList(&m_postProcessList, newFrame, &m_postProcessListLock);
+            if (ret < 0) {
+                CLOGE("remove frame from processList fail, ret(%d)", ret);
+            }
+        }
+
+        /* 3. in master camera, wait for sync Frame */
+        CLOGI("wait Sync output");
+        while (retryCountSync > 0) {
+            retryCountSync--;
+
+            ret = m_syncReprocessingQ->waitAndPopProcessQ(&newFrame);
+            if (ret == TIMED_OUT) {
+                CLOGW("m_syncReprocessingQ(frame(%d)) wait and pop timeout, ret(%d)",
+                        newFrame->getFrameCount(), ret);
+                m_reprocessingFrameFactory->startThread(PIPE_SYNC_REPROCESSING);
+                if (retryCountSync <= 0) {
+                    CLOGE("m_syncReprocessingQ(frame(%d)) retry count was over, ret(%d)",
+                            newFrame->getFrameCount(), ret);
+                    goto CLEAN;
+                }
+            } else if (ret < 0) {
+                CLOGE("m_syncReprocessingQ(frame(%d)) wait and pop fail, ret(%d)",
+                        newFrame->getFrameCount(), ret);
+                /* TODO: doing exception handling */
+                goto CLEAN;
+            } else if (newFrame != NULL &&
+                    m_cameraId == masterCameraId &&
+                    newFrame->getCameraId() == masterCameraId &&
+                    newFrame->getFrameState() == FRAME_STATE_SKIPPED) {
+                newFrame->frameUnlock();
+
+                ret = m_removeFrameFromList(&m_postProcessList, newFrame, &m_postProcessListLock);
+                if (ret < 0) {
+                    CLOGE("remove frame from processList fail, ret(%d)", ret);
+                }
+
+                continue;
+            } else {
+                break;
+            }
+        }
+
+        if (newFrame == NULL) {
+            CLOGE("newFrame is NULL");
+            goto CLEAN;
+        }
+
+        /* 3. prepare the frame for fusion */
+        ret = m_prepareAfterSync(PIPE_SYNC_REPROCESSING, PIPE_FUSION_REPROCESSING, newFrame,
+                m_reprocessingFrameFactory->getNodeType(picturePipeId),
+                m_reprocessingFrameFactory, m_fusionReprocessingQ, true);
+        if (ret != NO_ERROR) {
+            CLOGE("m_prepareAfterSync(pipeId(%d/%d), frameCount(%d), isReprocessing(%d) fail",
+                    PIPE_SYNC_REPROCESSING, PIPE_FUSION_REPROCESSING, newFrame->getFrameCount(), true);
+            goto CLEAN;
+        }
+
+        if (newFrame->getSyncType() == SYNC_TYPE_SYNC) {
+            /* 4. in master camera, wait for fusion Frame */
+            CLOGI("wait Fusion output");
+            while (retryCountFusion > 0) {
+                retryCountFusion--;
+
+                ret = m_fusionReprocessingQ->waitAndPopProcessQ(&newFrame);
+                if (ret == TIMED_OUT) {
+                    CLOGW("m_fusionReprocessingQ(frame(%d)) wait and pop timeout, retry(%d), ret(%d)",
+                            newFrame->getFrameCount(), retryCountFusion, ret);
+                    m_reprocessingFrameFactory->startThread(PIPE_FUSION_REPROCESSING);
+                    if (retryCountFusion <= 0) {
+                        CLOGE("m_fusionReprocessingQ(frame(%d)) retry count was over, ret(%d)",
+                                newFrame->getFrameCount(), ret);
+                        goto CLEAN;
+                    }
+                } else if (ret < 0) {
+                    CLOGE("m_fusionReprocessingQ(frame(%d)) wait and pop fail, ret(%d)",
+                            newFrame->getFrameCount(), ret);
+                    /* TODO: doing exception handling */
+                    goto CLEAN;
+                } else {
+                    break;
+                }
+            }
+
+            /* 5. release source buffer and move the buffer to original dst position */
+            ret = m_prepareAfterFusion(PIPE_FUSION_REPROCESSING, newFrame,
+                    m_reprocessingFrameFactory->getNodeType(picturePipeId), true);
+            if (ret != NO_ERROR) {
+                CLOGE("m_prepareAfterFusion(pipeId(%d), frameCount(%d), isReprocessing(%d) fail",
+                        PIPE_FUSION_REPROCESSING, newFrame->getFrameCount(), true);
+                goto CLEAN;
+            }
+        }
+    }
+#endif
 
 #ifdef USE_ODC_CAPTURE
     if (m_parameters->getODCCaptureEnable()) {
@@ -13783,121 +16802,6 @@ bool ExynosCamera::m_pictureThreadFunc(void)
 
     delete dm;
     delete udm;
-#endif
-
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-    if (m_parameters->getDualCameraMode() == true) {
-        getDualCameraId(&masterCameraId, &slaveCameraId);
-
-        /* 1. push the frame to sync pipe [prepareReprocessingBeforeSyncPipe] */
-        ret = m_prepareBeforeSync(pipeId_scc, PIPE_SYNC_REPROCESSING, newFrame,
-                m_reprocessingFrameFactory->getNodeType(PIPE_MCSC3_REPROCESSING),
-                m_reprocessingFrameFactory, m_syncReprocessingQ, true);
-        if (ret != NO_ERROR) {
-            CLOGE("m_prepareBeforeSync(pipeId(%d/%d), frameCount(%d), dstPos(%d), isReprocessing(%d) fail",
-                    pipeId_scc, PIPE_SYNC_REPROCESSING, newFrame->getFrameCount(),
-                    m_reprocessingFrameFactory->getNodeType(PIPE_MCSC3_REPROCESSING), true);
-            goto CLEAN;
-        }
-
-        /* 2. in slave camera, all job for reprocesing is complete */
-        if (m_cameraId == slaveCameraId) {
-            m_captureLock.lock();
-            m_pictureEnabled = false;
-            m_captureLock.unlock();
-
-            m_pictureCounter.decCount();
-            m_jpegCounter.decCount();
-            CLOGD(" Picture frame delete(%d)", newFrame->getFrameCount());
-
-            newFrame->frameUnlock();
-
-            ret = m_removeFrameFromList(&m_postProcessList, newFrame, &m_postProcessListLock);
-            if (ret != NO_ERROR) {
-                CLOGE("Failed to removeFrameFromList. framecount %d ret %d",
-                        newFrame->getFrameCount(), ret);
-            }
-
-            newFrame = NULL;
-            goto CLEAN;
-        }
-
-        /* 3. in master camera, wait for sync Frame */
-        CLOGI("wait Sync output");
-        while (retryCountSync > 0) {
-            retryCountSync--;
-
-            ret = m_syncReprocessingQ->waitAndPopProcessQ(&newFrame);
-            if (ret == TIMED_OUT) {
-                CLOGW("m_syncReprocessingQ(frame(%d)) wait and pop timeout, ret(%d)",
-                        newFrame->getFrameCount(), ret);
-                m_reprocessingFrameFactory->startThread(PIPE_SYNC_REPROCESSING);
-                if (retryCountSync <= 0) {
-                    CLOGE("m_syncReprocessingQ(frame(%d)) retry count was over, ret(%d)",
-                            newFrame->getFrameCount(), ret);
-                    goto CLEAN;
-                }
-            } else if (ret < 0) {
-                CLOGE("m_syncReprocessingQ(frame(%d)) wait and pop fail, ret(%d)",
-                        newFrame->getFrameCount(), ret);
-                /* TODO: doing exception handling */
-                goto CLEAN;
-            } else {
-                break;
-            }
-        }
-
-        if (newFrame == NULL) {
-            CLOGE("newFrame is NULL");
-            goto CLEAN;
-        }
-
-        /* 3. prepare the frame for fusion */
-        ret = m_prepareAfterSync(PIPE_SYNC_REPROCESSING, PIPE_FUSION_REPROCESSING, newFrame,
-                m_reprocessingFrameFactory->getNodeType(PIPE_MCSC3_REPROCESSING),
-                m_reprocessingFrameFactory, m_fusionReprocessingQ, true);
-        if (ret != NO_ERROR) {
-            CLOGE("m_prepareAfterSync(pipeId(%d/%d), frameCount(%d), isReprocessing(%d) fail",
-                    PIPE_SYNC_REPROCESSING, PIPE_FUSION_REPROCESSING, newFrame->getFrameCount(), true);
-            goto CLEAN;
-        }
-
-        if (newFrame->getSyncType() == SYNC_TYPE_SYNC) {
-            /* 4. in master camera, wait for fusion Frame */
-            CLOGI("wait Fusion output");
-            while (retryCountFusion > 0) {
-                retryCountFusion--;
-
-                ret = m_fusionReprocessingQ->waitAndPopProcessQ(&newFrame);
-                if (ret == TIMED_OUT) {
-                    CLOGW("m_fusionReprocessingQ(frame(%d)) wait and pop timeout, ret(%d)",
-                            newFrame->getFrameCount(), ret);
-                    m_reprocessingFrameFactory->startThread(PIPE_FUSION_REPROCESSING);
-                    if (retryCountFusion <= 0) {
-                        CLOGE("m_fusionReprocessingQ(frame(%d)) retry count was over, ret(%d)",
-                                newFrame->getFrameCount(), ret);
-                        goto CLEAN;
-                    }
-                } else if (ret < 0) {
-                    CLOGE("m_fusionReprocessingQ(frame(%d)) wait and pop fail, ret(%d)",
-                            newFrame->getFrameCount(), ret);
-                    /* TODO: doing exception handling */
-                    goto CLEAN;
-                } else {
-                    break;
-                }
-            }
-
-            /* 5. release source buffer and move the buffer to original dst position */
-            ret = m_prepareAfterFusion(PIPE_FUSION_REPROCESSING, newFrame,
-                    m_reprocessingFrameFactory->getNodeType(PIPE_MCSC3_REPROCESSING), true);
-            if (ret != NO_ERROR) {
-                CLOGE("m_prepareAfterFusion(pipeId(%d), frameCount(%d), isReprocessing(%d) fail",
-                        PIPE_FUSION_REPROCESSING, newFrame->getFrameCount(), true);
-                goto CLEAN;
-            }
-        }
-    }
 #endif
 
     if (m_parameters->getIsThumbnailCallbackOn()) {
@@ -14026,9 +16930,8 @@ bool ExynosCamera::m_pictureThreadFunc(void)
         } else {
             pictureFormat = JPEG_INPUT_COLOR_FMT;
         }
-
-#ifdef SR_CAPTURE
-        if(m_parameters->getSROn() &&
+#if defined(SR_CAPTURE)
+        if (m_parameters->getSROn() &&
             (m_parameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_ALWAYS_ON ||
             m_parameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC)) {
             dstRect.x = 0;
@@ -14140,7 +17043,7 @@ bool ExynosCamera::m_pictureThreadFunc(void)
                 m_sr_cropped_width = pictureW;
                 m_sr_cropped_height = pictureH;
             }
-            CLOGD("size (%d, %d)", m_sr_cropped_width, m_sr_cropped_height);
+            CLOGD("[SR] size (%d, %d)", m_sr_cropped_width, m_sr_cropped_height);
         }
 #endif
 
@@ -14155,8 +17058,8 @@ bool ExynosCamera::m_pictureThreadFunc(void)
             goto CLEAN;
         }
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-        if (m_parameters->getDualCameraMode() == true) {
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true && newFrame->getSyncType() == SYNC_TYPE_SYNC) {
             ret = m_putFusionReprocessingBuffers(newFrame, &sccReprocessingBuffer);
             if (ret < 0) {
                 CLOGE("m_putFusionReprocessingBuffer(%d, %d, %d) fail, ret(%d)",
@@ -14173,7 +17076,7 @@ bool ExynosCamera::m_pictureThreadFunc(void)
             /* TODO: doing exception handling */
             goto CLEAN;
         }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         }
 #endif
     }
@@ -14199,7 +17102,9 @@ bool ExynosCamera::m_pictureThreadFunc(void)
     } else {
         if (m_parameters->isReprocessing() == true) {
             CLOGD("Reprocessing ");
-            if (m_parameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC)
+            if (m_parameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_PURE_DYNAMIC)
+                m_previewFrameFactory->setRequest(PIPE_VC0, false);
+            else if (m_parameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC)
                 m_previewFrameFactory->setRequest(PIPE_3AC, false);
         } else {
             if (m_parameters->getUseDynamicScc() == true) {
@@ -14234,8 +17139,8 @@ CLEAN:
     if (sccReprocessingBuffer.index != -2) {
         CLOGD(" putBuffer sccReprocessingBuffer(index:%d) in error state",
                  sccReprocessingBuffer.index);
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-        if (m_parameters->getDualCameraMode() == true) {
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true && newFrame->getSyncType() == SYNC_TYPE_SYNC) {
             ret = m_putFusionReprocessingBuffers(newFrame, &sccReprocessingBuffer);
             if (ret < 0) {
                 CLOGE("m_putFusionReprocessingBuffer(%d, %d, %d) fail, ret(%d)",
@@ -14245,7 +17150,7 @@ CLEAN:
 #endif
         m_getBufferManager(pipeId_scc, &bufferMgr, DST_BUFFER_DIRECTION);
         m_putBuffers(bufferMgr, sccReprocessingBuffer.index);
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         }
 #endif
     }
@@ -14284,9 +17189,6 @@ camera_memory_t *ExynosCamera::m_getJpegCallbackHeap(ExynosCameraBuffer jpegBuf,
                 memcpy(jpegCallbackHeap->data, jpegBuf.addr[0], jpegBuf.size[0]);
         } else {
             char filePath[CAMERA_FILE_PATH_SIZE];
-            int nw, cnt = 0;
-            uint32_t written = 0;
-            camera_memory_t *tempJpegCallbackHeap = NULL;
 
             memset(filePath, 0, sizeof(filePath));
 
@@ -14346,7 +17248,6 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
     int ret = 0;
     int loop = false;
     int bufIndex = -2;
-    int buffer_idx = m_getShotBufferIdex();
     int retryCountJPEG = 4;
 
     ExynosCameraFrameSP_sptr_t newFrame = NULL;
@@ -14365,6 +17266,9 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
 
     int currentSeriesShotMode = 0;
     bool IsThumbnailCallback = false;
+#if 0
+    bool needIonSync = false;
+#endif
 
     exif_attribute_t exifInfo;
     ExynosRect pictureRect;
@@ -14382,17 +17286,14 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
         } else {
             if (m_parameters->isOwnScc(getCameraIdInternal()) == false) {
                 pipeId_gsc = (m_parameters->isReprocessing3aaIspOTF() == true) ? PIPE_3AA_REPROCESSING : PIPE_ISP_REPROCESSING;
+#ifdef USE_REMOSAIC_CAPTURE
+            } else if (m_parameters->getRemosaicCaptureMode() == ExynosCamera1Parameters::REMOSAIC_CAPTURE_MODE_PURE_BAYER) {
+                pipeId_gsc = PIPE_3AA_REPROCESSING;
+#endif
             } else {
                 pipeId_gsc = PIPE_SCC_REPROCESSING;
             }
         }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-        if (m_parameters->getDualCameraMode() == true) {
-            if (pipeId_gsc == PIPE_3AA_REPROCESSING || pipeId_gsc == PIPE_ISP_REPROCESSING) {
-                pipeId_gsc = PIPE_FUSION_REPROCESSING;
-            }
-        }
-#endif
         pipeId_jpeg = PIPE_JPEG_REPROCESSING;
     } else {
         if (m_parameters->needGSCForCapture(getCameraIdInternal()) == true) {
@@ -14421,6 +17322,11 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
         CLOGE("newFrame is NULL");
         goto CLEAN;
     }
+
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true && newFrame->getSyncType() == SYNC_TYPE_SYNC)
+        pipeId_gsc = PIPE_FUSION_REPROCESSING;
+#endif
 
     if (m_jpegCounter.getCount() <= 0) {
         CLOGD(" Picture canceled");
@@ -14481,13 +17387,13 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
         do {
             dstbufferIndex = -2;
             retry++;
-        
+
             if (m_lensDCBufferMgr->getNumOfAvailableBuffer() > 0) {
                 ret = m_lensDCBufferMgr->getBuffer(&dstbufferIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &gscReprocessingBuffer);
                 if (ret != NO_ERROR)
                     CLOGE("getBuffer fail, ret(%d)", ret);
             }
-        
+
             if (dstbufferIndex < 0) {
                 usleep(WAITING_TIME);
                 if (retry % 20 == 0) {
@@ -14516,15 +17422,15 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
         if (m_DCpluginHandle != NULL) {
             UniPluginExtraBufferInfo_t extraData;
             memset(&extraData, 0, sizeof(UniPluginExtraBufferInfo_t));
-            
-            extraData.brightnessValue.num = m_picture_meta_shot->udm.ae.vendorSpecific[5];
+
+            extraData.brightnessValue.snum = (int)m_picture_meta_shot->udm.ae.vendorSpecific[5];
             extraData.brightnessValue.den = 256;
 
             /* short ISO */
             extraData.iso[0] = m_picture_meta_shot->udm.ae.vendorSpecific[391];
             /* Long ISO */
             extraData.iso[1] = m_picture_meta_shot->udm.ae.vendorSpecific[393];
-            
+
             ret = uni_plugin_set(m_DCpluginHandle,
                              LDC_PLUGIN_NAME,
                              UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO,
@@ -14532,7 +17438,7 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
             if (ret < 0) {
                 CLOGE("[DC] DC Plugin set UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO failed!!");
             }
-            
+
             ret = uni_plugin_set(m_DCpluginHandle,
                     LDC_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &pluginData);
             if(ret < 0) {
@@ -14543,7 +17449,7 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
             if (ret < 0) {
                 CLOGE("[DC] LLS Plugin process failed!!");
             }
-            
+
             UTstr debugData;
             debugData.data = new unsigned char[LDC_EXIF_SIZE];
 
@@ -14572,6 +17478,64 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
         }
     } else
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+    if (m_parameters->getSTRCaptureEnable()) {
+        ExynosCameraBuffer srcReprocessingBuffer;
+        ExynosCameraBufferManager *srcBufferMgr = NULL;
+        int dstbufferIndex = -2;
+        int retry = 0;
+
+        pipeId = PIPE_MCSC1_REPROCESSING;
+        bufferMgr = m_strCaptureBufferMgr;
+
+        CLOGI("[STR_CAPTURE]getSTRCaptureEnable(%d)", m_parameters->getSTRCaptureEnable());
+        ret = m_getBufferManager(pipeId, &srcBufferMgr, DST_BUFFER_DIRECTION);
+        if (ret < 0) {
+            CLOGE("[STR_CAPTURE]getBufferManager(SRC) fail, pipeId(%d), ret(%d)",
+                     pipeId, ret);
+            goto CLEAN;
+        }
+
+        ret = newFrame->getDstBuffer(pipeId_gsc, &srcReprocessingBuffer,
+                                        m_reprocessingFrameFactory->getNodeType(pipeId));
+        if (ret < 0) {
+            CLOGE("[STR_CAPTURE]getDstBuffer fail, pipeId(%d), ret(%d)",
+                     pipeId_gsc, ret);
+            goto CLEAN;
+        }
+
+        do {
+            dstbufferIndex = -2;
+            retry++;
+
+            if (m_strCaptureBufferMgr->getNumOfAvailableBuffer() > 0) {
+                ret = m_strCaptureBufferMgr->getBuffer(&dstbufferIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &gscReprocessingBuffer);
+                if (ret != NO_ERROR)
+                    CLOGE("[STR_CAPTURE]getBuffer fail, ret(%d)", ret);
+            }
+
+            if (dstbufferIndex < 0) {
+                usleep(WAITING_TIME);
+                if (retry % 20 == 0) {
+                    CLOGW("[STR_CAPTURE]retry m_strCaptureBuffer getBuffer)");
+                    m_strCaptureBufferMgr->dump();
+                }
+            }
+        } while (dstbufferIndex < 0 && retry < (TOTAL_WAITING_TIME / WAITING_TIME) && m_flagThreadStop != true && m_stopBurstShot == false);
+
+        CLOGD("[STR_CAPTURE]:-- Start Library --");
+        m_processSTRCapture(srcReprocessingBuffer.addr[0], srcReprocessingBuffer.addr[0]);
+        memcpy(gscReprocessingBuffer.addr[0], srcReprocessingBuffer.addr[0], srcReprocessingBuffer.size[0]);
+        CLOGD("[STR_CAPTURE]-- end Library --");
+
+        ret = m_putBuffers(srcBufferMgr, srcReprocessingBuffer.index);
+        if (ret < 0) {
+            CLOGE("[STR_CAPTURE]srcbufferMgr->putBuffers() fail, pipeId(%d), ret(%d)",
+                     pipeId, ret);
+            goto CLEAN;
+        }
+    } else
+#endif
     {
         if (m_parameters->getOutPutFormatNV21Enable()) {
             pipeId = PIPE_MCSC1_REPROCESSING;
@@ -14581,7 +17545,14 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
                          pipeId, ret);
                 goto CLEAN;
             }
-        } else if (m_parameters->isUseHWFC() == false || m_parameters->getHWFCEnable() == false) {
+        }
+#ifdef USE_DUAL_CAMERA
+        else if (m_parameters->getDualCameraMode() == true &&
+                newFrame->getSyncType() == SYNC_TYPE_SYNC) {
+            pipeId = PIPE_MCSC1_REPROCESSING;
+        }
+#endif
+        else if (m_parameters->isUseHWFC() == false || m_parameters->getHWFCEnable() == false) {
             pipeId = PIPE_MCSC3_REPROCESSING;
             ret = m_getBufferManager(pipeId_gsc, &bufferMgr, DST_BUFFER_DIRECTION);
             if (ret < 0) {
@@ -14610,7 +17581,7 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
         }
     }
 
-#if defined(SAMSUNG_LLS_DEBLUR) || defined(SAMSUNG_LENS_DC)
+#if defined(SAMSUNG_LLS_DEBLUR) || defined(SAMSUNG_LENS_DC) || defined(SAMSUNG_STR_CAPTURE)
     if (m_parameters->getSamsungCamera()
         && m_parameters->msgTypeEnabled(CAMERA_MSG_POSTVIEW_FRAME)) {
 #ifdef SAMSUNG_LLS_DEBLUR
@@ -14623,6 +17594,53 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
             IsThumbnailCallback = true;
         }
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+        if (m_parameters->getSTRCaptureEnable()) {
+            IsThumbnailCallback = true;
+        }
+#endif
+    }
+#endif
+
+#ifdef USE_ODC_CAPTURE
+    if (m_parameters->getSamsungCamera()
+        && m_parameters->msgTypeEnabled(CAMERA_MSG_POSTVIEW_FRAME)) {
+        if (m_parameters->getODCCaptureEnable() == true) {
+            IsThumbnailCallback = true;
+        }
+    }
+#endif
+
+#if 0
+    /* Temp code for cache flush issue (M2M case) */
+#ifdef SAMSUNG_LLS_DEBLUR
+    if (m_parameters->getLDCaptureMode()) {
+        needIonSync = true;
+    }
+#endif
+#ifdef SAMSUNG_LENS_DC
+    if (m_parameters->getLensDCEnable()) {
+        needIonSync = true;
+    }
+#endif
+#ifdef SAMSUNG_STR_CAPTURE
+    if (m_parameters->getSTRCaptureEnable()) {
+        needIonSync = true;
+    }
+#endif
+
+    if (needIonSync) {
+        int hwPreviewFormat = m_parameters->getHwPreviewFormat();
+        int planeCount = getYuvPlaneCount(hwPreviewFormat);
+        /* TODO : have to consider all fmt(planes) and stride */
+        for (int plane = 0; plane < planeCount; plane++) {
+            if (m_ionClient >= 0)
+#ifdef USE_LIB_ION_LEGACY
+                ion_sync_fd(m_ionClient, gscReprocessingBuffer.fd[plane]);
+#else
+                exynos_ion_sync_fd(m_ionClient, gscReprocessingBuffer.fd[plane]);
+#endif
+        }
     }
 #endif
 
@@ -14668,14 +17686,27 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
         m_hdrEnabled == true) {
 
         /* HDR callback */
-        if (m_hdrEnabled == true ||
-                currentSeriesShotMode == SERIES_SHOT_MODE_LLS ||
-                currentSeriesShotMode == SERIES_SHOT_MODE_SIS ||
-                m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21 ||
-                m_parameters->getShotMode() == SHOT_MODE_FRONT_PANORAMA) {
+        if (m_hdrEnabled == true
+            || currentSeriesShotMode == SERIES_SHOT_MODE_LLS
+            || currentSeriesShotMode == SERIES_SHOT_MODE_SIS
+            || m_nv21CaptureEnabled
+            || m_parameters->getShotMode() == SHOT_MODE_FRONT_PANORAMA) {
             CLOGD(" HDR callback");
 
-            yuvFrame = m_reprocessingFrameFactory->createNewFrameOnlyOnePipe(pipeId, newFrame->getFrameCount());
+#ifdef USE_DUAL_CAMERA
+            if (m_parameters->getDualCameraMode() == true && newFrame->getSyncType() == SYNC_TYPE_SYNC) {
+                pipeId = PIPE_FUSION_REPROCESSING;
+                yuvFrame = m_reprocessingFrameFactory->createNewFrameOnlyOnePipe(pipeId, newFrame->getFrameCount(), 0, newFrame);
+            } else
+#endif
+            {
+                yuvFrame = m_reprocessingFrameFactory->createNewFrameOnlyOnePipe(pipeId, newFrame->getFrameCount());
+            }
+            if (yuvFrame == NULL) {
+                CLOGE("frame is NULL(yuvFrame)");
+                goto CLEAN;
+            }
+
             ret = yuvFrame->setDstBuffer(pipeId, gscReprocessingBuffer);
             if (ret != NO_ERROR) {
                 CLOGE("Failed to get DepthMap buffer");
@@ -14712,13 +17743,16 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
             m_parameters->setExifChangedAttribute(&exifInfo, &pictureRect, &thumbnailRect, m_picture_meta_shot);
 
             m_yuvCallbackQ->pushProcessQ(&yuvFrame);
-
-            if (m_yuvCallbackThread->isRunning() == false && m_yuvCallbackQ->getSizeOfProcessQ() > 0)
-                m_yuvCallbackThread->run();
-
             m_jpegCounter.decCount();
         } else {
-            if (m_parameters->isUseHWFC() == true && m_parameters->getHWFCEnable() == true) {
+            CLOGI("pipeId(%d), pipeId_gsc(%d) hwfc(%d, %d)",
+                    pipeId, pipeId_gsc, m_parameters->isUseHWFC(), m_parameters->getHWFCEnable());
+
+            if (m_parameters->isUseHWFC() == true && m_parameters->getHWFCEnable() == true
+#ifdef USE_DUAL_CAMERA
+                && !(m_parameters->getDualCameraMode() == true && newFrame->getSyncType() == SYNC_TYPE_SYNC)
+#endif
+                    ) {
                 /* get gsc dst buffers */
                 entity_buffer_state_t jpegMainBufferState = ENTITY_BUFFER_STATE_NOREQ;
                 ret = newFrame->getDstBufferState(pipeId_gsc, &jpegMainBufferState,
@@ -14732,6 +17766,17 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
                 }
 
                 if (jpegMainBufferState == ENTITY_BUFFER_STATE_ERROR) {
+                    ret = newFrame->getDstBuffer(pipeId_gsc, &jpegReprocessingBuffer,
+                                                    m_reprocessingFrameFactory->getNodeType(PIPE_HWFC_JPEG_DST_REPROCESSING));
+                    if (ret < 0) {
+                        CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)", pipeId_gsc, ret);
+                        goto CLEAN;
+                    }
+
+                    /* put JPEG callback buffer */
+                    if (m_jpegBufferMgr->putBuffer(jpegReprocessingBuffer.index, EXYNOS_CAMERA_BUFFER_POSITION_NONE) != NO_ERROR)
+                        CLOGE("putBuffer(%d) fail", jpegReprocessingBuffer.index);
+
                     CLOGE("Failed to get the encoded JPEG buffer");
                     goto CLEAN;
                 }
@@ -14761,7 +17806,7 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
 
                 /* in case OTF until JPEG, we should be call below function to this position
                                 in order to update debugData from frame. */
-                m_parameters->setExifChangedAttribute(&exifInfo, &pictureRect, &thumbnailRect, m_picture_meta_shot);
+                m_parameters->setExifChangedAttribute(&exifInfo, &pictureRect, &thumbnailRect, m_picture_meta_shot, true);
 
 #ifdef DEBUG_EXIF_OVERWRITE
                 {
@@ -14787,7 +17832,7 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
                     /* APP4 Marker - DebugInfo */
                     UpdateDebugData(jpegReprocessingBuffer.addr[0],
                                     jpegReprocessingBuffer.size[0],
-                                    m_parameters->getDebugAttribute());
+                                    m_parameters->getDebug2Attribute());
                 }
 
 #ifdef DEBUG_EXIF_OVERWRITE
@@ -14851,7 +17896,7 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
                         CLOGD("getBuffer stopped, retry(%d), m_stopBurstShot(%d)",
                                  retry, m_stopBurstShot);
                     }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
                     if (m_parameters->getDualCameraMode() == true &&
                             pipeId_gsc == PIPE_FUSION_REPROCESSING) {
                         ret = m_putFusionReprocessingBuffers(newFrame, &gscReprocessingBuffer);
@@ -14865,7 +17910,7 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
 #endif
                     ret = m_putBuffers(bufferMgr, gscReprocessingBuffer.index);
                     goto CLEAN;
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
                     }
 #endif
                 }
@@ -14924,10 +17969,10 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
                         m_ThumbnailCallbackThread->join();
                         CLOGD(" m_ThumbnailCallbackThread join");
                     }
-                } 
+                }
 
                 /* put GSC buffer */
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
                 if (m_parameters->getDualCameraMode() == true &&
                         pipeId_gsc == PIPE_FUSION_REPROCESSING) {
                     ret = m_putFusionReprocessingBuffers(newFrame, &gscReprocessingBuffer);
@@ -14945,7 +17990,7 @@ bool ExynosCamera::m_postPictureThreadFunc(void)
                              pipeId_gsc, ret);
                     goto CLEAN;
                 }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
                 }
 #endif
             }
@@ -15050,10 +18095,10 @@ retry:
                 m_ThumbnailCallbackThread->join();
                 CLOGD(" m_ThumbnailCallbackThread join");
             }
-        } 
+        }
 
         /* put GSC buffer */
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         if (m_parameters->getDualCameraMode() == true &&
                 pipeId_gsc == PIPE_FUSION_REPROCESSING) {
             ret = m_putFusionReprocessingBuffers(newFrame, &gscReprocessingBuffer);
@@ -15073,7 +18118,7 @@ retry:
                 goto CLEAN;
             }
         }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         }
 #endif
 
@@ -15084,9 +18129,11 @@ retry:
         newFrame->printEntity();
         newFrame->frameUnlock();
 
-        ret = m_removeFrameFromList(&m_postProcessList, newFrame, &m_postProcessListLock);
-        if (ret < 0) {
-            CLOGE("remove frame from processList fail, ret(%d)", ret);
+        if (newFrame->getSyncType() != SYNC_TYPE_SWITCH) {
+            ret = m_removeFrameFromList(&m_postProcessList, newFrame, &m_postProcessListLock);
+            if (ret < 0) {
+                CLOGE("remove frame from processList fail, ret(%d)", ret);
+            }
         }
 
 #ifdef LLS_REPROCESSING
@@ -15151,7 +18198,7 @@ CLEAN:
 
     /* HACK: Sometimes, m_postPictureThread is finished without waiting the last picture */
     int waitCount = 5;
-    while (m_postPictureQ->getSizeOfProcessQ() == 0 && 0 < waitCount) {
+    while (m_postPictureQ->getSizeOfProcessQ() == 0 && 0 < waitCount && m_jpegCounter.getCount() != 0) {
         usleep(10000);
         waitCount--;
     }
@@ -15174,12 +18221,8 @@ bool ExynosCamera::m_jpegSaveThreadFunc(void)
     CLOGI("");
 
     int ret = 0;
-    int loop = false;
     int curThreadNum = -1;
     char burstFilePath[CAMERA_FILE_PATH_SIZE];
-#ifdef BURST_CAPTURE
-    int fd = -1;
-#endif
 
     ExynosCameraFrameSP_sptr_t newFrame = NULL;
     int pipeId_jpeg = 0;
@@ -15242,6 +18285,15 @@ bool ExynosCamera::m_jpegSaveThreadFunc(void)
                 time(&rawtime);
                 timeinfo = localtime(&rawtime);
                 if(seriesShotNumber == 1) {
+                    if(m_preBurstTimeinfo.tm_hour == timeinfo->tm_hour
+                        && m_preBurstTimeinfo.tm_min == timeinfo->tm_min
+                        && m_preBurstTimeinfo.tm_sec == timeinfo->tm_sec) {
+                        timeinfo->tm_sec = timeinfo->tm_sec + 1;
+                    }
+
+                    m_preBurstTimeinfo.tm_hour = timeinfo->tm_hour;
+                    m_preBurstTimeinfo.tm_min = timeinfo->tm_min;
+                    m_preBurstTimeinfo.tm_sec = timeinfo->tm_sec;
                     strftime(m_burstTime, 20, "%Y%m%d_%H%M%S", timeinfo);
                 }
                 else {
@@ -15375,6 +18427,11 @@ bool ExynosCamera::m_yuvCallbackThreadFunc(void)
         ret = INVALID_OPERATION;
         goto CLEAN;
     }
+
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true && newFrame->getSyncType() == SYNC_TYPE_SYNC)
+        pipeId = PIPE_FUSION_REPROCESSING;
+#endif
 
     CLOGV("get frame from m_yuvCallbackQ");
 
@@ -15567,6 +18624,22 @@ CLEAN:
             CLOGE("bufferMgr->putBuffers() fail, pipeId(%d), ret(%d)",
                      pipeId, ret);
         }
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true && newFrame->getSyncType() == SYNC_TYPE_SYNC) {
+            ret = m_putFusionReprocessingBuffers(newFrame, &gscReprocessingBuffer);
+            if (ret < 0) {
+                CLOGE("m_putFusionReprocessingBuffer(%d, %d, %d) fail, ret(%d)",
+                        gscReprocessingBuffer.index, newFrame->getSyncType(), newFrame->getFrameCount(), ret);
+            }
+        } else
+#endif
+        {
+            ret = m_putBuffers(bufferMgr, gscReprocessingBuffer.index);
+            if (ret < 0) {
+                CLOGE("bufferMgr->putBuffers() fail, pipeId(%d), ret(%d)",
+                        pipeId, ret);
+            }
+        }
     }
 
     if (postviewCallbackBuffer.index != -2) {
@@ -15595,10 +18668,22 @@ CLEAN:
         newFrame = NULL;
     }
 
-    if (m_yuvcallbackCounter.getCount() <= 0) {
+    int waitCount = 5;
 
-        if (m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21) {
+    if (m_yuvcallbackCounter.getCount() <= 0) {
+#ifdef USE_DUAL_CAMERA
+        int masterCameraId, slaveCameraId;
+        getDualCameraId(&masterCameraId, &slaveCameraId);
+        if (m_parameters->getDualCameraMode() == true &&
+                m_cameraId == slaveCameraId &&
+                m_parameters->getDualCameraReprocessingSyncType() == SYNC_TYPE_SYNC) {
+            loop = false;
+        } else
+#endif
+        {
+        if (m_nv21CaptureEnabled) {
             m_parameters->setOutPutFormatNV21Enable(false);
+            m_nv21CaptureEnabled = false;
         }
 
         if (m_hdrEnabled == true) {
@@ -15613,23 +18698,16 @@ CLEAN:
             m_pictureEnabled = false;
         }
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-        if (m_parameters->getDualCameraMode() == true &&
-            m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21) {
-            CLOGI("INFO(%s[%d]): End of Dual Camera capture!", __FUNCTION__, __LINE__);
-            m_pictureEnabled = false;
-        }
-#endif
-
         loop = false;
+        waitCount = 0;
         m_terminatePictureThreads(true);
         m_captureLock.unlock();
+        }
     } else {
         loop = true;
         m_captureLock.unlock();
     }
 
-    int waitCount = 5;
     while (m_yuvCallbackQ->getSizeOfProcessQ() == 0 && 0 < waitCount) {
         usleep(10000);
         waitCount--;
@@ -15675,6 +18753,17 @@ bool ExynosCamera::m_jpegCallbackThreadFunc(void)
     ExynosCameraActivityFlash *m_flashMgr = m_exynosCameraActivityControl->getFlashMgr();
     currentSeriesShotMode = m_parameters->getSeriesShotMode();
 
+#ifdef USE_DUAL_CAMERA
+    int masterCameraId, slaveCameraId;
+    getDualCameraId(&masterCameraId, &slaveCameraId);
+    if (m_parameters->getDualCameraMode() == true &&
+            m_cameraId == slaveCameraId &&
+            m_parameters->getDualCameraReprocessingSyncType() != SYNC_TYPE_SWITCH) {
+        m_parameters->setIsThumbnailCallbackOn(false);
+        return loop;
+    }
+#endif
+
     if (m_parameters->isReprocessing() == true) {
         pipeId_jpeg = PIPE_JPEG_REPROCESSING;
     } else {
@@ -15713,6 +18802,9 @@ bool ExynosCamera::m_jpegCallbackThreadFunc(void)
 #ifdef SAMSUNG_LENS_DC
             || m_parameters->getLensDCEnable()
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+            || m_parameters->getSTRCaptureEnable()
+#endif
             )
 #ifdef ONE_SECOND_BURST_CAPTURE
         && currentSeriesShotMode != SERIES_SHOT_MODE_ONE_SECOND_BURST
@@ -15723,6 +18815,15 @@ bool ExynosCamera::m_jpegCallbackThreadFunc(void)
             loop = false;
             goto CLEAN;
         }
+
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true &&
+             (m_parameters->getDualStandbyMode() == ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_POST ||
+             m_parameters->getDualStandbyMode() == ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR)) {
+            loop = false;
+            goto CLEAN;
+        }
+#endif
 
         do {
             ret = m_postviewCallbackQ->waitAndPopProcessQ(&postviewCallbackBuffer);
@@ -15840,6 +18941,12 @@ bool ExynosCamera::m_jpegCallbackThreadFunc(void)
 #endif
 
     m_captureLock.lock();
+
+    if (ret < 0) {
+        CLOGE("wait and pop fail, ret(%d)", ret);
+        loop = true;
+        goto CLEAN;
+    }
 
     seriesShotNumber = newFrame->getFrameCount();
 
@@ -15991,6 +19098,16 @@ CLEAN:
 #endif
 
     if (m_takePictureCounter.getCount() == 0) {
+#ifdef USE_DUAL_CAMERA
+        int masterCameraId, slaveCameraId;
+        getDualCameraId(&masterCameraId, &slaveCameraId);
+        if (m_parameters->getDualCameraMode() == true &&
+                m_cameraId == slaveCameraId &&
+                m_parameters->getDualCameraReprocessingSyncType() == SYNC_TYPE_SYNC) {
+            loop = false;
+        } else
+#endif
+        {
         m_pictureEnabled = false;
         loop = false;
 
@@ -16000,6 +19117,7 @@ CLEAN:
 #endif
         m_terminatePictureThreads(true);
         m_captureLock.unlock();
+        }
     } else {
         m_captureLock.unlock();
     }
@@ -16070,18 +19188,38 @@ bool ExynosCamera::m_ThumbnailCallbackThreadFunc(void)
 
     m_parameters->getThumbnailSize(&thumbnailW, &thumbnailH);
 
-    if (m_parameters->getPictureFormat() == V4L2_PIX_FMT_NV21
+    if (m_nv21CaptureEnabled
 #ifdef SAMSUNG_LLS_DEBLUR
         || m_parameters->getLDCaptureMode() > 0
 #endif
 #ifdef SAMSUNG_LENS_DC
         || m_parameters->getLensDCEnable()
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+        || m_parameters->getSTRCaptureEnable()
+#endif
+#ifdef USE_DUAL_CAMERA
+        || (m_parameters->getDualCameraMode() == true &&
+           m_parameters->getDualCameraReprocessingSyncType() == SYNC_TYPE_SYNC)
+#endif
     ) {
         m_parameters->getPictureSize(&inputSizeW, &inputSizeH);
     } else {
         m_parameters->getPreviewSize(&inputSizeW, &inputSizeH);
     }
+
+#ifdef USE_ODC_CAPTURE
+    if (m_parameters->getODCCaptureEnable() == true) {
+
+        m_parameters->getPictureSize(&inputSizeW, &inputSizeH);
+
+        if (m_parameters->getOutPutFormatNV21Enable() == true) {
+            SrcFormat = HAL_PIXEL_FORMAT_2_V4L2_PIX(HAL_PIXEL_FORMAT_YCrCb_420_SP);
+        } else {
+            SrcFormat = HAL_PIXEL_FORMAT_2_V4L2_PIX(HAL_PIXEL_FORMAT_YCbCr_422_I);
+        }
+    }
+#endif
 
     do {
         dstbufferIndex = -2;
@@ -16185,6 +19323,9 @@ CLEAN:
 #ifdef SAMSUNG_LENS_DC
        && !m_parameters->getLensDCEnable()
 #endif
+#ifdef SAMSUNG_STR_CAPTURE
+       && !m_parameters->getSTRCaptureEnable()
+#endif
     ) {
         if (postgscReprocessingSrcBuffer.index != -2)
             m_putBuffers(srcbufferMgr, postgscReprocessingSrcBuffer.index);
@@ -16258,6 +19399,15 @@ void ExynosCamera::m_terminatePictureThreads(bool callFromJpeg)
     }
 #endif
 
+#ifdef SAMSUNG_STR_CAPTURE
+    if (m_parameters->getSTRCaptureEnable()) {
+        m_parameters->setSTRCaptureEnable(false);
+        m_parameters->setOutPutFormatNV21Enable(false);
+        CLOGD("[STR_CAPTURE] Set STR Capture, getSTRCaptureEnable(%d)",
+                 m_parameters->getSTRCaptureEnable());
+    }
+#endif
+
     if (m_parameters->isReprocessing() == true) {
         pipeId_jpeg = PIPE_JPEG_REPROCESSING;
     } else {
@@ -16271,6 +19421,9 @@ void ExynosCamera::m_terminatePictureThreads(bool callFromJpeg)
 #ifdef SAMSUNG_LLS_DEBLUR
     m_LDCaptureThread->requestExit();
 #endif
+#ifdef USE_MSC_CAPTURE
+    m_MscCaptureThread->requestExit();
+#endif
 
     if (m_ThumbnailCallbackThread != NULL)
         m_ThumbnailCallbackThread->requestExit();
@@ -16283,16 +19436,26 @@ void ExynosCamera::m_terminatePictureThreads(bool callFromJpeg)
     m_jpegCallbackThread->requestExit();
     m_yuvCallbackThread->requestExit();
 
+    if (!callFromJpeg) {
+        m_postviewCallbackQ->sendCmd(WAKE_UP);
+        m_jpegCallbackQ->sendCmd(WAKE_UP);
+        CLOGI("wakeup");
+    }
+
     CLOGI(" wait m_prePictureThrad");
     m_prePictureThread->requestExitAndWait();
     CLOGI(" wait m_pictureThrad");
     m_pictureThread->requestExitAndWait();
- 
+
     CLOGI(" wait m_postPictureCallbackThread");
     m_postPictureCallbackThread->requestExitAndWait();
 #ifdef SAMSUNG_LLS_DEBLUR
     CLOGI(" wait m_LDCaptureThread");
     m_LDCaptureThread->requestExitAndWait();
+#endif
+#ifdef USE_MSC_CAPTURE
+    CLOGI(" wait m_MscCaptureThread");
+    m_MscCaptureThread->requestExitAndWait();
 #endif
 
     if (m_ThumbnailCallbackThread != NULL) {
@@ -16372,19 +19535,22 @@ void ExynosCamera::m_terminatePictureThreads(bool callFromJpeg)
             if (m_parameters->getSeriesShotMode() != SERIES_SHOT_MODE_ONE_SECOND_BURST)
 #endif
             {
-                int seriesShotSaveLocation = m_parameters->getSeriesShotSaveLocation();
-                char command[CAMERA_FILE_PATH_SIZE];
-                memset(command, 0, sizeof(command));
+                char filepath[CAMERA_FILE_PATH_SIZE];
+                int ret = -1;
+
+                memset(filepath, 0, sizeof(filepath));
 
 #ifdef SAMSUNG_INF_BURST
-                snprintf(command, sizeof(command), "rm %s%s_%03d.jpg", m_burstSavePath, m_burstTime, newFrame->getFrameCount());
+                snprintf(filepath, sizeof(filepath), "%s%s_%03d.jpg", m_burstSavePath, m_burstTime, newFrame->getFrameCount());
 #else
-                snprintf(command, sizeof(command), "rm %sBurst%02d.jpg", m_burstSavePath, newFrame->getFrameCount());
+                snprintf(filepath, sizeof(filepath), "%sBurst%02d.jpg", m_burstSavePath, newFrame->getFrameCount());
 #endif
-
-                CLOGD("run %s - start", command);
-                system(command);
-                CLOGD("run %s - end", command);
+                CLOGD("DEBUG(%s[%d]):run unlink %s - start", __FUNCTION__, __LINE__, filepath);
+                ret = unlink(filepath);
+                CLOGD("DEBUG(%s[%d]):run unlink %s - end", __FUNCTION__, __LINE__, filepath);
+                if (ret != 0) {
+                    CLOGE("ERR(%s):unlink fail. filepath(%s) ret(%d)", __FUNCTION__, filepath, ret);
+                }
             }
 
             CLOGD(" remaining frame delete(%d)",
@@ -16486,17 +19652,21 @@ void ExynosCamera::m_terminatePictureThreads(bool callFromJpeg)
         else if (m_parameters->getUsePureBayerReprocessing() == false)
             pipe = PIPE_ISP_REPROCESSING;
 
+#ifdef USE_REMOSAIC_CAPTURE
+        if (m_parameters->getRemosaicCaptureMode() == ExynosCamera1Parameters::REMOSAIC_CAPTURE_MODE_PURE_BAYER) {
+            pipe = PIPE_3AA_REPROCESSING;
+            m_parameters->setRemosaicCaptureMode(ExynosCamera1Parameters::REMOSAIC_CAPTURE_MODE_NONE);
+        }
+#endif
+
         CLOGD(" Wait thread exit Pipe(%d) ", pipe);
         ret = m_reprocessingFrameFactory->stopThread(INDEX(pipe));
         if (ret != NO_ERROR)
             CLOGE("3AA reprocessing stopThread fail, pipe(%d) ret(%d)", pipe, ret);
 
-        /* wait for reprocessing thread stop */
-        ret = m_reprocessingFrameFactory->stopThreadAndWait(INDEX(pipe), 5, 4000);
-        if (ret != NO_ERROR) {
+        ret = m_reprocessingFrameFactory->stopThreadAndWait(INDEX(pipe));
+        if (ret != NO_ERROR)
             CLOGE("stopThreadAndWait fail, pipeId(%d) ret(%d)", pipe, ret);
-            m_reprocessingFrameFactory->dumpFimcIsInfo(INDEX(pipe), false);
-        }
 
         if (m_parameters->needGSCForCapture(m_cameraId) == true) {
             pipe = PIPE_GSC_REPROCESSING;
@@ -16504,34 +19674,46 @@ void ExynosCamera::m_terminatePictureThreads(bool callFromJpeg)
             if (ret != NO_ERROR)
                 CLOGE("GSC stopThread fail, pipe(%d) ret(%d)", pipe, ret);
 
-            ret = m_reprocessingFrameFactory->stopThreadAndWait(INDEX(pipe), 5, 4000);
-            if (ret != NO_ERROR) {
+            ret = m_reprocessingFrameFactory->stopThreadAndWait(INDEX(pipe));
+            if (ret != NO_ERROR)
                 CLOGE("stopThreadAndWait fail, pipeId(%d) ret(%d)", pipe, ret);
-                m_reprocessingFrameFactory->dumpFimcIsInfo(INDEX(pipe), false);
-            }
         }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
         if (m_parameters->getDualCameraMode() == true) {
             pipe = PIPE_SYNC_REPROCESSING;
             ret = m_reprocessingFrameFactory->stopThread(INDEX(pipe));
             if (ret != NO_ERROR)
                 CLOGE("3AA reprocessing stopThread fail, pipe(%d) ret(%d)", pipe, ret);
 
-            ret = m_reprocessingFrameFactory->stopThreadAndWait(INDEX(pipe), 5, 4000);
-            if (ret != NO_ERROR) {
+            ret = m_reprocessingFrameFactory->stopThreadAndWait(INDEX(pipe));
+            if (ret != NO_ERROR)
                 CLOGE("stopThreadAndWait fail, pipeId(%d) ret(%d)", pipe, ret);
-                m_reprocessingFrameFactory->dumpFimcIsInfo(INDEX(pipe), false);
-            }
 
             pipe = PIPE_FUSION_REPROCESSING;
             ret = m_reprocessingFrameFactory->stopThread(INDEX(pipe));
             if (ret != NO_ERROR)
                 CLOGE("3AA reprocessing stopThread fail, pipe(%d) ret(%d)", pipe, ret);
 
-            ret = m_reprocessingFrameFactory->stopThreadAndWait(INDEX(pipe), 5, 4000);
-            if (ret != NO_ERROR) {
+            ret = m_reprocessingFrameFactory->stopThreadAndWait(INDEX(pipe));
+            if (ret != NO_ERROR)
                 CLOGE("stopThreadAndWait fail, pipeId(%d) ret(%d)", pipe, ret);
-                m_reprocessingFrameFactory->dumpFimcIsInfo(INDEX(pipe), false);
+
+            int masterCameraId, slaveCameraId;
+            getDualCameraId(&masterCameraId, &slaveCameraId);
+
+            /* unlock syncType during takePicture */
+            switch (m_parameters->getDualCameraReprocessingSyncType()) {
+            case SYNC_TYPE_BYPASS:
+            case SYNC_TYPE_SYNC:
+                if (m_cameraId == masterCameraId)
+                    m_parameters->lockDualCameraSyncType(false);
+                break;
+            case SYNC_TYPE_SWITCH:
+                if (m_cameraId == slaveCameraId)
+                    m_parameters->lockDualCameraSyncType(false);
+                break;
+            default:
+                break;
             }
         }
 #endif
@@ -16583,8 +19765,12 @@ void ExynosCamera::m_terminatePictureThreads(bool callFromJpeg)
     CLOGD(" clear m_LDCaptureQ");
     m_LDCaptureQ->release();
 #endif
+#ifdef USE_MSC_CAPTURE
+    CLOGD(" clear m_MscCaptureQ");
+    m_MscCaptureQ->release();
+#endif
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     CLOGD(" clear m_syncReprocessingQ");
     m_syncReprocessingQ->release();
 
@@ -16592,25 +19778,32 @@ void ExynosCamera::m_terminatePictureThreads(bool callFromJpeg)
     m_fusionReprocessingQ->release();
 #endif
 
-    CLOGD(" reset postPictureBuffer");
-    m_postPictureBufferMgr->resetBuffers();
-
 #ifdef SAMSUNG_LENS_DC
     CLOGD(" reset m_lensDCBufferMgr");
     m_lensDCBufferMgr->resetBuffers();
 #endif
 
+#ifdef SAMSUNG_STR_CAPTURE
+    CLOGD(" reset m_strCaptureBufferMgr");
+    m_strCaptureBufferMgr->resetBuffers();
+#endif
+
     CLOGD(" reset thumbnail gsc buffers");
-    m_thumbnailGscBufferMgr->resetBuffers();
+    m_thumbnailGscBufferMgr->resetBuffers(m_cameraId);
+
+#ifdef USE_MSC_CAPTURE
+    CLOGD(" reset msc buffers");
+    m_mscBufferMgr->resetBuffers();
+#endif
 
     CLOGD(" reset buffer gsc buffers");
     m_gscBufferMgr->resetBuffers();
     CLOGD(" reset buffer jpeg buffers");
-    m_jpegBufferMgr->resetBuffers();
+    m_jpegBufferMgr->resetBuffers(m_cameraId);
     CLOGD(" reset buffer sccReprocessing buffers");
-    m_sccReprocessingBufferMgr->resetBuffers();
+    m_sccReprocessingBufferMgr->resetBuffers(m_cameraId);
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == true) {
         CLOGD(" reset buffer fusionReprocessing buffers");
         m_fusionReprocessingBufferMgr->resetBuffers();
@@ -16618,10 +19811,11 @@ void ExynosCamera::m_terminatePictureThreads(bool callFromJpeg)
 #endif
 
     CLOGD(" reset buffer m_postPicture buffers");
-    m_postPictureBufferMgr->resetBuffers();
+    m_postPictureBufferMgr->resetBuffers(m_cameraId);
     CLOGD(" reset buffer thumbnail buffers");
-    m_thumbnailBufferMgr->resetBuffers();
+    m_thumbnailBufferMgr->resetBuffers(m_cameraId);
 
+    m_nv21CaptureEnabled = false;
 #ifdef SAMSUNG_DNG
     CLOGI(" wait m_DNGCaptureThread");
     m_DNGCaptureThread->requestExitAndWait();
@@ -16640,6 +19834,7 @@ void ExynosCamera::m_terminatePictureThreads(bool callFromJpeg)
 #ifdef USE_ODC_CAPTURE
     m_ODCProcessingQ->release();
     m_postODCProcessingQ->release();
+    m_parameters->setODCCaptureEnable(false);
 #endif
 
 }
@@ -16868,6 +20063,12 @@ status_t ExynosCamera::m_doSRCallbackFunc()
         m_parameters->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC) {
         m_sr_frameMetadata.crop_info.cropped_width = m_sr_cropped_width;
         m_sr_frameMetadata.crop_info.cropped_height = m_sr_cropped_height;
+#ifdef SAMSUNG_DUAL_SOLUTION
+        m_sr_frameMetadata.crop_info.fov_left = 0;
+        m_sr_frameMetadata.crop_info.fov_top = 0;
+        m_sr_frameMetadata.crop_info.fov_width = m_sr_cropped_width;
+        m_sr_frameMetadata.crop_info.fov_height = m_sr_cropped_height;
+#endif
     } else {
         m_sr_frameMetadata.crop_info.cropped_width = pictureW;
         m_sr_frameMetadata.crop_info.cropped_height = pictureH;
@@ -17151,7 +20352,9 @@ bool ExynosCamera::m_postPictureCallbackThreadFunc(void)
     int pipeId_gsc_magic = PIPE_MCSC1_REPROCESSING;
     ExynosCameraBuffer postgscReprocessingBuffer;
     ExynosCameraBufferManager *bufferMgr = NULL;
+#ifdef SAMSUNG_MAGICSHOT
     camera_memory_t *postviewCallbackHeap = NULL;
+#endif
 #ifdef SAMSUNG_BD
     int previewW = 0, previewH = 0;
     ExynosCameraDurationTimer m_timer;
@@ -17188,6 +20391,12 @@ bool ExynosCamera::m_postPictureCallbackThreadFunc(void)
         CLOGE("newFrame is NULL");
         goto CLEAN;
     }
+
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true &&
+            newFrame->getSyncType() == SYNC_TYPE_SYNC)
+        pipeId = PIPE_FUSION_REPROCESSING;
+#endif
 
     if (m_parameters->isReprocessing() == true) {
         /* put GCC buffer */
@@ -17242,7 +20451,18 @@ bool ExynosCamera::m_postPictureCallbackThreadFunc(void)
                         m_burstCaptureCallbackCount,m_magicshotMaxCount);
             }
 
-            ret = m_putBuffers(bufferMgr, postgscReprocessingBuffer.index);
+#ifdef USE_DUAL_CAMERA
+            if (m_parameters->getDualCameraMode() == true) {
+                ret = m_putFusionReprocessingBuffers(newFrame, &postgscReprocessingBuffer);
+                if (ret < 0) {
+                    CLOGE("m_putFusionReprocessingBuffer(%d, %d, %d) fail, ret(%d)",
+                            postgscReprocessingBuffer.index, newFrame->getSyncType(), newFrame->getFrameCount(), ret);
+                }
+            } else
+#endif
+            {
+                ret = m_putBuffers(bufferMgr, postgscReprocessingBuffer.index);
+            }
         }
 
         return loop;
@@ -17302,8 +20522,20 @@ bool ExynosCamera::m_postPictureCallbackThreadFunc(void)
     }
 
     if (isThumbnailCallbackOn == false) {
-        if (postgscReprocessingBuffer.index != -2)
-            m_putBuffers(bufferMgr, postgscReprocessingBuffer.index);
+        if (postgscReprocessingBuffer.index != -2) {
+#ifdef USE_DUAL_CAMERA
+            if (m_parameters->getDualCameraMode() == true && newFrame->getSyncType() == SYNC_TYPE_SYNC) {
+                ret = m_putFusionReprocessingBuffers(newFrame, &postgscReprocessingBuffer);
+                if (ret < 0) {
+                    CLOGE("m_putFusionReprocessingBuffer(%d, %d, %d) fail, ret(%d)",
+                            postgscReprocessingBuffer.index, newFrame->getSyncType(), newFrame->getFrameCount(), ret);
+                }
+            } else
+#endif
+            {
+                m_putBuffers(bufferMgr, postgscReprocessingBuffer.index);
+            }
+        }
     }
 #endif
 
@@ -17317,8 +20549,20 @@ bool ExynosCamera::m_postPictureCallbackThreadFunc(void)
     return loop;
 
 CLEAN:
-    if (postgscReprocessingBuffer.index != -2)
-        m_putBuffers(bufferMgr, postgscReprocessingBuffer.index);
+    if (postgscReprocessingBuffer.index != -2) {
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true && newFrame->getSyncType() == SYNC_TYPE_SYNC) {
+            ret = m_putFusionReprocessingBuffers(newFrame, &postgscReprocessingBuffer);
+            if (ret < 0) {
+                CLOGE("m_putFusionReprocessingBuffer(%d, %d, %d) fail, ret(%d)",
+                        postgscReprocessingBuffer.index, newFrame->getSyncType(), newFrame->getFrameCount(), ret);
+            }
+        } else
+#endif
+        {
+            m_putBuffers(bufferMgr, postgscReprocessingBuffer.index);
+        }
+    }
 
     if (newFrame != NULL) {
         newFrame->printEntity();
@@ -17331,6 +20575,140 @@ CLEAN:
     return loop;
 }
 
+#ifdef USE_MSC_CAPTURE
+bool ExynosCamera::m_MscCaptureThreadFunc(void)
+{
+    int loop = false;
+    int pipeId = PIPE_ISP_REPROCESSING;
+    int pipeId_gsc = PIPE_MCSC1_REPROCESSING;
+    int mscPipe = PIPE_GSC_REPROCESSING3;
+
+    int waitCount = 0;
+    bool isTimeOut = false;
+    int framecount = 0;
+    int dstbufferIndex = -1;
+    int retry = 0;
+    int ret = 0;
+
+    ExynosCameraFrameSP_sptr_t newFrame = NULL;
+    ExynosCameraBufferManager *srcbufferMgr = NULL;
+    ExynosCameraBufferManager *mscBufferMgr = NULL;
+    ExynosCameraBuffer postmscReprocessingSrcBuffer;
+    ExynosCameraBuffer postmscReprocessingDstBuffer;
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+    ExynosRect mscRect;
+    ExynosRect srcRect;
+
+    int32_t SrcFormat = HAL_PIXEL_FORMAT_2_V4L2_PIX(HAL_PIXEL_FORMAT_YCrCb_420_SP);
+    int inputSizeW, inputSizeH;
+    int bayerCropX, bayerCropY, bayerCropW, bayerCropH;
+
+    m_timer.start();
+    m_parameters->getPictureSize(&inputSizeW, &inputSizeH);
+    m_parameters->getHwBayerCropRegion(&bayerCropW, &bayerCropH, &bayerCropX, &bayerCropY);
+
+    srcRect.w = ALIGN_UP(504, 16); // get rect info from dual lib
+    srcRect.h = ALIGN_UP(378, 16); // get rect info from dual lib
+    srcRect.x = (bayerCropW - srcRect.w) / 2; // get rect info from dual lib
+    srcRect.y = (bayerCropH - srcRect.h) / 2; // get rect info from dual lib
+    srcRect.fullW = ALIGN_UP(bayerCropW, 16);
+    srcRect.fullH = ALIGN_UP(bayerCropH, 16);
+    srcRect.colorFormat = SrcFormat;
+
+    mscRect.x = 0;
+    mscRect.y = 0;
+    mscRect.w = inputSizeW;
+    mscRect.h = inputSizeH;
+    mscRect.fullW = inputSizeW;
+    mscRect.fullH = inputSizeH;
+    mscRect.colorFormat = SrcFormat;
+
+    postmscReprocessingSrcBuffer.index = -2;
+    postmscReprocessingDstBuffer.index = -2;
+
+    ret = m_MscCaptureQ->waitAndPopProcessQ(&newFrame);
+    if (ret < 0) {
+        CLOGW("wait and pop fail, ret(%d)", ret);
+        /* TODO: doing exception handling */
+        isTimeOut = true;
+        goto CLEAN;
+    }
+
+    ret = newFrame->getDstBuffer(pipeId, &postmscReprocessingSrcBuffer,
+                                    m_reprocessingFrameFactory->getNodeType(pipeId_gsc));
+
+    m_getBufferManager(mscPipe, &srcbufferMgr, SRC_BUFFER_DIRECTION);
+
+    mscBufferMgr = m_mscBufferMgr;
+    newFrame = m_pictureFrameFactory->createNewFrameOnlyOnePipe(mscPipe, framecount);
+
+    do {
+        dstbufferIndex = -2;
+        retry++;
+
+        if (mscBufferMgr->getNumOfAvailableBuffer() > 0) {
+            ret = mscBufferMgr->getBuffer(&dstbufferIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &postmscReprocessingDstBuffer);
+                CLOGE("getBuffer fail, ret(%d)", ret);
+        }
+
+        if (dstbufferIndex < 0) {
+            usleep(WAITING_TIME);
+            if (retry % 20 == 0) {
+                CLOGW("retry Post View Thumbnail getBuffer)");
+                mscBufferMgr->dump();
+            }
+        }
+    } while (dstbufferIndex < 0 && retry < (TOTAL_WAITING_TIME / WAITING_TIME) && m_flagThreadStop != true && m_stopBurstShot == false);
+
+    newFrame->setSrcRect(mscPipe, srcRect);
+    newFrame->setDstRect(mscPipe, mscRect);
+
+    ret = m_setupEntity(mscPipe, newFrame, &postmscReprocessingSrcBuffer, &postmscReprocessingDstBuffer);
+
+    if (ret < 0) {
+        CLOGE("setupEntity fail, pipeId(%d), ret(%d)", mscPipe, ret);
+    }
+
+    m_pictureFrameFactory->setOutputFrameQToPipe(m_MscCaptureQ, mscPipe);
+    m_pictureFrameFactory->pushFrameToPipe(newFrame, mscPipe);
+
+    /* wait GSC done */
+    CLOGV("wait GSC output");
+    newFrame = NULL;
+    do {
+        ret = m_MscCaptureQ->waitAndPopProcessQ(&newFrame);
+        waitCount++;
+    } while (ret == TIMED_OUT && waitCount < 100 && m_flagThreadStop != true);
+
+    if (ret < 0) {
+        CLOGW("Failed to waitAndPopProcessQ. ret %d waitCount %d flagThreadStop %d",
+                 ret, waitCount, m_flagThreadStop);
+    }
+
+    ret = newFrame->getDstBuffer(mscPipe, &postmscReprocessingDstBuffer);
+    if (ret < 0) {
+        CLOGE("getDstBuffer fail, pipeId(%d), ret(%d)", mscPipe, ret);
+        goto CLEAN;
+    }
+
+    if (postmscReprocessingSrcBuffer.addr[0] != NULL && postmscReprocessingDstBuffer.addr[0] != NULL
+        && (postmscReprocessingSrcBuffer.size[0] == postmscReprocessingDstBuffer.size[0])) {
+        memcpy(postmscReprocessingSrcBuffer.addr[0], postmscReprocessingDstBuffer.addr[0], postmscReprocessingSrcBuffer.size[0]);
+    }
+
+CLEAN:
+    if (postmscReprocessingDstBuffer.index != -2 && ret < 0)
+        m_putBuffers(mscBufferMgr, postmscReprocessingDstBuffer.index);
+
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+    CLOGD("[MSC Capture]duration time(%5d msec)", (int)durationTime);
+
+    return loop;
+}
+#endif
+
 #ifdef SAMSUNG_LLS_DEBLUR
 bool ExynosCamera::m_LDCaptureThreadFunc(void)
 {
@@ -17341,24 +20719,40 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
     int loop = false;
     ExynosCameraFrameSP_sptr_t newFrame = NULL;
     ExynosCameraBuffer gscReprocessingBuffer;
+    ExynosCameraBufferManager *bufferMgr = NULL;
     int pipeId_gsc = PIPE_MCSC1_REPROCESSING;
     int pipeId = PIPE_3AA_REPROCESSING;
     int previewW = 0, previewH = 0, previewFormat = 0;
     int pictureW = 0, pictureH = 0, pictureFormat = 0;
+#ifdef SAMSUNG_HIFI_LLS
+    int hwPictureW = 0, hwPictureH = 0;
+#endif
     ExynosRect srcRect_magic, dstRect_magic;
     float zoomRatio = m_parameters->getZoomRatio(0) / 1000;
     int retry1 = 0;
     ExynosCameraDurationTimer m_timer;
     long long durationTime = 0;
-#ifdef FLASHED_LLS_CAPTURE
+    int totalCount = 0;
+    bool isTimeOut = false;
+    camera_frame_metadata_t m_Metadata;
+
+#if defined(SAMSUNG_HIFI_LLS) || defined(FLASHED_LLS_CAPTURE)
+#ifdef SAMSUNG_HIFI_LLS
+    const char *llsPluginName = HIFI_LLS_PLUGIN_NAME;
+#else /* FLASHED_LLS_CAPTURE */
     const char *llsPluginName = FLASHED_LLS_PLUGIN_NAME;
+#endif
 #else
     const char *llsPluginName = LLS_PLUGIN_NAME;
 #endif
 
     gscReprocessingBuffer.index = -2;
 
-    ExynosCameraBufferManager *bufferMgr = NULL;
+    if (m_parameters->getUsePureBayerReprocessing() == true)
+        pipeId = PIPE_3AA_REPROCESSING;
+    else
+        pipeId = PIPE_ISP_REPROCESSING;
+
     ret = m_getBufferManager(pipeId_gsc, &bufferMgr, DST_BUFFER_DIRECTION);
     if (ret < 0) {
         CLOGE("getBufferManager(SRC) fail, pipeId(%d), ret(%d)", pipeId_gsc, ret);
@@ -17370,6 +20764,7 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
     if (ret < 0) {
         CLOGW("wait and pop fail, ret(%d)", ret);
         /* TODO: doing exception handling */
+        isTimeOut = true;
         goto CLEAN;
     }
 
@@ -17377,6 +20772,11 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
         CLOGE("newFrame is NULL");
         goto CLEAN;
     }
+
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true && newFrame->getSyncType() == SYNC_TYPE_SYNC)
+        pipeId = PIPE_FUSION_REPROCESSING;
+#endif
 
     if (m_jpegCounter.getCount() <= 0) {
         CLOGD(" Picture canceled");
@@ -17400,7 +20800,6 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
     CLOGD("[LLS_MBR]-- Start Library --");
     m_timer.start();
     if (m_LLSpluginHandle != NULL) {
-        int totalCount = 0;
         UNI_PLUGIN_OPERATION_MODE opMode = UNI_PLUGIN_OP_END;
 
         int llsMode = m_parameters->getLDCaptureLLSValue();
@@ -17414,18 +20813,30 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
             case LLS_LEVEL_MULTI_MERGE_2:
             case LLS_LEVEL_MULTI_MERGE_INDICATOR_2:
             case LLS_LEVEL_MULTI_MERGE_INDICATOR_LOW_2:
+#ifdef SUPPORT_ZSL_MULTIFRAME
+            case LLS_LEVEL_MULTI_MERGE_LOW_2:
+            case LLS_LEVEL_MULTI_MERGE_ZSL_2:
+#endif
                 totalCount = 2;
                 opMode = UNI_PLUGIN_OP_COMPOSE_IMAGE;
                 break;
             case LLS_LEVEL_MULTI_MERGE_3:
             case LLS_LEVEL_MULTI_MERGE_INDICATOR_3:
             case LLS_LEVEL_MULTI_MERGE_INDICATOR_LOW_3:
+#ifdef SUPPORT_ZSL_MULTIFRAME
+            case LLS_LEVEL_MULTI_MERGE_LOW_3:
+            case LLS_LEVEL_MULTI_MERGE_ZSL_3:
+#endif
                 totalCount = 3;
                 opMode = UNI_PLUGIN_OP_COMPOSE_IMAGE;
                 break;
             case LLS_LEVEL_MULTI_MERGE_4:
             case LLS_LEVEL_MULTI_MERGE_INDICATOR_4:
             case LLS_LEVEL_MULTI_MERGE_INDICATOR_LOW_4:
+#ifdef SUPPORT_ZSL_MULTIFRAME
+            case LLS_LEVEL_MULTI_MERGE_LOW_4:
+            case LLS_LEVEL_MULTI_MERGE_ZSL_4:
+#endif
                 totalCount = 4;
                 opMode = UNI_PLUGIN_OP_COMPOSE_IMAGE;
                 break;
@@ -17442,7 +20853,7 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
                 opMode = UNI_PLUGIN_OP_SELECT_IMAGE;
                 break;
             default:
-                CLOGE("[LLS_MBR] Wrong LLS mode has been get!!");
+                CLOGE("[LLS_MBR] Wrong LLS mode has been get!! %d", llsMode);
                 goto CLEAN;
         }
 
@@ -17467,6 +20878,33 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
                 CLOGE("[LLS_MBR] LLS Plugin set UNI_PLUGIN_INDEX_OPERATION_MODE failed!!");
             }
 
+#if defined(SAMSUNG_DUAL_SOLUTION) && defined(SAMSUNG_HIFI_LLS)
+            UniPluginDualInfo_t dualInfo;
+            memset(&dualInfo, 0, sizeof(UniPluginDualInfo_t));
+
+            m_parameters->getHwPictureSize(&hwPictureW, &hwPictureH);
+            dualInfo.fullWidth = hwPictureW;
+            dualInfo.fullHeight = hwPictureH;
+
+            if (m_parameters->getDualCameraMode() == true) {
+                int masterCameraId, slaveCameraId;
+                getDualCameraId(&masterCameraId, &slaveCameraId);
+
+                dualInfo.isDual = m_parameters->getDualCameraMode();
+                dualInfo.mainSensorType = (UNI_PLUGIN_SENSOR_TYPE)getSensorId(masterCameraId);
+                dualInfo.auxSensorType = (UNI_PLUGIN_SENSOR_TYPE)getSensorId(slaveCameraId);
+            }
+
+            CLOGD("[LLS_MBR] UNI_PLUGIN_INDEX_DUAL_INFO(isDual:%d, full size:%dx%d, Sensor id:%d,%d)",
+                    dualInfo.isDual, dualInfo.fullWidth, dualInfo.fullHeight,
+                    (int)dualInfo.mainSensorType, (int)dualInfo.auxSensorType);
+
+            ret = uni_plugin_set(m_LLSpluginHandle,
+                llsPluginName, UNI_PLUGIN_INDEX_DUAL_INFO, &dualInfo);
+            if (ret < 0) {
+                CLOGE("[LLS_MBR] LLS Plugin set UNI_PLUGIN_INDEX_DUAL_INFO failed!! ret(%d)", ret);
+            }
+#endif
             UniPluginCameraInfo_t cameraInfo;
             cameraInfo.CameraType = (UNI_PLUGIN_CAMERA_TYPE)getCameraIdInternal();
             cameraInfo.SensorType = (UNI_PLUGIN_SENSOR_TYPE)m_cameraSensorId;
@@ -17486,7 +20924,7 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
                 memset(udm, 0x00, sizeof(struct camera2_udm));
                 newFrame->getUserDynamicMeta(udm);
 
-                extraData.brightnessValue.num = udm->ae.vendorSpecific[5];
+                extraData.brightnessValue.snum = (int)udm->ae.vendorSpecific[5];
                 extraData.brightnessValue.den = 256;
 
                 /* short shutter speed(us) */
@@ -17504,6 +20942,11 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
                 extraData.iso[1] = udm->ae.vendorSpecific[393];
                 extraData.DRCstrength = udm->ae.vendorSpecific[394];
 
+#ifdef SAMSUNG_HIFI_LLS
+                /* float zoomRatio */
+                extraData.zoomRatio = m_parameters->getZoomRatio();
+                CLOGD("[LLS_MBR] zoomRatio(%f)", extraData.zoomRatio);
+#endif
                 ret = uni_plugin_set(m_LLSpluginHandle,
                                      llsPluginName,
                                      UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO,
@@ -17513,25 +20956,126 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
 
                 delete udm;
             }
+
+#ifdef SAMSUNG_HIFI_LLS
+            ExynosRect2 detectedFace[NUM_OF_DETECTED_FACES];
+            memset(detectedFace, 0x00, sizeof(detectedFace));
+            memset(m_llsFaceInfo, 0x00, sizeof(m_llsFaceInfo));
+            m_llsFaceNum = 0;
+            m_parameters->getHwPreviewSize(&previewW, &previewH);
+
+            if (m_fdmeta_shot->shot.dm.stats.faceDetectMode != FACEDETECT_MODE_OFF) {
+                m_llsFaceNum = m_frameMetadata.number_of_faces;
+
+                if (getCameraIdInternal() == CAMERA_ID_FRONT
+                    && m_parameters->getFlipHorizontal() == true) {
+                    /* convert left, right values when flip horizontal(front camera) */
+                    for (int i = 0; i < m_llsFaceNum; i++) {
+                        if (m_fdmeta_shot->shot.dm.stats.faceIds[i]) {
+                            detectedFace[i].x1 = previewW - m_fdmeta_shot->shot.dm.stats.faceRectangles[i][2];
+                            detectedFace[i].y1 = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][1];
+                            detectedFace[i].x2 = previewW - m_fdmeta_shot->shot.dm.stats.faceRectangles[i][0];
+                            detectedFace[i].y2 = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][3];
+                        }
+                    }
+                } else {
+                    for (int i = 0; i < m_llsFaceNum; i++) {
+                        if (m_fdmeta_shot->shot.dm.stats.faceIds[i]) {
+                            detectedFace[i].x1 = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][0];
+                            detectedFace[i].y1 = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][1];
+                            detectedFace[i].x2 = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][2];
+                            detectedFace[i].y2 = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][3];
+                        }
+                    }
+                }
+            }
+
+            for (int i = 0; i < m_llsFaceNum; i++) {
+                m_llsFaceInfo[i].FaceROI.left   = m_calibratePosition(previewW, 2000, detectedFace[i].x1) - 1000;
+                m_llsFaceInfo[i].FaceROI.top    = m_calibratePosition(previewH, 2000, detectedFace[i].y1) - 1000;
+                m_llsFaceInfo[i].FaceROI.right  = m_calibratePosition(previewW, 2000, detectedFace[i].x2) - 1000;
+                m_llsFaceInfo[i].FaceROI.bottom = m_calibratePosition(previewH, 2000, detectedFace[i].y2) - 1000;
+            }
+#endif
         }
+
+#ifdef SAMSUNG_HIFI_LLS
+        ret = uni_plugin_set(m_LLSpluginHandle,
+                llsPluginName, UNI_PLUGIN_INDEX_FACE_NUM, &m_llsFaceNum);
+        if (ret < 0) {
+            CLOGE("[LLS_MBR] LLS Plugin set UNI_PLUGIN_INDEX_FACE_NUM failed!! ret(%d)", ret);
+            if (m_LDCaptureCount == totalCount) {
+                ret = uni_plugin_deinit(m_LLSpluginHandle);
+                if (ret < 0) {
+                    CLOGE("[LLS_MBR] LLS Plugin deinit failed!!");
+                }
+            }
+            goto POST_PROC;
+        }
+
+        ret = uni_plugin_set(m_LLSpluginHandle,
+                llsPluginName, UNI_PLUGIN_INDEX_FACE_INFO, &m_llsFaceInfo);
+        if (ret < 0) {
+            CLOGE("[LLS_MBR] LLS Plugin set UNI_PLUGIN_INDEX_FACE_INFO failed!! ret(%d)", ret);
+            if (m_LDCaptureCount == totalCount) {
+                ret = uni_plugin_deinit(m_LLSpluginHandle);
+                if (ret < 0) {
+                    CLOGE("[LLS_MBR] LLS Plugin deinit failed!!");
+                }
+            }
+            goto POST_PROC;
+        }
+#endif
 
         UniPluginBufferData_t pluginData;
         memset(&pluginData, 0, sizeof(UniPluginBufferData_t));
+#ifdef SAMSUNG_HIFI_LLS
+        m_parameters->getHwPictureSize(&hwPictureW, &hwPictureH);
+#endif
         m_parameters->getPictureSize(&pictureW, &pictureH);
+
+#ifdef SAMSUNG_HIFI_LLS
+        camera2_stream *shot_stream = NULL;
+        shot_stream = (camera2_stream *)gscReprocessingBuffer.addr[gscReprocessingBuffer.getMetaPlaneIndex()];
+        ExynosRect cropPicture;
+        cropPicture.w = shot_stream->output_crop_region[2];
+        cropPicture.h = shot_stream->output_crop_region[3];
+        CLOGD("[LLS_MBR] Input width: %d, height: %d", cropPicture.w, cropPicture.h);
+
+        pluginData.InBuffY = gscReprocessingBuffer.addr[0];
+        pluginData.InBuffU = gscReprocessingBuffer.addr[0] + (cropPicture.w * cropPicture.h);
+        pluginData.InWidth = cropPicture.w;
+        pluginData.InHeight = cropPicture.h;
+#ifdef SAMSUNG_DUAL_SOLUTION
+        pluginData.FOV.left = 0;
+        pluginData.FOV.top = 0;
+        pluginData.FOV.right = cropPicture.w;
+        pluginData.FOV.bottom = cropPicture.h;
+#endif
+        pluginData.InBuffFd[UNI_PLUGIN_BUFFER_PLANE_Y] = gscReprocessingBuffer.fd[0];
+        pluginData.InBuffFd[UNI_PLUGIN_BUFFER_PLANE_U] = -1;
+        pluginData.OutBuffY = gscReprocessingBuffer.addr[0];
+        pluginData.OutBuffU = gscReprocessingBuffer.addr[0] + (pictureW * pictureH);
+        pluginData.OutWidth = pictureW;
+        pluginData.OutHeight = pictureH;
+#else
         pluginData.InBuffY = gscReprocessingBuffer.addr[0];
         pluginData.InBuffU = gscReprocessingBuffer.addr[0] + (pictureW * pictureH);
         pluginData.InWidth = pictureW;
         pluginData.InHeight = pictureH;
+#endif
         pluginData.InFormat = UNI_PLUGIN_FORMAT_NV21;
 #if 0
         char filePath[100] = {'\0',};
         sprintf(filePath, "/data/media/0/LLS_input_%d.yuv", m_LDCaptureCount);
         dumpToFile((char *)filePath,
                 gscReprocessingBuffer.addr[0],
-                (pictureW * pictureH * 3) / 2);
+                (pluginData.InWidth * pluginData.InHeight * 3) / 2);
 #endif
-        CLOGD("[LLS_MBR] Set buffer info, Width: %d, Height: %d",
+        CLOGD("[LLS_MBR] Set input  buffer info, Width: %d, Height: %d",
                 pluginData.InWidth, pluginData.InHeight);
+        CLOGD("[LLS_MBR] Set output buffer info, Width: %d, Height: %d",
+                pluginData.OutWidth, pluginData.OutHeight);
         ret = uni_plugin_set(m_LLSpluginHandle,
                 llsPluginName, UNI_PLUGIN_INDEX_BUFFER_INFO, &pluginData);
         if (ret < 0) {
@@ -17547,6 +21091,27 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
 
         /* Last shot */
         if (m_LDCaptureCount == totalCount) {
+            if (m_parameters->getMotionPhotoOn() &&
+                m_parameters->msgTypeEnabled(CAMERA_MSG_COMPRESSED_IMAGE_NOTIFY)) {
+                camera_memory_t *dummyCallbackHeap = m_getMemoryCb(-1, 0, 1, m_callbackCookie);
+                if (dummyCallbackHeap == NULL) {
+                    CLOGE("m_getMemoryCb fail");
+                } else {
+                    memset(&m_Metadata, 0, sizeof(camera_frame_metadata_t));
+#ifdef SAMSUNG_TN_FEATURE
+#ifdef SAMSUNG_TIMESTAMP_BOOT
+                    m_Metadata.timestamp = newFrame->getTimeStampBoot();
+#else
+                    m_Metadata.timestamp = newFrame->getTimeStamp();
+#endif
+                    CLOGV(" timestamp:%lldms!", (long long)m_Metadata.timestamp);
+#endif
+                    setBit(&m_callbackState, CALLBACK_STATE_COMPRESSED_IMAGE, true);
+                    m_dataCb(CAMERA_MSG_COMPRESSED_IMAGE_NOTIFY, dummyCallbackHeap, 0, &m_Metadata, m_callbackCookie);
+                    clearBit(&m_callbackState, CALLBACK_STATE_COMPRESSED_IMAGE, true);
+                    dummyCallbackHeap->release(dummyCallbackHeap);
+                }
+            }
             ret = uni_plugin_process(m_LLSpluginHandle);
             if (ret < 0) {
                 CLOGE("[LLS_MBR] LLS Plugin process failed!!");
@@ -17571,7 +21136,7 @@ bool ExynosCamera::m_LDCaptureThreadFunc(void)
     }
     m_timer.stop();
     durationTime = m_timer.durationMsecs();
-    CLOGD("[LLS_MBR]duration time(%5d msec)", (int)durationTime);
+    CLOGD("[LLS_MBR]duration time(%5d msec) %d/%d", (int)durationTime, m_LDCaptureCount, totalCount);
     CLOGD("[LLS_MBR]-- end Library --");
 
 POST_PROC:
@@ -17594,34 +21159,27 @@ POST_PROC:
 
     for (int i = 0; i < m_parameters->getLDCaptureCount() - 1; i++) {
         /* put GSC 1st buffer */
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true) {
+            /* HACK */
+            bufferMgr = (ExynosCameraBufferManager *)gscReprocessingBuffer.manager;
+        }
+#endif
         ret = m_putBuffers(bufferMgr, m_LDBufIndex[i]);
         if (ret < 0) {
             CLOGE("bufferMgr->putBuffers() fail, pipeId(%d), ret(%d)",
-                     pipeId_gsc, ret);
+                    pipeId_gsc, ret);
         }
     }
 
 CLEAN:
-    int waitCount = 25;
-    if (m_LDCaptureCount == m_parameters->getLDCaptureCount()) {
-        waitCount = 0;
-    }
+    if (!isTimeOut && m_parameters->getLDCaptureCount() > m_LDCaptureCount) {
+        CLOGD("[LLS_MBR]m_LDCaptureThread thread will run again. "\
+                "m_LDCaptureQ size(%d), totalCount(%d), curCount(%d)",
+                m_LDCaptureQ->getSizeOfProcessQ(), m_parameters->getLDCaptureCount(), m_LDCaptureCount);
 
-    while (m_LDCaptureQ->getSizeOfProcessQ() == 0 && 0 < waitCount) {
-        usleep(10000);
-        waitCount--;
-    }
-
-    if (m_LDCaptureQ->getSizeOfProcessQ()) {
-        CLOGD("[LLS_MBR]m_LDCaptureThread thread will run again. m_LDCaptureQ size(%d)",
-                m_LDCaptureQ->getSizeOfProcessQ());
         loop = true;
     }
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-    if (m_fusionBufferMgr != NULL) {
-        m_fusionBufferMgr->deinit();
-    }
-#endif
 
     return loop;
 }
@@ -17630,12 +21188,27 @@ CLEAN:
 
 #ifdef DEBUG_IQ_OSD
 void ExynosCamera::printOSD(char *Y, char *UV, struct camera2_shot_ext *meta_shot_ext)
-{  
+{
+#ifdef SAMSUNG_LIVE_OUTFOCUS
+    if (m_parameters->getShotMode() == SHOT_MODE_LIVE_OUTFOCUS && getCameraId() == CAMERA_ID_BACK_0) {
+        return;
+    }
+#endif
+#ifdef SAMSUNG_UNI_API
     if (isOSDMode == 1 && m_parameters->getIntelligentMode() != 1) {
-        int HwPreviewW = 0, HwPreviewH = 0;
-        m_parameters->getHwPreviewSize(&HwPreviewW, &HwPreviewH);
-
-        uni_toast_init(200, 200, HwPreviewW, HwPreviewH, 13);
+        int previewW = 0, previewH = 0;
+#ifdef SAMSUNG_DUAL_SOLUTION
+        m_parameters->getPreviewSize(&previewW, &previewH);
+#ifdef SUPPORT_SW_VDIS
+        if (m_parameters->isSWVdisMode() && (m_swVDIS_ModeDual || getCameraId() == CAMERA_ID_FRONT)) {
+            previewW = m_swVDIS_InW;
+            previewH = m_swVDIS_InH;
+        }
+#endif
+#else
+        m_parameters->getHwPreviewSize(&previewW, &previewH);
+#endif
+        uni_toast_init(200, 200, previewW, previewH, 13);
         short *ae_meta_short = (short *)meta_shot_ext->shot.udm.ae.vendorSpecific;
         double sv = (int32_t)meta_shot_ext->shot.udm.ae.vendorSpecific[3] / 256.0;
         double short_d_gain = meta_shot_ext->shot.udm.ae.vendorSpecific[99] / 256.0;
@@ -17663,8 +21236,408 @@ void ExynosCamera::printOSD(char *Y, char *UV, struct camera2_shot_ext *meta_sho
         if (Y != NULL && UV != NULL) {
             uni_toast_print(Y, UV, getCameraId());
         }
-    }    
+    }
+#endif
 }
+#endif
+
+#ifdef SAMSUNG_STR_CAPTURE
+status_t ExynosCamera::m_processSTRCapture(char *buffer, char *dst_buffer)
+{
+    status_t ret = NO_ERROR;
+
+    if (m_STRCapturePluginHandle == NULL) {
+        CLOGD("[STR_CAPTURE](%s[%d]): handle is NULL!!", __FUNCTION__, __LINE__);
+        return INVALID_OPERATION;
+    }
+
+    UniPluginBufferData_t bufferInfo;
+    UniPluginExtraBufferInfo_t extraData;
+    UniPluginCameraInfo_t cameraInfo;
+    UniPluginFaceInfo_t faceInfo[NUM_OF_DETECTED_FACES];
+    uint32_t faceNum = m_frameMetadata.number_of_faces;
+    uint32_t hdrData = 0;
+    uint32_t flashData = 0;
+    int picture_w = 0 , picture_h = 0;
+    int preview_w = 0 , preview_h = 0;
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+
+    if (faceNum == 0)
+        return INVALID_OPERATION;
+
+    m_parameters->getPictureSize(&picture_w, &picture_h);
+    m_parameters->getPreviewSize(&preview_w, &preview_h);
+
+    /* Set face Info */
+    memset(faceInfo, 0x00, sizeof(faceInfo));
+    if (m_fdmeta_shot->shot.dm.stats.faceDetectMode != FACEDETECT_MODE_OFF) {
+        if (m_parameters->getFlipHorizontal() == false) {
+            for (int i = 0; i < faceNum; i++) {
+                if (m_fdmeta_shot->shot.dm.stats.faceIds[i]) {
+                    faceInfo[i].FaceROI.left    = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][0];
+                    faceInfo[i].FaceROI.top     = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][1];
+                    faceInfo[i].FaceROI.right   = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][2];
+                    faceInfo[i].FaceROI.bottom  = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][3];
+                }
+            }
+        } else {
+            /* convert left, right values when flip horizontal */
+            for (int i = 0; i < faceNum; i++) {
+                if (m_fdmeta_shot->shot.dm.stats.faceIds[i]) {
+                    faceInfo[i].FaceROI.left    = preview_w - m_fdmeta_shot->shot.dm.stats.faceRectangles[i][2];
+                    faceInfo[i].FaceROI.top     = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][1];
+                    faceInfo[i].FaceROI.right   = preview_w - m_fdmeta_shot->shot.dm.stats.faceRectangles[i][0];
+                    faceInfo[i].FaceROI.bottom  = m_fdmeta_shot->shot.dm.stats.faceRectangles[i][3];
+                 }
+            }
+        }
+    }
+
+    /* Set buffer info */
+    memset(&bufferInfo, 0, sizeof(UniPluginBufferData_t));
+    bufferInfo.InBuffY = buffer;
+    bufferInfo.InBuffU = buffer + picture_w * picture_h;
+    bufferInfo.InWidth = picture_w;
+    bufferInfo.InHeight = picture_h;
+    bufferInfo.InFormat = UNI_PLUGIN_FORMAT_NV21;
+    bufferInfo.OutBuffY = dst_buffer;
+    bufferInfo.OutBuffU = dst_buffer + picture_w * picture_h;
+    bufferInfo.OutWidth = preview_w;  //STR Solution need preview info
+    bufferInfo.OutHeight = preview_h;
+
+    /* Set extraData Info */
+    memset(&extraData, 0, sizeof(UniPluginExtraBufferInfo_t));
+    extraData.orientation = m_getUniOrientationMode();
+
+    /* convert orientation value when flip horizontal */
+    if (m_parameters->getFlipHorizontal()) {
+        switch (m_getUniOrientationMode()) {
+            case UNI_PLUGIN_ORIENTATION_90:
+                extraData.orientation = UNI_PLUGIN_ORIENTATION_270;
+                break;
+            case UNI_PLUGIN_ORIENTATION_270:
+                extraData.orientation = UNI_PLUGIN_ORIENTATION_90;
+                break;
+            default:
+                break;
+        }
+    }
+
+    /* Set camera Info */
+    memset(&cameraInfo, 0, sizeof(UniPluginCameraInfo_t));
+    cameraInfo.CameraType = (UNI_PLUGIN_CAMERA_TYPE)getCameraId();
+
+    hdrData = m_getUniHDRMode();
+    flashData = m_getUniFlashMode();
+
+    ret = uni_plugin_set(m_STRCapturePluginHandle,
+            STR_CAPTURE_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &bufferInfo);
+    if (ret < 0) {
+        CLOGE("[STR_CAPTURE](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_BUFFER_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRCapturePluginHandle,
+            STR_CAPTURE_PLUGIN_NAME, UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO, &extraData);
+    if (ret < 0) {
+        CLOGE("[STR_CAPTURE](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_CAMERA_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRCapturePluginHandle,
+            STR_CAPTURE_PLUGIN_NAME, UNI_PLUGIN_INDEX_CAMERA_INFO, &cameraInfo);
+    if (ret < 0) {
+        CLOGE("[STR_CAPTURE](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_CAMERA_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRCapturePluginHandle,
+            STR_CAPTURE_PLUGIN_NAME, UNI_PLUGIN_INDEX_FACE_NUM, &faceNum);
+    if (ret < 0) {
+        CLOGE("[STR_CAPTURE](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_FACE_NUM) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRCapturePluginHandle,
+            STR_CAPTURE_PLUGIN_NAME, UNI_PLUGIN_INDEX_FACE_INFO, &faceInfo);
+    if (ret < 0) {
+        CLOGE("[STR_CAPTURE](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_FACE_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRCapturePluginHandle,
+            STR_CAPTURE_PLUGIN_NAME, UNI_PLUGIN_INDEX_HDR_INFO, &hdrData);
+    if (ret < 0) {
+        CLOGE("[STR_CAPTURE](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_HDR_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRCapturePluginHandle,
+            STR_CAPTURE_PLUGIN_NAME, UNI_PLUGIN_INDEX_FLASH_INFO, &flashData);
+    if (ret < 0) {
+        CLOGE("[STR_CAPTURE](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_FLASH_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+
+    /* Start processing */
+    m_timer.start();
+    ret = uni_plugin_process(m_STRCapturePluginHandle);
+    if (ret < 0) {
+        CLOGE("[STR_CAPTURE](%s[%d]): STR Capture plugin process failed!!", __FUNCTION__, __LINE__);
+        ret = INVALID_OPERATION;
+    }
+
+    UTstr debugData;
+    debugData.data = new unsigned char[STR_EXIF_SIZE];
+    memset(debugData.data, 0, sizeof(debugData));
+    ret = uni_plugin_get(m_STRCapturePluginHandle,
+        STR_CAPTURE_PLUGIN_NAME, UNI_PLUGIN_INDEX_DEBUG_INFO, &debugData);
+    if (ret < 0) {
+        CLOGE("[STR_CAPTURE](%s[%d]): get debug info failed!!", __FUNCTION__, __LINE__);
+    }
+
+    CLOGD("[STR_CAPTURE](%s[%d]): Debug buffer size: %d", __FUNCTION__, __LINE__, debugData.size);
+    if (debugData.size <= STR_EXIF_SIZE) {
+        CLOGD("[STR_CAPTURE] debugData.data = %s", debugData.data);
+        m_parameters->setSTRdebugInfo(debugData.data, debugData.size);
+    }
+
+    if (debugData.data != NULL)
+        delete []debugData.data;
+
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+    CLOGD("[STR_CAPTURE]duration time(%5d msec)", (int)durationTime);
+
+    return ret;
+}
+#endif
+
+#ifdef SAMSUNG_STR_PREVIEW
+status_t ExynosCamera::m_processSTRPreview(char *Y, char *UV, struct camera2_shot_ext *meta_shot_ext)
+{
+    status_t ret = NO_ERROR;
+    UniPluginBufferData_t bufferInfo;
+    UniPluginExtraBufferInfo_t extraData;
+    UniPluginCameraInfo_t cameraInfo;
+    UniPluginFaceInfo_t faceInfo[NUM_OF_DETECTED_FACES];
+    uint32_t faceNum = 0;
+    uint32_t hdrData = 0;
+    uint32_t flashData = 0;
+    int preview_w = 0 , preview_h = 0;
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+
+    /* Set face Info */
+    if (meta_shot_ext->shot.dm.stats.faceDetectMode != FACEDETECT_MODE_OFF) {
+        for (int i = 0; i < NUM_OF_DETECTED_FACES; i++) {
+            if (meta_shot_ext->shot.dm.stats.faceIds[i]) {
+                faceInfo[i].FaceROI.left    = meta_shot_ext->shot.dm.stats.faceRectangles[i][0];
+                faceInfo[i].FaceROI.top     = meta_shot_ext->shot.dm.stats.faceRectangles[i][1];
+                faceInfo[i].FaceROI.right   = meta_shot_ext->shot.dm.stats.faceRectangles[i][2];
+                faceInfo[i].FaceROI.bottom  = meta_shot_ext->shot.dm.stats.faceRectangles[i][3];
+                faceNum++;
+            }
+        }
+    }
+
+    if (faceNum == 0)
+        return INVALID_OPERATION;
+
+    /* Set buffer Info */
+    m_parameters->getPreviewSize(&preview_w, &preview_h);
+    bufferInfo.InBuffY = Y;
+    bufferInfo.InBuffU = UV;
+    bufferInfo.InWidth = preview_w;
+    bufferInfo.InHeight= preview_h;
+    bufferInfo.InFormat = UNI_PLUGIN_FORMAT_NV21;
+    bufferInfo.OutBuffY = Y;
+    bufferInfo.OutBuffU = UV;
+    bufferInfo.OutWidth = preview_w;
+    bufferInfo.OutHeight= preview_h;
+
+    /* Set extraData Info */
+    memset(&extraData, 0, sizeof(UniPluginExtraBufferInfo_t));
+    extraData.orientation = m_getUniOrientationMode();
+
+    /* Set camera Info */
+    memset(&cameraInfo, 0, sizeof(UniPluginCameraInfo_t));
+    cameraInfo.CameraType = (UNI_PLUGIN_CAMERA_TYPE)getCameraId();
+
+    hdrData = m_getUniHDRMode();
+    flashData = m_getUniFlashMode();
+
+    ret = uni_plugin_set(m_STRPreviewPluginHandle,
+            STR_PREVIEW_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &bufferInfo);
+    if (ret < 0) {
+        CLOGE("[STR_PREVIEW](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_BUFFER_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRPreviewPluginHandle,
+            STR_PREVIEW_PLUGIN_NAME, UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO, &extraData);
+    if (ret < 0) {
+        CLOGE("[STR_PREVIEW](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_CAMERA_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRPreviewPluginHandle,
+            STR_PREVIEW_PLUGIN_NAME, UNI_PLUGIN_INDEX_CAMERA_INFO, &cameraInfo);
+    if (ret < 0) {
+        CLOGE("[STR_PREVIEW](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_CAMERA_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRPreviewPluginHandle,
+            STR_PREVIEW_PLUGIN_NAME, UNI_PLUGIN_INDEX_FACE_NUM, &faceNum);
+    if (ret < 0) {
+        CLOGE("[STR_PREVIEW](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_FACE_NUM) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRPreviewPluginHandle,
+            STR_PREVIEW_PLUGIN_NAME, UNI_PLUGIN_INDEX_FACE_INFO, &faceInfo);
+    if (ret < 0) {
+        CLOGE("[STR_PREVIEW](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_FACE_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRPreviewPluginHandle,
+            STR_PREVIEW_PLUGIN_NAME, UNI_PLUGIN_INDEX_HDR_INFO, &hdrData);
+    if (ret < 0) {
+        CLOGE("[STR_PREVIEW](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_HDR_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+    ret = uni_plugin_set(m_STRPreviewPluginHandle,
+            STR_PREVIEW_PLUGIN_NAME, UNI_PLUGIN_INDEX_FLASH_INFO, &flashData);
+    if (ret < 0) {
+        CLOGE("[STR_PREVIEW](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_FLASH_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+/*
+    CLOGD("[STR_PREVIEW] w(%d) h(%d)", preview_w, preview_h);
+    CLOGD("[STR_PREVIEW] Y(%p) UV(%p)", Y, UV);
+    CLOGD("[STR_PREVIEW] rotaition(%d)", extraData.orientation);
+    CLOGD("[STR_PREVIEW] camera id(%d)", getCameraId());
+    CLOGD("[STR_PREVIEW] face num(%d)", faceNum);
+    CLOGD("[STR_PREVIEW] hdr mode(%d)", hdrData);
+    CLOGD("[STR_PREVIEW] flash mode(%d)", flashData);
+*/
+    /* Start processing */
+    m_timer.start();
+    ret = uni_plugin_process(m_STRPreviewPluginHandle);
+    if (ret < 0) {
+        ALOGE("[STR_PREVIEW](%s[%d]): STR Preview plugin process failed!!", __FUNCTION__, __LINE__);
+        ret = INVALID_OPERATION;
+    }
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+    /* CLOGD("[STR_PREVIEW]duration time(%5d msec)", (int)durationTime); */
+
+    return ret;
+}
+#endif
+
+#ifdef SUPPORT_DEPTH_MAP
+#ifdef SAMSUNG_FOCUS_PEAKING
+void ExynosCamera::m_enableDepthMap(void)
+{
+    m_previewFrameFactory->setRequest(PIPE_VC1, true);
+    m_parameters->setDepthCallbackOnPreview(true);
+    m_flagFocusPeakingStarted = false;
+    CLOGD("[FocusPeaking] Enable depth callback on preview ");
+}
+void ExynosCamera::m_disableDepthMap(void)
+{
+    m_previewFrameFactory->setRequest(PIPE_VC1, false);
+    m_parameters->setDepthCallbackOnPreview(false);
+    m_flagFocusPeakingStarted = false;
+    CLOGD("[FocusPeaking] disable depth callback on preview ");
+}
+void ExynosCamera::m_processFocusPeaking(char *Y, char *UV, ExynosCameraFrameSP_sptr_t frame)
+{
+    status_t ret = NO_ERROR;
+    UniPluginBufferData_t bufferInfo;
+    UniPluginBufferData_t depthMapInfo;
+    UniPluginExtraBufferInfo_t extraInfo;
+    ExynosCameraBuffer depthMapBuffer;
+    depthMapBuffer.index = -2;
+    int preview_w = 0 , preview_h = 0;
+    int depthW = 0, depthH = 0;
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+
+    if (m_depthCallbackQ->getSizeOfProcessQ() > 0) {
+        ret = m_depthCallbackQ->waitAndPopProcessQ(&depthMapBuffer);
+        CLOGD("[FocusPeaking] pop depthBuffer (%d)", depthMapBuffer.index);
+
+        if (ret != NO_ERROR) {
+            CLOGE("[FocusPeaking] Failed to get DepthMap buffer");
+            if (ret == TIMED_OUT) {
+                /* Face Detection time out is not meaningful */
+                CLOGE("m_depthCallbackQ time out, status(%d)", ret);
+            }
+        } else {
+            if (m_flagFocusPeakingStarted == false) {
+                /* the first frame with a valid depthmap info becomes the starting point of focus peaking. */
+                if (depthMapBuffer.index >= 0 && depthMapBuffer.addr[0] != NULL)
+                    m_flagFocusPeakingStarted = true;
+            }
+        }
+    }
+
+    if (m_flagFocusPeakingStarted == false) {
+        CLOGD("[FocusPeaking] m_flagFocusPeakingStarted false (%d)", depthMapBuffer.index);
+        return;
+    }
+
+    /* set depthMap Info : If depthMap info is invaild, do not set it. */
+    if (depthMapBuffer.index >= 0 && depthMapBuffer.addr[0] != NULL) {
+        m_parameters->getDepthMapSize(&depthW, &depthH);
+
+        memset(&depthMapInfo, 0, sizeof(UniPluginBufferData_t));
+        depthMapInfo.bufferType = UNI_PLUGIN_BUFFER_TYPE_DEPTHMAP;
+        depthMapInfo.InBuffY = depthMapBuffer.addr[0];
+        depthMapInfo.InWidth = depthW;
+        depthMapInfo.InHeight= depthH;
+        depthMapInfo.InFormat = UNI_PLUGIN_FORMAT_RAW10;
+
+        ret = uni_plugin_set(m_FocusPeakingPluginHandle,
+                FOCUS_PEAKING_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &depthMapInfo);
+        if (ret < 0) {
+            CLOGE("[FocusPeaking](%s[%d]): Plugin set DepthMap (UNI_PLUGIN_INDEX_BUFFER_INFO) failed!!", __FUNCTION__, __LINE__);
+        }
+    } else {
+        CLOGD("[FocusPeaking] not use depthMap(%d)", depthMapBuffer.index);
+    }
+
+    /* set buffer Info */
+    memset(&bufferInfo, 0, sizeof(UniPluginBufferData_t));
+    bufferInfo.bufferType = UNI_PLUGIN_BUFFER_TYPE_PREVIEW;
+    m_parameters->getPreviewSize(&preview_w, &preview_h);
+    bufferInfo.InBuffY = Y;
+    bufferInfo.InBuffU = UV;
+    bufferInfo.InWidth = preview_w;
+    bufferInfo.InHeight= preview_h;
+    bufferInfo.InFormat = UNI_PLUGIN_FORMAT_NV21;
+    bufferInfo.OutBuffY = Y;
+    bufferInfo.OutBuffU = UV;
+    bufferInfo.OutWidth = preview_w;
+    bufferInfo.OutHeight= preview_h;
+
+    ret = uni_plugin_set(m_FocusPeakingPluginHandle,
+            FOCUS_PEAKING_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &bufferInfo);
+    if (ret < 0) {
+        CLOGE("[FocusPeaking](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_BUFFER_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+
+    /* set zoom Info */
+    memset(&extraInfo, 0, sizeof(UniPluginExtraBufferInfo_t));
+    extraInfo.zoomRatio = m_parameters->getZoomRatio();
+
+    ret = uni_plugin_set(m_FocusPeakingPluginHandle,
+            FOCUS_PEAKING_PLUGIN_NAME, UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO, &extraInfo);
+    if (ret < 0) {
+        CLOGE("[FocusPeaking](%s[%d]): Plugin set zoomInfo (UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+
+    /* Start processing */
+    m_timer.start();
+    ret = uni_plugin_process(m_FocusPeakingPluginHandle);
+    if (ret < 0) {
+        ALOGE("[FocusPeaking](%s[%d]): FocusPeaking plugin process failed!!", __FUNCTION__, __LINE__);
+        ret = INVALID_OPERATION;
+    }
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+
+    CLOGD("[FocusPeaking] duration time(%5d msec) (%d)", (int)durationTime, depthMapBuffer.index);
+
+CLEAN:
+    if (depthMapBuffer.index >= 0) {
+        ret = m_putBuffers(m_depthMapBufferMgr, depthMapBuffer.index);
+        if (ret != NO_ERROR) {
+            CLOGE("Failed to put DepthMap buffer to bufferMgr");
+        }
+    }
+}
+#endif
 #endif
 
 #ifdef SAMSUNG_LENS_DC
@@ -17755,6 +21728,11 @@ void ExynosCamera::m_setLensDCMap(void)
         lensDCIndex = 15;
         map[0] = thirdmap9_x;
         map[1] = thirdmap9_y;
+    } else if (pictureW == 4032 && pictureH == 1960) {
+        skipLensDC = false;
+        lensDCIndex = 16;
+        map[0] = map7_x;
+        map[1] = map7_y;
     } else {
         skipLensDC = true;
         lensDCIndex = 0;
@@ -17791,7 +21769,7 @@ void ExynosCamera::m_setLensDCMap(void)
             }
 
             ret = uni_plugin_set(m_DCpluginHandle,
-                                    LDC_PLUGIN_NAME, UNI_PLUGIN_INDEX_PRIV_INFO, &pluginPrivInfo);                
+                                    LDC_PLUGIN_NAME, UNI_PLUGIN_INDEX_PRIV_INFO, &pluginPrivInfo);
             if (ret < 0) {
                 CLOGE("[DC] Plugin set(UNI_PLUGIN_INDEX_DISTORTION_INFO) failed!!");
             }
@@ -17805,6 +21783,102 @@ void ExynosCamera::m_setLensDCMap(void)
 
     m_skipLensDC = skipLensDC;
     m_LensDCIndex = lensDCIndex;
+}
+#endif
+
+#ifdef SAMSUNG_IDDQD
+void ExynosCamera::m_processIDDQD(char *Y, char *UV, int size, struct camera2_shot_ext *meta_shot_ext)
+{
+    status_t ret = NO_ERROR;
+    UniPluginBufferData_t bufferInfo;
+    UniPluginExtraBufferInfo_t extraData;
+    UniPluginPrivInfo_t privInfo;
+    gyroEvent_t gyroInfo;
+    int preview_w = 0 , preview_h = 0;
+    ExynosCameraDurationTimer m_timer;
+    long long durationTime = 0;
+
+    /* set buffer Info */
+    memset(&bufferInfo, 0, sizeof(UniPluginBufferData_t));
+    bufferInfo.bufferType = UNI_PLUGIN_BUFFER_TYPE_PREVIEW;
+    m_parameters->getPreviewSize(&preview_w, &preview_h);
+    bufferInfo.InBuffY = Y;
+    bufferInfo.InBuffU = UV;
+    bufferInfo.InWidth = preview_w;
+    bufferInfo.InHeight= preview_h;
+    bufferInfo.InFormat = UNI_PLUGIN_FORMAT_NV21;
+    bufferInfo.Size = size;
+    bufferInfo.CameraType = (UNI_PLUGIN_CAMERA_TYPE)getCameraIdInternal();
+    CLOGV("[IDDQD] prieviewSize %d x %d, size %d, CameraType %d",
+        bufferInfo.InWidth, bufferInfo.InHeight, bufferInfo.Size, bufferInfo.CameraType);
+    ret = uni_plugin_set(m_IDDQDPluginHandle,
+            IDDQD_PLUGIN_NAME, UNI_PLUGIN_INDEX_BUFFER_INFO, &bufferInfo);
+    if (ret < 0) {
+        CLOGE("[IDDQD](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_BUFFER_INFO) failed!!", __FUNCTION__, __LINE__);
+    	return;
+    }
+
+    /* Set extraData Info */
+    memset(&extraData, 0, sizeof(UniPluginExtraBufferInfo_t));
+    extraData.zoomLevel = (UNI_PLUGIN_ZOOMLEVEL)m_parameters->getZoomLevel();
+    extraData.brightnessValue.snum = meta_shot_ext->shot.udm.ae.vendorSpecific[5];
+    extraData.brightnessValue.den = 256;
+    extraData.iso[0] = meta_shot_ext->shot.udm.ae.vendorSpecific[391]; // short ISO
+    extraData.iso[1] = meta_shot_ext->shot.udm.ae.vendorSpecific[393]; // Long ISO
+    extraData.CameraType = (UNI_PLUGIN_CAMERA_TYPE)getCameraIdInternal();
+    CLOGV("[IDDQD] zoomLevel %d, BV snum %d, BV den %d, CameraType %d",
+        extraData.zoomLevel, extraData.brightnessValue.snum, extraData.brightnessValue.den, extraData.CameraType);    
+    ret = uni_plugin_set(m_IDDQDPluginHandle,
+            IDDQD_PLUGIN_NAME, UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO, &extraData);
+    if (ret < 0) {
+        CLOGE("[IDDQD](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_EXTRA_BUFFER_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+
+    /* Set priv Info */
+    memset(&privInfo, 0, sizeof(UniPluginPrivInfo_t));
+    privInfo.priv[0] = meta_shot_ext->shot.udm.ae.vendorSpecific;
+    ret = uni_plugin_set(m_IDDQDPluginHandle,
+            IDDQD_PLUGIN_NAME, UNI_PLUGIN_INDEX_PRIV_INFO, &privInfo);
+    if (ret < 0) {
+        CLOGE("[IDDQD](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_PRIV_INFO) failed!!", __FUNCTION__, __LINE__);
+    }
+
+    /* Set gyro Info */
+    gyroInfo = m_gyroListenerData.gyro;
+    CLOGV("[IDDQD] gyro %f, %f, %f ", gyroInfo.x, gyroInfo.y, gyroInfo.z);
+    ret = uni_plugin_set(m_IDDQDPluginHandle,
+            IDDQD_PLUGIN_NAME, UNI_PLUGIN_INDEX_SENSOR_DATA, &gyroInfo);
+    if (ret < 0) {
+        CLOGE("[IDDQD](%s[%d]): Plugin set(UNI_PLUGIN_INDEX_SENSOR_DATA) failed!!", __FUNCTION__, __LINE__);
+    }
+
+    /* Start processing */
+    m_timer.start();
+    ret = uni_plugin_process(m_IDDQDPluginHandle);
+    if (ret < 0) {
+        ALOGE("[IDDQD](%s[%d]): IDDQD plugin process failed!!", __FUNCTION__, __LINE__);
+        ret = INVALID_OPERATION;
+    }
+
+    UTstr debugData; 
+    unsigned char IDDQDbuf[10]; 
+    debugData.data = IDDQDbuf; 
+    debugData.size = 10; 
+    ret = uni_plugin_get(m_IDDQDPluginHandle,
+            IDDQD_PLUGIN_NAME, UNI_PLUGIN_INDEX_DEBUG_INFO, &debugData);
+    if (ret < 0) {
+        CLOGE("[IDDQD](%s[%d]): get debug info failed!!", __FUNCTION__, __LINE__);
+    }
+
+    if (debugData.data[0] != '0') 
+        CLOGV("[IDDQD](%s[%d]): DIRT=%c", __FUNCTION__, __LINE__, debugData.data[0]); 
+
+    m_lens_dirty_detected = debugData.data[0] - '0';
+
+    m_timer.stop();
+    durationTime = m_timer.durationMsecs();
+
+    CLOGD("[IDDQD] duration time(%5d msec)", (int)durationTime);
 }
 #endif
 
@@ -17950,21 +22024,21 @@ status_t ExynosCamera::m_processODC(ExynosCameraFrameSP_sptr_t newFrame)
     }
 
     /* replace MCSC1 buffer by ODC processed buffer */
-    ret = newFrame->setDstBufferState(pipeId_scc, ENTITY_BUFFER_STATE_REQUESTED,
+    newFrame->setDstBufferState(pipeId_scc, ENTITY_BUFFER_STATE_REQUESTED,
                                     m_reprocessingFrameFactory->getNodeType(processedBufferPos));
     if (ret < NO_ERROR) {
         CLOGE("Failed to getDstBuffer for MCSC3. pipeId %d ret %d", pipeId_scc, ret);
         return ret;
     }
 
-    ret = newFrame->setDstBuffer(pipeId_scc, odcReprocessedBuffer,
+    newFrame->setDstBuffer(pipeId_scc, odcReprocessedBuffer,
                                     m_reprocessingFrameFactory->getNodeType(processedBufferPos));
     if (ret < NO_ERROR) {
         CLOGE("Failed to set processed buffer to MCSC3. pipeId %d ret %d", pipeId_scc, ret);
         return ret;
     }
 
-    ret = newFrame->setDstBufferState(pipeId_scc, ENTITY_BUFFER_STATE_COMPLETE,
+    newFrame->setDstBufferState(pipeId_scc, ENTITY_BUFFER_STATE_COMPLETE,
                                     m_reprocessingFrameFactory->getNodeType(processedBufferPos));
     if (ret < NO_ERROR) {
         CLOGE("Failed to setDstBufferState to MCSC3. pipeId %d ret %d", pipeId_scc, ret);
@@ -18014,7 +22088,11 @@ status_t ExynosCamera::m_convertHWPictureFormat(ExynosCameraFrameSP_sptr_t newFr
             pipeId_scc = (m_parameters->isOwnScc(getCameraIdInternal()) == true) ? PIPE_SCC_REPROCESSING : PIPE_ISP_REPROCESSING;
         else
             pipeId_scc = PIPE_3AA_REPROCESSING;
-
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true && newFrame->getSyncType() == SYNC_TYPE_SYNC) {
+            pipeId_scc = PIPE_FUSION_REPROCESSING;
+        }
+#endif
         pipeId_gsc = PIPE_GSC_REPROCESSING4;
     } else {
         switch (getCameraIdInternal()) {
@@ -18186,4 +22264,94 @@ CONVERT_FORMAT_DONE:
 }
 #endif
 
+#ifdef SAMSUNG_UNIPLUGIN
+UNI_PLUGIN_HDR_MODE ExynosCamera::m_getUniHDRMode(void)
+{
+    UNI_PLUGIN_HDR_MODE hdrData = UNI_PLUGIN_HDR_MODE_OFF;
+
+    switch (m_parameters->getRTHdr()) {
+        case COMPANION_WDR_OFF:
+            hdrData = UNI_PLUGIN_HDR_MODE_OFF;
+            break;
+        case COMPANION_WDR_AUTO:
+            hdrData = UNI_PLUGIN_HDR_MODE_AUTO;
+            break;
+        case COMPANION_WDR_ON:
+            hdrData = UNI_PLUGIN_HDR_MODE_ON;
+            break;
+    }
+    return hdrData;
+}
+
+UNI_PLUGIN_FLASH_MODE ExynosCamera::m_getUniFlashMode(void)
+{
+    UNI_PLUGIN_FLASH_MODE flashData = UNI_PLUGIN_FLASH_MODE_OFF;
+
+    switch (m_parameters->getFlashMode()) {
+        case FLASH_MODE_OFF:
+            flashData = UNI_PLUGIN_FLASH_MODE_OFF;
+            break;
+        case FLASH_MODE_AUTO:
+            flashData = UNI_PLUGIN_FLASH_MODE_AUTO;
+            break;
+        case FLASH_MODE_ON:
+            flashData = UNI_PLUGIN_FLASH_MODE_ON;
+            break;
+    }
+    return flashData;
+}
+
+UNI_PLUGIN_DEVICE_ORIENTATION ExynosCamera::m_getUniOrientationMode(void)
+{
+    /* translate Orientation enum(match to exif data) for uniPlugin */
+    UNI_PLUGIN_DEVICE_ORIENTATION orientation = UNI_PLUGIN_ORIENTATION_0;
+
+    if (getCameraIdInternal() == CAMERA_ID_FRONT) {
+        /* please check when flip horizontal is on */
+        switch (m_parameters->getDeviceOrientation()) {
+            case 0:
+                orientation = UNI_PLUGIN_ORIENTATION_270;
+                break;
+            case 90:
+                orientation = UNI_PLUGIN_ORIENTATION_180;
+                break;
+            case 180:
+                orientation = UNI_PLUGIN_ORIENTATION_90;
+                break;
+            case 270:
+                orientation = UNI_PLUGIN_ORIENTATION_0;
+                break;
+            default:
+                orientation = UNI_PLUGIN_ORIENTATION_0;
+                break;
+        }
+    } else {
+        switch (m_parameters->getDeviceOrientation()) {
+            case 0:
+                orientation = UNI_PLUGIN_ORIENTATION_270;
+                break;
+            case 90:
+                orientation = UNI_PLUGIN_ORIENTATION_0;
+                break;
+            case 180:
+                orientation = UNI_PLUGIN_ORIENTATION_90;
+                break;
+            case 270:
+                orientation = UNI_PLUGIN_ORIENTATION_180;
+                break;
+            default:
+                orientation = UNI_PLUGIN_ORIENTATION_0;
+                break;
+        }
+    }
+    return orientation;
+}
+#endif
+
+void ExynosCamera::m_printVendorCameraInfo(void)
+{
+#ifdef USE_REMOSAIC_CAPTURE
+    CLOGD("getAvailableRemosaicCapture	   : %d", m_parameters->getAvailableRemosaicCapture());
+#endif
+}
 }; /* namespace android */

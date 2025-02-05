@@ -52,7 +52,12 @@ struct rational {
 #define CAMERA2_MAX_AVAILABLE_MODE          21
 #define CAMERA2_MAX_FACES                   16
 #define CAMERA2_MAX_VENDER_LENGTH           400
+#define CAMERA2_MAX_IPC_VENDER_LENGTH       1056
+#ifdef EXYNOS7885
+#define CAPTURE_NODE_MAX                    6
+#else
 #define CAPTURE_NODE_MAX                    5
+#endif
 
 #define CAMERA2_MAX_PDAF_MULTIROI_COLUMN    13
 #define CAMERA2_MAX_PDAF_MULTIROI_ROW       9
@@ -82,6 +87,7 @@ enum is_subscenario_id {
     ISS_SUB_SCENARIO_DUAL_STILL = 2,        /* 2: dual still preview */
     ISS_SUB_SCENARIO_DUAL_VIDEO = 3,        /* 3: dual video */
     ISS_SUB_SCENARIO_VIDEO_HIGH_SPEED = 4,  /* 4: video high speed */
+    ISS_SUB_SCENARIO_DUAL_PREVIEW = ISS_SUB_SCENARIO_VIDEO_HIGH_SPEED,
     ISS_SUB_SCENARIO_STILL_CAPTURE = 5,     /* 5: still capture */
     ISS_SUB_SCENARIO_FHD_60FPS = 6,         /* 6: video FHD 60fps */
     ISS_SUB_SCENARIO_UHD_30FPS = 7,         /* 7: video UHD 30fps */
@@ -112,6 +118,8 @@ enum is_subscenario_id {
     ISS_SUB_SCENARIO_STILL_CAPTURE_LONG = 30,
     ISS_SUB_SCENARIO_STILL_CAPTURE_MANUAL_ISO = 31,
     ISS_SUB_SCENARIO_STILL_PREVIEW_BINNING = 40, /* 40: binning mode for low power */
+    ISS_SUB_SCENARIO_STILL_CAPTURE_BDS = 41,
+    ISS_SUB_SCENARIO_STILL_PREVIEW_LLS = 42,
 
     ISS_SUB_SCENARIO_FRONT_VT1 = 31,                    /* 31: front camera VT1 */
     ISS_SUB_SCENARIO_FRONT_VT2 = 32,                    /* 32: front camera VT2 */
@@ -122,12 +130,19 @@ enum is_subscenario_id {
     ISS_SUB_SCENARIO_FRONT_C2_OFF_VIDEO = 37,           /* 37: C2 off front video */
     ISS_SUB_SCENARIO_FRONT_VT4 = 38,                    /* 38: front camera VT4 */
     ISS_SUB_SCENARIO_FRONT_VT1_STILL_CAPTURE = 39,      /* 39: front camera VT1 still capture */
-    ISS_SUB_SCENARIO_FRONT_STILL_PREVIEW_BINNING = 40, /* 40: front camera binning mode for low power */
+    ISS_SUB_SCENARIO_FRONT_STILL_PREVIEW_BINNING = 40,  /* 40: front camera binning mode for low power */
+    ISS_SUB_SCENARIO_FRONT_COLOR_IRIS_PREVIEW = 43,     /* 43: front camera Color Iris preview */
+
+    ISS_SUB_SCENARIO_LIVE_OUTFOCUS_PREVIEW = 44,
+    ISS_SUB_SCENARIO_LIVE_OUTFOCUS_CAPTURE = 45,
+    ISS_SUB_SCENARIO_LIVE_OUTFOCUS_VIDEO = 46,
     ISS_SUB_END,
 };
 
 enum is_scenario_is {
 	FIMC_IS_SCENARIO_SWVDIS = 1,
+	FIMC_IS_SCENARIO_COLOR_IRIS = 2,
+	FIMC_IS_SCENARIO_AUTO_DUAL = 3,
 };
 
 enum available_capabilities {
@@ -434,6 +449,9 @@ enum processing_mode {
     PROCESSING_MODE_FAST,
     PROCESSING_MODE_HIGH_QUALITY,
     PROCESSING_MODE_MINIMAL,
+
+    /* vendor feature */
+    PROCESSING_MODE_MANUAL = 100,
 };
 
 
@@ -738,7 +756,8 @@ struct camera2_stats_dm {
     uint32_t                    faceLandmarks[CAMERA2_MAX_FACES][6];
     uint32_t                    faceRectangles[CAMERA2_MAX_FACES][4];
     uint8_t                     faceScores[CAMERA2_MAX_FACES];
-    uint32_t                    faces[CAMERA2_MAX_FACES];
+    uint32_t                    faceSrcImageSize[2];
+    uint32_t                    faces[CAMERA2_MAX_FACES-2];
     uint32_t                    histogram[3 * 256];
     enum stats_mode             histogramMode;
     int32_t                     sharpnessMap[2][2][3];
@@ -785,6 +804,7 @@ enum aa_capture_intent {
     AA_CAPTURE_INTENT_STILL_CAPTURE_OIS_MULTI,
     AA_CAPTURE_INTENT_STILL_CAPTURE_OIS_BEST,
     AA_CAPTRUE_INTENT_STILL_CAPTURE_COMP_BYPASS,
+    AA_CAPTRUE_INTENT_STILL_CAPTURE_RAWDUMP = AA_CAPTRUE_INTENT_STILL_CAPTURE_COMP_BYPASS,
     AA_CAPTRUE_INTENT_STILL_CAPTURE_OIS_DEBLUR,
     AA_CAPTRUE_INTENT_STILL_CAPTURE_DEBLUR_DYNAMIC_SHOT,
     AA_CAPTRUE_INTENT_STILL_CAPTURE_OIS_DYNAMIC_SHOT,
@@ -844,6 +864,9 @@ enum aa_scene_mode {
     AA_SCENE_MODE_THERMAL,
     AA_SCENE_MODE_VIDEO_COLLAGE,
     AA_SCENE_MODE_PRO_MODE,
+    AA_SCENE_MODE_COLOR_IRIS,
+    AA_SCENE_MODE_FACE_LOCK,
+    AA_SCENE_MODE_LIVE_OUTFOCUS,
 };
 
 enum aa_effect_mode {
@@ -972,6 +995,7 @@ enum aa_afmode_ext {
     AA_AFMODE_EXT_OFF = 1,
     AA_AFMODE_EXT_ADVANCED_MACRO_FOCUS = 2,
     AA_AFMODE_EXT_FOCUS_LOCATION = 3,
+    AA_AFMODE_EXT_FIXED_FACE = 4,
 };
 
 enum aa_af_trigger {
@@ -1022,6 +1046,12 @@ enum aa_isomode {
 enum aa_cameraid {
     AA_CAMERAID_FRONT = 1,
     AA_CAMERAID_REAR,
+};
+
+enum aa_cameratype {
+    AA_CAMERATYPE_SINGLE = 1,
+    AA_CAMERATYPE_WIDE,
+    AA_CAMERATYPE_TELE,
 };
 
 enum aa_videomode {
@@ -1088,6 +1118,9 @@ struct camera2_aa_ctl {
     uint32_t                vendor_touchBvChange;
     uint32_t                vendor_captureCount;
     uint32_t                vendor_captureExposureTime;
+    uint32_t                vendor_expBracketingCount;
+    float                   vendor_expBracketing[15];
+    float                   vendor_expBracketingCapture;
     uint32_t                vendor_reserved[10];
 };
 
@@ -1131,7 +1164,11 @@ struct camera2_aa_dm {
     uint32_t                vendor_touchBvChange;
     uint32_t                vendor_captureCount;
     uint32_t                vendor_captureExposureTime;
-    uint32_t                vendor_reserved[10];
+    uint32_t                vendor_expBracketingCount;
+    float                   vendor_expBracketing[15];
+    float                   vendor_expBracketingCapture;
+    float                   vendor_objectDistanceCm;
+    uint32_t                vendor_reserved[9];
 };
 
 struct camera2_aa_sm {
@@ -1466,9 +1503,16 @@ struct camera2_as_udm {
 
 struct camera2_ipc_udm {
     uint32_t    vsLength;
-    uint32_t    vendorSpecific[CAMERA2_MAX_VENDER_LENGTH];
+#ifdef CAMERA_REAR2
+    uint32_t    vendorSpecific[CAMERA2_MAX_IPC_VENDER_LENGTH];
+#else
+    uint32_t	vendorSpecific[CAMERA2_MAX_VENDER_LENGTH];
+#endif
 };
 
+/** \brief
+        User-defined metadata for rta debug info.
+ */
 struct camera2_rta_udm {
     uint32_t vsLength;
     uint32_t vendorSpecific[100];
@@ -1501,7 +1545,7 @@ struct camera2_sensor_uctl {
     uint64_t    exposureTime;
     uint32_t    frameDuration;
     uint32_t    sensitivity;
-    uint32_t    ctrlFrameDuration;
+    uint32_t    CtrlFrameDuration;
 };
 
 struct camera2_sensor_udm {
@@ -1517,6 +1561,29 @@ struct camera2_sensor_udm {
     uint64_t    timeStampBoot;
 };
 
+enum mcsc_port {
+    MCSC_PORT_NONE = -1,
+    MCSC_PORT_0,
+    MCSC_PORT_1,
+    MCSC_PORT_2,
+    MCSC_PORT_3,
+    MCSC_PORT_4,
+    MCSC_PORT_MAX,
+};
+
+enum mcsc_interface_type {
+    INTERFACE_TYPE_YSUM = 0,
+    INTERFACE_TYPE_DS,
+    INTERFACE_TYPE_MAX,
+};
+
+#ifdef EXYNOS7885
+struct ysum_data {
+    uint32_t lower_ysum_value;
+    uint32_t higher_ysum_value;
+};
+#endif
+
 struct camera2_scaler_uctl {
     uint32_t sourceAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
     uint32_t txcTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
@@ -1530,9 +1597,22 @@ struct camera2_scaler_uctl {
     uint32_t sc2TargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
     uint32_t sc3TargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
     uint32_t sc4TargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
+#ifdef EXYNOS7885
+    // To add buffer address because of MCSC DS for LT (VRA input)
+    uint32_t sc5TargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES]; /* MCSC DS output */
+#endif
     uint32_t dxcTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
     uint32_t orientation;
+#ifdef EXYNOS7885
+    enum mcsc_port mcsc_sub_blk_port[INTERFACE_TYPE_MAX];
+#endif
 };
+
+#ifdef EXYNOS7885
+struct camera2_scaler_udm {
+    struct ysum_data ysumdata;
+};
+#endif
 
 struct camera2_flash_uctl {
     uint32_t        firingPower;
@@ -1555,7 +1635,7 @@ enum companion_wdr_mode {
     COMPANION_WDR_OFF = 1,
     COMPANION_WDR_ON = 2,
     COMPANION_WDR_AUTO = 3,
-    COMPANION_WDR_AUTO_LIKE = 4,    
+    COMPANION_WDR_AUTO_LIKE = 4,
     TOTALCOUNT_COMPANION_WDR,
     COMPANION_WDR_UNKNOWN,
 };
@@ -1604,6 +1684,9 @@ enum camera_op_mode {
     CAMERA_OP_MODE_GED = 0,   // default
     CAMERA_OP_MODE_TW,
     CAMERA_OP_MODE_HAL3_GED,
+    CAMERA_OP_MODE_HAL3_TW,
+    CAMERA_OP_MODE_FAC,
+    CAMERA_OP_MODE_HAL3_FAC,
 };
 
 struct camera2_companion_uctl {
@@ -1685,6 +1768,14 @@ struct camera2_fd_udm {
 */
 };
 
+#ifdef EXYNOS7885
+struct camera2_ni_udm {
+    uint32_t currentFrameNoiseIndex; /* Noise Index for N */
+    uint32_t nextFrameNoiseIndex; /* Noise Index for N+1 */
+    uint32_t nextNextFrameNoiseIndex; /* Noise Index for N+2 */
+};
+#endif
+
 enum camera2_drc_mode {
     DRC_OFF = 1,
     DRC_ON,
@@ -1692,6 +1783,42 @@ enum camera2_drc_mode {
 
 struct camera2_drc_uctl {
     enum camera2_drc_mode uDrcEn;
+};
+
+enum camera2_scene_index {
+    SCENE_INDEX_INVALID     = 0,
+    SCENE_INDEX_FOOD        = 1,
+    SCENE_INDEX_TEXT        = 2,
+    SCENE_INDEX_PERSON      = 3,
+    SCENE_INDEX_FLOWER      = 4,
+    SCENE_INDEX_TREE        = 5,
+    SCENE_INDEX_MOUNTAIN    = 6,
+    SCENE_INDEX_MOUNTAIN_GREEN  = 7,
+    SCENE_INDEX_MOUNTAIN_FALL   = 8,
+    SCENE_INDEX_ANIMAL      = 9,
+    SCENE_INDEX_SUNSET_SUNRISE  = 10,
+    SCENE_INDEX_BEACH       = 11,
+    SCENE_INDEX_SKY         = 12,
+    SCENE_INDEX_SNOW        = 13,
+    SCENE_INDEX_NIGHTVIEW   = 14,
+    SCENE_INDEX_WATERFALL   = 15,
+    SCENE_INDEX_BIRD        = 16,
+    SCENE_INDEX_CITYSTREET  = 17,
+    SCENE_INDEX_HOMEINDOOR  = 18,
+    SCENE_INDEX_WATERSIDE   = 19,
+    SCENE_INDEX_SCENERY     = 20,
+    SCENE_INDEX_GREENERY    = 21,
+    SCENE_INDEX_DAY_HDR     = 10000, // The enums which are same as or more than 1000 are set by AE result
+    SCENE_INDEX_NIGHT_HDR   = 10001,
+    SCENE_INDEX_MOTION_BLUR_REMOVAL = 10002
+};
+
+struct camera2_scene_detect_uctl
+{
+    uint64_t                    timeStamp;
+    enum camera2_scene_index    scene_index;
+    uint32_t                    confidence_score;
+    uint32_t                    object_roi[4];  /* left, top, right, bottom */
 };
 
 enum camera_vt_mode {
@@ -1731,12 +1858,15 @@ struct camera2_uctl {
     struct camera2_companion_uctl   companionUd;
     struct camera2_fd_uctl          fdUd;
     struct camera2_drc_uctl         drcUd;
+    struct camera2_scene_detect_uctl sceneDetectInfoUd;
     enum camera_vt_mode             vtMode;
     float                           zoomRatio;
     enum camera_flash_mode          flashMode;
     enum camera_op_mode             opMode;
     struct camera2_is_hw_lls_uctl   hwlls_mode;
-    uint32_t                        reserved[6];
+    uint32_t                        statsRoi[4];
+    enum aa_cameratype              masterCam;
+    uint8_t                         countryCode[4];
 };
 
 struct camera2_udm {
@@ -1750,14 +1880,22 @@ struct camera2_udm {
     struct camera2_as_udm        as;
     struct camera2_ipc_udm       ipc;
     struct camera2_rta_udm       rta;
-    struct camera2_internal_udm	 internal;
+    struct camera2_internal_udm  internal;
+#ifdef EXYNOS7885
+    struct camera2_scaler_udm    scaler;
+#endif
     struct camera2_companion_udm companion;
     struct camera2_fd_udm        fd;
     enum camera_vt_mode          vtMode;
     float                        zoomRatio;
     enum camera_flash_mode       flashMode;
     enum camera_op_mode          opMode;
+#ifdef EXYNOS7885
+    struct camera2_ni_udm        ni;
+    uint32_t                     reserved[3];
+#else
     uint32_t                     reserved[8];
+#endif
 };
 
 struct camera2_shot {
@@ -1781,6 +1919,9 @@ struct camera2_node {
     uint32_t    request;
     struct camera2_node_input    input;
     struct camera2_node_output   output;
+#ifdef EXYNOS7885
+    uint32_t    pixelformat;
+#endif
 };
 
 struct camera2_node_group {
@@ -1818,6 +1959,13 @@ struct camera2_stream {
 #define CAM_LENS_CMD        (0x1 << 0x0)
 #define CAM_SENSOR_CMD      (0x1 << 0x1)
 #define CAM_FLASH_CMD       (0x1 << 0x2)
+
+enum camera_pixel_size {
+    CAMERA_PIXEL_SIZE_8BIT = 0,
+    CAMERA_PIXEL_SIZE_10BIT,
+    CAMERA_PIXEL_SIZE_PACKED_10BIT,
+    CAMERA_PIXEL_SIZE_8_2BIT,
+};
 
 /* typedefs below are for firmware sources */
 
@@ -1927,11 +2075,19 @@ typedef struct camera2_as_udm camera2_as_udm_t;
 typedef struct camera2_ipc_udm camera2_ipc_udm_t;
 typedef struct camera2_udm camera2_udm_t;
 
+typedef struct camera2_rta_udm camera2_rta_udm_t;
 typedef struct camera2_internal_udm camera2_internal_udm_t;
 
 typedef struct camera2_flash_uctl camera2_flash_uctl_t;
 
+typedef struct camera2_is_mode_udm camera2_is_mode_udm_t;
 typedef struct camera2_companion_udm camera2_companion_udm_t;
-
 typedef struct camera2_shot camera2_shot_t;
+
+typedef struct camera2_ni_udm camera2_ni_udm_t;
+typedef struct camera2_drc_udm      camera2_drc_udm_t;
+typedef struct camera2_rgbGamma_udm camera2_rgbGamma_udm_t;
+typedef struct camera2_ccm_udm      camera2_ccm_udm_t;
+
+typedef struct camera2_me_udm camera2_me_udm_t;
 #endif

@@ -15,8 +15,8 @@
 ** limitations under the License.
 */
 
-#ifndef EXYNOS_CAMERA_FRAME_FACTORY_H
-#define EXYNOS_CAMERA_FRAME_FACTORY_H
+#ifndef EXYNOS_CAMERA_3_FRAME_FACTORY_H
+#define EXYNOS_CAMERA_3_FRAME_FACTORY_H
 
 #include "ExynosCameraFrame.h"
 
@@ -28,6 +28,9 @@
 #include "ExynosCameraFrameManager.h"
 
 #include "ExynosCamera3Parameters.h"
+#ifdef USE_VRA_GROUP
+#include "ExynosCameraPipeVRAGroup.h"
+#endif
 
 namespace android {
 
@@ -45,14 +48,6 @@ namespace android {
     pipeInfo[nodeType].bufInfo.memory = V4L2_CAMERA_MEMORY_TYPE;\
     pipeInfo[leaderNodeType].perFrameNodeGroupInfo.perFrameCaptureInfo[perFramePos].perFrameNodeType = PERFRAME_NODE_TYPE_CAPTURE;\
     pipeInfo[leaderNodeType].perFrameNodeGroupInfo.perFrameCaptureInfo[perFramePos].perFrameVideoID = (m_deviceInfo[INDEX(pipeId)].nodeNum[nodeType] - FIMC_IS_VIDEO_BAS_NUM);\
-
-typedef enum frame_factory_state {
-    FRAME_FACTORY_STATE_NONE    = 0,
-    FRAME_FACTORY_STATE_CREATE  = 1,
-    FRAME_FACTORY_STATE_INIT    = 2,
-    FRAME_FACTORY_STATE_RUN     = 3,
-    FRAME_FACTORY_STATE_MAX     = 4,
-} frame_factory_state_t;
 
 class ExynosCamera3;
 class ExynosCameraRequest;
@@ -206,6 +201,9 @@ protected:
     uint32_t                    m_requestMCSC2;
     uint32_t                    m_requestMCSC3;
     uint32_t                    m_requestMCSC4;
+#ifdef USE_VRA_GROUP
+    uint32_t                    m_requestVRA;
+#endif
     uint32_t                    m_requestJPEG;
     uint32_t                    m_requestThumbnail;
 
@@ -219,6 +217,9 @@ protected:
     bool                        m_flagIspTpuOTF;
     bool                        m_flagIspMcscOTF;
     bool                        m_flagTpuMcscOTF;
+#ifdef USE_VRA_GROUP
+    bool                        m_flagMcscVraOTF;
+#endif
 
     bool                        m_supportReprocessing;
     bool                        m_flagReprocessing;

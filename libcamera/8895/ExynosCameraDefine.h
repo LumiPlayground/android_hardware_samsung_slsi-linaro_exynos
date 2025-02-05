@@ -24,7 +24,7 @@
 #include <binder/MemoryHeapBase.h>
 #include <hardware/camera.h>
 #include <hardware/camera3.h>
-#include <hardware/gralloc1.h>
+#include <hardware/gralloc.h>
 #include <camera/Camera.h>
 #include <camera/CameraParameters.h>
 #include <camera/CameraMetadata.h>
@@ -134,14 +134,15 @@ enum FRAME_FACTORY_TYPE {
 };
 
 enum EXYNOS_CAMERA_STREAM_CHARACTERISTICS_ID {
-    HAL_STREAM_ID_RAW           = 0,
-    HAL_STREAM_ID_PREVIEW       = 1,
-    HAL_STREAM_ID_VIDEO         = 2,
-    HAL_STREAM_ID_JPEG          = 3,
-    HAL_STREAM_ID_CALLBACK      = 4,
-    HAL_STREAM_ID_ZSL_INPUT     = 5,
-    HAL_STREAM_ID_ZSL_OUTPUT    = 6,
-    HAL_STREAM_ID_MAX           = 7,
+    HAL_STREAM_ID_RAW             = 0,
+    HAL_STREAM_ID_PREVIEW         = 1,
+    HAL_STREAM_ID_VIDEO           = 2,
+    HAL_STREAM_ID_JPEG            = 3,
+    HAL_STREAM_ID_CALLBACK        = 4,
+    HAL_STREAM_ID_ZSL_INPUT       = 5,
+    HAL_STREAM_ID_ZSL_OUTPUT      = 6,
+    HAL_STREAM_ID_CALLBACK_STALL  = 7,
+    HAL_STREAM_ID_MAX             = 8,
 };
 
 #ifdef SAMSUNG_LLV

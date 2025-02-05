@@ -67,6 +67,9 @@ void updateNodeGroupInfo(
     status_t ret = NO_ERROR;
     uint32_t perframePosition = 0;
     bool isReprocessing = pipeId >= PIPE_FLITE_REPROCESSING ? true : false;
+#ifdef USE_VRA_GROUP
+    int dsInputPortId = params->getDsInputPortId();
+#endif
 
     ExynosRect sensorSize;
 #ifdef SUPPORT_DEPTH_MAP
@@ -77,8 +80,12 @@ void updateNodeGroupInfo(
     ExynosRect bdsSize;
     ExynosRect ispSize;
     ExynosRect mcscInputSize;
+#ifdef USE_VRA_GROUP
+    ExynosRect vraInputSize;
+    ExynosRect dsInputSize;
+#endif
     ExynosRect ratioCropSize;
-    ExynosRect mcscSize[MAX_YUV_STREAM_COUNT];
+    ExynosRect mcscSize[6];
 
     if (isReprocessing == false) {
         params->getHwSensorSize(&sensorSize.w,
@@ -90,6 +97,9 @@ void updateNodeGroupInfo(
 
         params->getPreviewBayerCropSize(&bnsSize, &bayerCropSize);
         params->getPreviewBdsSize(&bdsSize);
+#ifdef USE_VRA_GROUP
+        params->getHwVraInputSize(&vraInputSize.w, &vraInputSize.h);
+#endif
 
         if (params->isUseIspInputCrop() == true)
             params->getPreviewYuvCropSize(&ispSize);
@@ -101,8 +111,22 @@ void updateNodeGroupInfo(
         else
             mcscInputSize = ispSize;
 
-        for (int i = 0; i < params->getYuvStreamMaxNum(); i++)
+        for (int i = ExynosCamera3Parameters::YUV_0; i < ExynosCamera3Parameters::YUV_MAX; i++)
             params->getYuvSize(&mcscSize[i].w, &mcscSize[i].h, i);
+
+#ifdef USE_VRA_GROUP
+        if (dsInputPortId > MCSC_PORT_4 || dsInputPortId < MCSC_PORT_0) {
+             dsInputSize = mcscInputSize;
+        } else {
+             dsInputSize = mcscSize[dsInputPortId];
+        }
+
+        if (dsInputSize.w < vraInputSize.w || dsInputSize.h < vraInputSize.h) {
+            vraInputSize.w = dsInputSize.w;
+            vraInputSize.h = dsInputSize.h;
+        }
+        mcscSize[3] = vraInputSize;
+#endif
     } else {
         if (params->getUsePureBayerReprocessing() == true) {
             params->getPictureBayerCropSize(&bnsSize, &bayerCropSize);
@@ -148,8 +172,18 @@ void updateNodeGroupInfo(
             params->getPictureSize(&mcscSize[1].w, &mcscSize[1].h);
             params->getThumbnailSize(&mcscSize[2].w, &mcscSize[2].h);
         } else {
-            params->getPictureSize(&mcscSize[0].w, &mcscSize[0].h);
-            params->getThumbnailSize(&mcscSize[1].w, &mcscSize[1].h);
+            for (int i = ExynosCamera3Parameters::YUV_STALL_0; i < ExynosCamera3Parameters::YUV_STALL_MAX; i++) {
+                params->getYuvSize(&mcscSize[i % ExynosCamera3Parameters::YUV_MAX].w,
+                                   &mcscSize[i % ExynosCamera3Parameters::YUV_MAX].h, i);
+            }
+#ifdef EXYNOS7885
+            params->getPictureSize(&mcscSize[1].w, &mcscSize[1].h);
+            params->getThumbnailSize(&mcscSize[2].w, &mcscSize[2].h);
+#else
+            params->getPictureSize(&mcscSize[3].w, &mcscSize[3].h);
+            params->getThumbnailSize(&mcscSize[4].w, &mcscSize[4].h);
+#endif
+
         }
     }
 
@@ -180,6 +214,12 @@ void updateNodeGroupInfo(
         /* Leader MCSCS : [crop] : YUV Crop Size */
         setLeaderSizeToNodeGroupInfo(node_group_info, mcscInputSize.x, mcscInputSize.y, mcscInputSize.w, mcscInputSize.h);
         break;
+#ifdef USE_VRA_GROUP
+    case PIPE_VRA:
+        /* Leader VRA Size */
+        setLeaderSizeToNodeGroupInfo(node_group_info, 0, 0, vraInputSize.w, vraInputSize.h);
+        break;
+#endif
     default:
         CLOGE2("Invalid pipeId %d", pipeId);
         return;
@@ -208,6 +248,11 @@ void updateNodeGroupInfo(
     case PIPE_MCSC_REPROCESSING:
         pipeName = "MCSC";
         break;
+#ifdef USE_VRA_GROUP
+    case PIPE_VRA:
+        pipeName = "VRA";
+        break;
+#endif
     default:
         break;
     }
@@ -292,20 +337,25 @@ void updateNodeGroupInfo(
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_M0P_NUM:
-        case FIMC_IS_VIDEO_M3P_NUM:
             /* MCSC 0 : [crop/scale] : Preview */
-            ret = getCropRectAlign(
-                    mcscInputSize.w, mcscInputSize.h, mcscSize[0].w, mcscSize[0].h,
-                    &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
-                    CAMERA_MCSC_ALIGN, 2, 0, 1.0);
-            if (ret != NO_ERROR) {
-                CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC0(3) out_size %dx%d",
-                         mcscInputSize.w, mcscInputSize.h, mcscSize[0].w, mcscSize[0].h);
+            if (mcscSize[0].w == 0 || mcscSize[0].h == 0) {
+                CLOGV2("MCSC width or height values is 0, (%dx%d)",
+                        mcscSize[0].w, mcscSize[0].h);
+                ratioCropSize = mcscSize[0];
+            } else {
+                ret = getCropRectAlign(
+                        mcscInputSize.w, mcscInputSize.h, mcscSize[0].w, mcscSize[0].h,
+                        &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
+                        CAMERA_MCSC_ALIGN, 2, 0, 1.0);
+                if (ret != NO_ERROR) {
+                    CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC0 out_size %dx%d",
+                             mcscInputSize.w, mcscInputSize.h, mcscSize[0].w, mcscSize[0].h);
 
-                ratioCropSize.x = 0;
-                ratioCropSize.y = 0;
-                ratioCropSize.w = mcscInputSize.w;
-                ratioCropSize.h = mcscInputSize.h;
+                    ratioCropSize.x = 0;
+                    ratioCropSize.y = 0;
+                    ratioCropSize.w = mcscInputSize.w;
+                    ratioCropSize.h = mcscInputSize.h;
+                }
             }
 
             setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
@@ -315,14 +365,13 @@ void updateNodeGroupInfo(
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_M1P_NUM:
-        case FIMC_IS_VIDEO_M4P_NUM:
             /* MCSC 1 : [crop/scale] : Preview Callback */
             ret = getCropRectAlign(
                     mcscInputSize.w, mcscInputSize.h, mcscSize[1].w, mcscSize[1].h,
                     &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
                     CAMERA_MCSC_ALIGN, 2, 0, 1.0);
             if (ret != NO_ERROR) {
-                CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC1(4) out_size %dx%d",
+                CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC1 out_size %dx%d",
                          mcscInputSize.w, mcscInputSize.h, mcscSize[1].w, mcscSize[1].h);
 
                 ratioCropSize.x = 0;
@@ -359,6 +408,57 @@ void updateNodeGroupInfo(
                                                     mcscSize[2].w, mcscSize[2].h);
             perframePosition++;
             break;
+        case FIMC_IS_VIDEO_M3P_NUM:
+            /* MCSC 3 : [crop/scale] */
+#ifdef USE_VRA_GROUP
+            ret = getCropRectAlign(
+                    dsInputSize.w, dsInputSize.h, mcscSize[3].w, mcscSize[3].h,
+                    &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
+                    CAMERA_MCSC_ALIGN, 2, 0, 1.0);
+#else
+            ret = getCropRectAlign(
+                    mcscInputSize.w, mcscInputSize.h, mcscSize[3].w, mcscSize[3].h,
+                    &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
+                    CAMERA_MCSC_ALIGN, 2, 0, 1.0);
+#endif
+            if (ret != NO_ERROR) {
+                ALOGE("ERR(%s[%d]):getCropRectAlign failed. MCSC in_crop %dx%d, MCSC3 out_size %dx%d",
+                        __FUNCTION__, __LINE__, mcscInputSize.w, mcscInputSize.h, mcscSize[3].w, mcscSize[3].h);
+
+                ratioCropSize.x = 0;
+                ratioCropSize.y = 0;
+                ratioCropSize.w = mcscInputSize.w;
+                ratioCropSize.h = mcscInputSize.h;
+            }
+
+            setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
+                                                    ratioCropSize.x, ratioCropSize.y,
+                                                    ratioCropSize.w, ratioCropSize.h,
+                                                    mcscSize[3].w, mcscSize[3].h);
+            perframePosition++;
+            break;
+        case FIMC_IS_VIDEO_M4P_NUM:
+            /* MCSC 4 : [crop/scale] : Preview Callback */
+            ret = getCropRectAlign(
+                    mcscInputSize.w, mcscInputSize.h, mcscSize[4].w, mcscSize[4].h,
+                    &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
+                    CAMERA_MCSC_ALIGN, 2, 0, 1.0);
+            if (ret != NO_ERROR) {
+                ALOGE("ERR(%s[%d]):getCropRectAlign failed. MCSC in_crop %dx%d, MCSC4 out_size %dx%d",
+                        __FUNCTION__, __LINE__, mcscInputSize.w, mcscInputSize.h, mcscSize[4].w, mcscSize[4].h);
+
+                ratioCropSize.x = 0;
+                ratioCropSize.y = 0;
+                ratioCropSize.w = mcscInputSize.w;
+                ratioCropSize.h = mcscInputSize.h;
+            }
+
+            setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
+                                                    ratioCropSize.x, ratioCropSize.y,
+                                                    ratioCropSize.w, ratioCropSize.h,
+                                                    mcscSize[4].w, mcscSize[4].h);
+            perframePosition++;
+            break;;
         default:
             break;
         }

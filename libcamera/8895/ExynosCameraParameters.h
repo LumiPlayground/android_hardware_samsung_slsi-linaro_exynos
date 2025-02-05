@@ -44,7 +44,7 @@
 #include "ExynosCameraActivityControl.h"
 #include "ExynosCameraAutoTimer.h"
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
 #include "ExynosCameraFusionInclude.h"
 #endif
 #ifdef SAMSUNG_TN_FEATURE
@@ -67,7 +67,7 @@
 #include "SecCameraDngThumbnail.h"
 #endif
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
 #include "ExynosCameraFusionInclude.h"
 #endif
 
@@ -80,6 +80,7 @@
 #define EXYNOS_CONFIG_DEFINED (-1)
 #define EXYNOS_CONFIG_NOTDEFINED (-2)
 
+#define STATE_REG_LIVE_OUTFOCUS         (1<<30)
 #define STATE_REG_BINNING_MODE          (1<<28)
 #define STATE_REG_MANUAL_ISO            (1<<26)
 #define STATE_REG_LONG_CAPTURE          (1<<24)
@@ -109,11 +110,13 @@
 #define STATE_STILL_CAPTURE_LLS                 (STATE_REG_FLAG_REPROCESSING|STATE_REG_NEED_LLS)
 #define STATE_STILL_CAPTURE_LONG                (STATE_REG_FLAG_REPROCESSING|STATE_REG_LONG_CAPTURE)
 #define STATE_STILL_CAPTURE_MANUAL_ISO          (STATE_REG_FLAG_REPROCESSING|STATE_REG_MANUAL_ISO)
+#define STATE_STILL_CAPTURE_LLS_ZOOM            (STATE_REG_FLAG_REPROCESSING|STATE_REG_NEED_LLS|STATE_REG_ZOOM)
 
 #define STATE_STILL_CAPTURE_WDR_ON                 (STATE_REG_RTHDR_ON|STATE_REG_FLAG_REPROCESSING)
 #define STATE_STILL_CAPTURE_WDR_ON_ZOOM            (STATE_REG_RTHDR_ON|STATE_REG_FLAG_REPROCESSING|STATE_REG_ZOOM)
 #define STATE_STILL_CAPTURE_WDR_ON_ZOOM_OUTDOOR    (STATE_REG_RTHDR_ON|STATE_REG_FLAG_REPROCESSING|STATE_REG_ZOOM_OUTDOOR)
 #define STATE_STILL_CAPTURE_WDR_ON_ZOOM_INDOOR     (STATE_REG_RTHDR_ON|STATE_REG_FLAG_REPROCESSING|STATE_REG_ZOOM_INDOOR)
+#define STATE_STILL_CAPTURE_WDR_ON_LLS_ZOOM       (STATE_REG_RTHDR_ON|STATE_REG_FLAG_REPROCESSING|STATE_REG_NEED_LLS|STATE_REG_ZOOM)
 #define STATE_VIDEO_CAPTURE_WDR_ON                 (STATE_REG_RTHDR_ON|STATE_REG_FLAG_REPROCESSING|STATE_REG_RECORDINGHINT)
 #define STATE_VIDEO_CAPTURE_WDR_ON_LLS             (STATE_REG_RTHDR_ON|STATE_REG_FLAG_REPROCESSING|STATE_REG_NEED_LLS)
 
@@ -123,6 +126,7 @@
 #define STATE_STILL_CAPTURE_WDR_AUTO_ZOOM_INDOOR     (STATE_REG_RTHDR_AUTO|STATE_REG_FLAG_REPROCESSING|STATE_REG_ZOOM_INDOOR)
 #define STATE_VIDEO_CAPTURE_WDR_AUTO                 (STATE_REG_RTHDR_AUTO|STATE_REG_FLAG_REPROCESSING|STATE_REG_RECORDINGHINT)
 #define STATE_STILL_CAPTURE_WDR_AUTO_LLS             (STATE_REG_RTHDR_AUTO|STATE_REG_FLAG_REPROCESSING|STATE_REG_NEED_LLS)
+#define STATE_STILL_CAPTURE_WDR_AUTO_LLS_ZOOM        (STATE_REG_RTHDR_AUTO|STATE_REG_FLAG_REPROCESSING|STATE_REG_NEED_LLS|STATE_REG_ZOOM)
 #define STATE_STILL_CAPTURE_WDR_AUTO_SHARPEN         (STATE_REG_RTHDR_AUTO|STATE_REG_FLAG_REPROCESSING|STATE_REG_SHARPEN_SINGLE)
 
 #define STATE_VIDEO                             (STATE_REG_RECORDINGHINT)
@@ -153,6 +157,10 @@
 #define STATE_DUAL_STILL_BINING_PREVIEW         (STATE_REG_DUAL_MODE|STATE_REG_BINNING_MODE)
 #define STATE_DUAL_VIDEO_BINNING                 (STATE_REG_DUAL_RECORDINGHINT|STATE_REG_DUAL_MODE|STATE_REG_BINNING_MODE)
 
+#define STATE_LIVE_OUTFOCUS_PREVIEW             (STATE_REG_LIVE_OUTFOCUS|STATE_STILL_PREVIEW)
+#define STATE_LIVE_OUTFOCUS_CAPTURE             (STATE_REG_LIVE_OUTFOCUS|STATE_STILL_CAPTURE)
+#define STATE_LIVE_OUTFOCUS_VIDEO               (STATE_REG_LIVE_OUTFOCUS|STATE_REG_RECORDINGHINT)
+
 namespace android {
 
 using namespace std;
@@ -163,6 +171,27 @@ namespace CONFIG_MODE {
         HIGHSPEED_60,
         HIGHSPEED_120,
         HIGHSPEED_240,
+        MAX
+    };
+};
+
+/* reserved memory config */
+/* - BAYER : CSIS capture buffer
+   - ISP / ISP_UHD : ISP output buffer(UHD)
+   - JPEG / JPEG_UHD : JPEG callback buffer(UHD)
+   - POST_PIC / POST_PIC_UHD : NV21 capture buffer(UHD)
+   - SECURE : secure buffer.
+*/
+namespace CONFIG_RESERVED {
+    enum BUFFER {
+        BASE    = 0x00,
+        BAYER,
+        ISP,
+        ISP_UHD,
+        JPEG,
+        JPEG_UHD,
+        POST_PIC,
+        SECURE,
         MAX
     };
 };
@@ -183,6 +212,7 @@ struct CONFIG_BUFFER {
     uint32_t num_reprocessing_buffers;
     uint32_t num_recording_buffers;
     uint32_t num_fastaestable_buffer;
+    uint32_t num_vra_buffers;
     uint32_t reprocessing_bayer_hold_count;
     uint32_t front_num_bayer_buffers;
     uint32_t front_num_picture_buffers;
@@ -199,9 +229,14 @@ struct CONFIG_BUFFER {
     /* for USE_CAMERA2_API_SUPPORT */
 };
 
+struct CONFIG_RESERVED_BUFFER {
+    uint32_t num_buffers[CONFIG_RESERVED::MAX];
+};
+
 struct CONFIG_BUFFER_PIPE {
     struct CONFIG_PIPE pipeInfo;
     struct CONFIG_BUFFER bufInfo;
+    struct CONFIG_RESERVED_BUFFER reservedBufInfo;
 };
 
 struct ExynosConfigInfo {
@@ -217,6 +252,26 @@ struct fast_ctl_capture {
     uint32_t capture_exposureTime;
 };
 
+#ifdef USE_MCSC_FOR_FD
+namespace CONFIG_FD {
+    enum TAG {
+        BASE    = 0x00,
+        ENABLE,
+        SIZE,
+        PIPE_INFO,
+        MAX
+    };
+};
+
+typedef struct ExynosFDConfig {
+    bool flagFdEnable;
+	int width;
+	int height;
+	int pipeId;
+	int portId;
+} ExynosFDConfig_t;
+#endif
+
 class IMetadata {
 public:
     IMetadata(){};
@@ -230,10 +285,12 @@ public:
     IHWConfig(){};
     virtual ~IHWConfig(){};
     virtual bool                        getUsePureBayerReprocessing(void) = 0;
+    virtual int32_t                     getReprocessingBayerMode(void)= 0;
     virtual bool                        isSingleChain(void) = 0;
     virtual bool                        isSccCapture(void) = 0;
     virtual bool                        isReprocessing(void) = 0;
-    virtual status_t                    getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH) = 0;
+    virtual status_t                    getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH, int index) = 0;
+    virtual bool                        getFastenAeStableOn(void);
     virtual void                        getHwBayerCropRegion(int *w, int *h, int *x, int *y) = 0;
     virtual void                        getHwPreviewSize(int *w, int *h) = 0;
     virtual void                        getVideoSize(int *w, int *h) = 0;
@@ -293,6 +350,10 @@ public:
     virtual void                        getSetfileYuvRange(bool flagReprocessing, int *setfile, int *yuvRange) = 0;
     virtual float                       getZoomRatio(int zoom) = 0;
     virtual float                       getZoomRatio(void) = 0;
+#ifdef SAMSUNG_DUAL_SOLUTION
+    virtual float                       getZoomRatio(int cameraId, int zoomLevel) = 0;
+    virtual float                       getZoomOrgRatio(int zoomLevel) = 0;
+#endif
     virtual struct ExynosConfigInfo     *getConfig() = 0;
     virtual void                        setFlipHorizontal(int val) = 0;
     virtual int                         getFlipHorizontal(void) = 0;
@@ -302,7 +363,10 @@ public:
     virtual status_t                    getFdMeta(bool reprocessing, void *buf) = 0;
     virtual float                       getMaxZoomRatio(void)= 0;
     virtual int                         getHalVersion(void) = 0;
-
+    virtual void                        setCheckRestartStream(__unused bool checkRestartFlag) = 0;
+    virtual bool                        getCheckRestartStream(void) = 0;
+    virtual void                        setRestartStream(__unused bool restart) = 0;
+    virtual bool                        getRestartStream(void) = 0;
 
 
 //    virtual int                         getGrallocUsage(void) = 0;
@@ -325,9 +389,8 @@ public:
     virtual bool                         isOwnScc(int cameraId) = 0;
 
     virtual bool                        getDualMode(void) = 0;
-
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
     virtual bool                        getDualCameraMode(void) = 0;
+#ifdef USE_DUAL_CAMERA
     virtual bool                        isFusionEnabled(void) = 0;
     virtual status_t                    getFusionSize(int w, int h, ExynosRect *srcRect, ExynosRect *dstRect) = 0;
     virtual status_t                    setFusionInfo(camera2_shot_ext *shot_ext) = 0;
@@ -337,7 +400,10 @@ public:
     virtual void                        setFusionCalData(char *addr, int size) = 0;
     virtual char                       *getFusionCalData(int *size) = 0;
 #endif // USE_CP_FUSION_LIB
-#endif // BOARD_CAMERA_USES_DUAL_CAMERA
+#endif // USE_DUAL_CAMERA
+
+    bool                                checkFaceDetectMeta(__unused struct camera2_shot_ext *shot_ext) {return true;};
+
 };
 
 class IModeVendorConfig {
@@ -374,7 +440,12 @@ public:
     virtual void                        setExifChangedAttribute(exif_attribute_t    *exifInfo,
                                             ExynosRect          *PictureRect,
                                             ExynosRect          *thumbnailRect,
-                                            camera2_shot_t      *shot) = 0;
+                                            camera2_shot_t      *shot,
+                                            bool                useDebugInfo2 = false
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+                                            , camera2_shot_t      *shot2 = NULL
+#endif
+                                            ) = 0;
     virtual status_t                    setMarkingOfExifFlash(int flag) = 0;
     virtual int                         getMarkingOfExifFlash(void) = 0;
 };
@@ -397,9 +468,10 @@ public:
 
 //class Interface HWConfig
     virtual bool                        getUsePureBayerReprocessing(void) = 0;
+    virtual int32_t                     getReprocessingBayerMode(void)= 0;
     virtual bool                        isSccCapture(void) = 0;
     virtual bool                        isReprocessing(void) = 0;
-    virtual status_t                    getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH) = 0;
+    virtual status_t                    getFastenAeStableBcropSize(int *hwBcropW, int *hwBcropH, int index) = 0;
     virtual void                        getHwBayerCropRegion(int *w, int *h, int *x, int *y) = 0;
     virtual void                        getHwPreviewSize(int *w, int *h) = 0;
     virtual void                        getVideoSize(int *w, int *h) = 0;
@@ -448,6 +520,7 @@ public:
     virtual uint64_t                    getCaptureExposureTime(void) = 0;
     virtual int32_t                     getLongExposureShotCount(void) = 0;
     virtual int                         getBatchSize(enum pipeline pipeId) = 0;
+    virtual int                         getAntibanding(void) = 0;
 
 //class Interface ModeConfig
     virtual bool                        getHdrMode(void) = 0;
@@ -457,6 +530,18 @@ public:
     virtual void                        getSetfileYuvRange(bool flagReprocessing, int *setfile, int *yuvRange) = 0;
     virtual float                       getZoomRatio(int zoom) = 0;
     virtual float                       getZoomRatio(void) = 0;
+#ifdef SAMSUNG_DUAL_SOLUTION
+    virtual float                       getZoomRatio(int cameraId, int zoomLevel) = 0;
+    virtual float                       getZoomOrgRatio(int zoomLevel) = 0;
+    virtual void                        setPreviewNeedMargin(int zoomLevel) = 0;
+    virtual int                         getPreviewNeedMargin(void) = 0;
+    virtual void                        getZoomList(int** list, int *size);
+    virtual bool                        getForceWide(void);
+    virtual bool                        isUseNewCropRect(void) = 0;
+    virtual void                        getDualCropRect(ExynosRect *dualRect) = 0;
+    virtual void                        getPreviewStatsRoi(ExynosRect *dstRect, ExynosRect *statsRoi) = 0;
+	virtual bool                        getFusionCaptureMode(int cameraId, bool isLogPrint) = 0;
+#endif
     virtual struct ExynosConfigInfo     *getConfig() = 0;
     virtual void                        setFlipHorizontal(int val) = 0;
     virtual int                         getFlipHorizontal(void) = 0;
@@ -466,16 +551,16 @@ public:
     virtual int                         getHwPictureFormat(void) = 0;
 
     virtual int                         getHalVersion(void) = 0;
-
-
-
-
+    virtual void                        setCheckRestartStream(__unused bool checkRestartFlag){};
+    virtual bool                        getCheckRestartStream(void){return false;};
+    virtual void                        setRestartStream(__unused bool restart){};
+    virtual bool                        getRestartStream(void){return false;};
 
 //    virtual int                         getGrallocUsage(void) = 0;
 //    virtual int                         getGrallocLockUsage(void) = 0;
     virtual int                         getHDRDelay(void) = 0;
     virtual int                         getReprocessingBayerHoldCount(void) = 0;
-    virtual int                         getFastenAeFps(void) = 0;
+    virtual int                         getFastenAeFps(void){return 0;};
     virtual int                         getPerFrameControlPipe(void) = 0;
     virtual int                         getPerFrameControlReprocessingPipe(void) = 0;
     virtual int                         getPerFrameInfo3AA(void) = 0;
@@ -491,20 +576,34 @@ public:
 
     virtual bool                        getDualMode(void) = 0;
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     virtual bool                        getDualCameraMode(void) = 0;
     virtual bool                        isFusionEnabled(void) = 0;
     virtual status_t                    getFusionSize(int w, int h, ExynosRect *srcRect, ExynosRect *dstRect) = 0;
     virtual status_t                    setFusionInfo(camera2_shot_ext *shot_ext) = 0;
     virtual DOF                        *getDOF(void) = 0;
+
+    typedef enum dual_standby_mode {
+        DUAL_STANDBY_MODE_BASE,
+        DUAL_STANDBY_MODE_READY,                /* frameFactory create "Transition" frame */
+        DUAL_STANDBY_MODE_ACTIVE_IN_POST,       /* frameFactory create "Internal" frame */
+        DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR,     /* sensor stream off */
+        DUAL_STANDBY_MODE_INACTIVE,             /* frameFactory create "Normal" frame */
+        DUAL_STANDBY_MODE_MAX,
+    } dual_standby_mode_t;
+
+    virtual dual_standby_mode_t         getDualStandbyMode(void) = 0;
+    virtual void                        setDualStandbyMode(dual_standby_mode_t dualStandbyMode) = 0;
+    virtual bool                        getDualStableFromStandby(void) = 0;
 #ifdef USE_CP_FUSION_LIB
     virtual char                       *readFusionCalData(int *readSize) = 0;
     virtual void                        setFusionCalData(char *addr, int size) = 0;
     virtual char                       *getFusionCalData(int *size) = 0;
 #endif // USE_CP_FUSION_LIB
-#endif // BOARD_CAMERA_USES_DUAL_CAMERA
+#endif // USE_DUAL_CAMERA
 
     virtual bool                        getTpuEnabledMode(void) = 0;
+    virtual bool                        checkFaceDetectMeta(__unused struct camera2_shot_ext *shot_ext) {return true;};
 
     virtual int                         getCameraId(void) = 0;
 
@@ -516,6 +615,9 @@ public:
     virtual void                        setOISCaptureModeOn(__unused bool enable){};
     virtual int                         getSeriesShotCount(void) = 0;
     virtual bool                        getHighResolutionCallbackMode(void) = 0;
+#ifdef SAMSUNG_COMPANION
+    virtual void                        setRTHdr(__unused enum companion_wdr_mode rtHdrMode){};
+#endif
 
     virtual void                        setNormalBestFrameCount(__unused uint32_t count){};
     virtual uint32_t                    getNormalBestFrameCount(void){return 0;};
@@ -544,7 +646,12 @@ public:
     virtual void                        setExifChangedAttribute(exif_attribute_t    *exifInfo,
                                             ExynosRect          *PictureRect,
                                             ExynosRect          *thumbnailRect,
-                                            camera2_shot_t      *shot) = 0;
+                                            camera2_shot_t      *shot,
+                                            bool                useDebugInfo2 = false
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+                                            , camera2_shot_t      *shot2 = NULL
+#endif
+                                            ) = 0;
 
 #ifdef DEBUG_RAWDUMP
     virtual bool                        checkBayerDumpEnable(void) = 0;
@@ -564,12 +671,19 @@ public:
     virtual int                         getLDCaptureMode(void) = 0;
     virtual int                         getLDCaptureCount(void) = 0;
 #endif
+#ifdef SR_CAPTURE
+    virtual void                        setSROn(uint32_t enable) = 0;
+    virtual bool                        getSROn(void) = 0;
+#endif
 #ifdef LLS_STUNR
     virtual bool                        getLLSStunrMode(void) = 0;
     virtual int                         getLLSStunrCount(void) = 0;
 #endif
 #ifdef SAMSUNG_LENS_DC
     virtual bool                        getLensDCEnable(void) = 0;
+#endif
+#ifdef SAMSUNG_STR_CAPTURE
+    virtual bool                        getSTRCaptureEnable(void) = 0;
 #endif
 #ifdef SAMSUNG_COMPANION
     virtual void                        setUseCompanion(bool use) = 0;
@@ -595,7 +709,7 @@ public:
 #endif
 //Sensor Static Info
     virtual struct ExynosSensorInfoBase             *getSensorStaticInfo() = 0;
-    virtual int                         getFrameSkipCount(void) = 0;
+    virtual int                         getFrameSkipCount(void){return 0;};
     virtual bool                        msgTypeEnabled(int32_t msgType) = 0;
 #ifdef SAMSUNG_HYPER_MOTION
     virtual bool                        getHyperMotionMode(void) = 0;
@@ -606,6 +720,13 @@ public:
     virtual bool                        getQuickSwitchFlag() = 0;
     virtual int                         getQuickSwitchCmd(void) = 0;
 #endif
+
+#ifdef USE_DUAL_CAMERA
+    virtual sync_type_t                 getDualCameraSyncType(void) = 0;
+    virtual sync_type_t                 getDualCameraReprocessingSyncType(void) = 0;
+#endif
+    virtual int                         getIonClient(void) {return -1;};
+    virtual bool                        getEffectHint(void) {return false;};
 };
 
 

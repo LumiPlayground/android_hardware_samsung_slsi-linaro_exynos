@@ -25,30 +25,35 @@ namespace android {
 
 void updateNodeGroupInfo(
         int pipeId,
-        ExynosCameraParameters *params,
+        ExynosCamera1Parameters *params,
         const size_control_info_t sizeControlInfo,
         camera2_node_group *node_group_info)
 {
     status_t ret = NO_ERROR;
     uint32_t perframePosition = 0;
+#ifdef USE_VRA_GROUP
+    int dsInputPortId = params->getDsInputPortId();
+#endif
     bool isReprocessing = pipeId >= PIPE_FLITE_REPROCESSING ? true : false;
-
+#if defined(SAMSUNG_HIFI_LLS) || defined(SR_CAPTURE)
+    bool isLlsSrEnabled = false;
+#endif
     ExynosRect sensorSize;
 #ifdef SUPPORT_DEPTH_MAP
     ExynosRect depthMapSize;
 #endif // SUPPORT_DEPTH_MAP
     ExynosRect bnsSize;
     ExynosRect bayerCropSize;
+    ExynosRect hwBdsSize;
     ExynosRect bdsSize;
     ExynosRect ispSize;
     ExynosRect mcscInputSize;
     ExynosRect ratioCropSize;
-    ExynosRect mcsc0Size;
-    ExynosRect mcsc1Size;
-    ExynosRect mcsc2Size;
-    ExynosRect mcsc3Size;
-    ExynosRect mcsc4Size;
-
+    ExynosRect mcscSize[6];
+#ifdef USE_VRA_GROUP
+    ExynosRect vraInputSize;
+    ExynosRect dsInputSize;
+#endif
     sensorSize = sizeControlInfo.sensorSize;
 #ifdef SUPPORT_DEPTH_MAP
     depthMapSize = sizeControlInfo.depthMapSize;
@@ -56,12 +61,34 @@ void updateNodeGroupInfo(
     bnsSize = sizeControlInfo.bnsSize;
     bayerCropSize = sizeControlInfo.bayerCropSize;
     bdsSize = sizeControlInfo.bdsSize;
-
+#ifdef USE_VRA_GROUP
+    vraInputSize = sizeControlInfo.vraInputSize;
+#endif
     if (bdsSize.w > bayerCropSize.w || bdsSize.h > bayerCropSize.h) {
         CLOGW2("Bcrop size(%dx%d) < BDS size(%dx%d). Fix it.",
                 bayerCropSize.w, bayerCropSize.h, bdsSize.w, bdsSize.h);
-        bdsSize.w = bayerCropSize.w;
-        bdsSize.h = bayerCropSize.h;
+        if (isReprocessing == true && params->getUsePureBayerReprocessing() == false) {
+            bayerCropSize.x = 0;
+            bayerCropSize.y = 0;
+            bayerCropSize.w = bdsSize.w;
+            bayerCropSize.h = bdsSize.h;
+        } else {
+            params->getPreviewBdsSize(&hwBdsSize, false);
+            bdsSize.w = bayerCropSize.w;
+            bdsSize.h = bayerCropSize.h;
+            if (hwBdsSize.w < bdsSize.w || hwBdsSize.h < bdsSize.h) {
+                CLOGW2("HWBDS size(%dx%d) < BDS size(%dx%d). Fix it.",
+                        hwBdsSize.w, hwBdsSize.h, bdsSize.w, bdsSize.h);
+                if (hwBdsSize.w < bdsSize.w) {
+                    bdsSize.w = hwBdsSize.w;
+                }
+
+                if (hwBdsSize.h < bdsSize.h) {
+                    bdsSize.h = hwBdsSize.h;
+                }
+
+            }
+        }
     }
 
     if (isReprocessing == false) {
@@ -75,24 +102,35 @@ void updateNodeGroupInfo(
         else
             mcscInputSize = ispSize;
 
-        mcsc0Size = sizeControlInfo.hwPreviewSize;
+        mcscSize[0] = sizeControlInfo.hwPreviewSize;
 
         if (params->getHighResolutionCallbackMode() == true) {
-            mcsc1Size = sizeControlInfo.hwPreviewSize;
+            mcscSize[1] = sizeControlInfo.hwPreviewSize;
         } else {
-            mcsc1Size = sizeControlInfo.previewSize;
+            mcscSize[1] = sizeControlInfo.previewSize;
         }
 
         if (params->getCameraId() == CAMERA_ID_FRONT && params->getDualMode() == true)
-            mcsc2Size = sizeControlInfo.hwPreviewSize;
+            mcscSize[2] = sizeControlInfo.hwPreviewSize;
         else
-            mcsc2Size = sizeControlInfo.hwVideoSize;
+            mcscSize[2] = sizeControlInfo.hwVideoSize;
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
-        if ((params->getCameraId() == CAMERA_ID_FRONT || params->getCameraId() == CAMERA_ID_BACK_1) &&
-            (params->getDualMode() == true)) {
-            mcsc2Size = sizeControlInfo.hwPreviewSize;
+#ifdef SAMSUNG_DUAL_SOLUTION
+        if (params->getDualCameraMode() == true) {
+            int needMargin = params->getPreviewNeedMargin();
+            if (needMargin == 0)
+                mcscSize[0] = sizeControlInfo.fusionDstSize;
         }
+#endif
+
+#ifdef USE_VRA_GROUP
+        dsInputSize = mcscSize[dsInputPortId];
+
+        if (dsInputSize.w < vraInputSize.w || dsInputSize.h < vraInputSize.h) {
+            vraInputSize.w = dsInputSize.w;
+            vraInputSize.h = dsInputSize.h;
+        }
+        mcscSize[3] = vraInputSize;
 #endif
 
     } else {
@@ -107,21 +145,39 @@ void updateNodeGroupInfo(
             mcscInputSize = ispSize;
 
         if (params->isSingleChain() == true) {
-            mcsc1Size = sizeControlInfo.pictureSize;
-            mcsc2Size = sizeControlInfo.thumbnailSize;
+            mcscSize[1] = sizeControlInfo.pictureSize;
+            mcscSize[2] = sizeControlInfo.thumbnailSize;
 
             if (params->getOutPutFormatNV21Enable())
-                mcsc0Size = sizeControlInfo.pictureSize;
+                mcscSize[0] = sizeControlInfo.pictureSize;
             else
-                mcsc0Size = sizeControlInfo.previewSize;
+                mcscSize[0] = sizeControlInfo.previewSize;
         } else {
-            mcsc3Size = sizeControlInfo.pictureSize;
-            mcsc4Size = sizeControlInfo.thumbnailSize;
-
-            if (params->getOutPutFormatNV21Enable())
-                mcsc1Size = sizeControlInfo.pictureSize;
-            else
-                mcsc1Size = sizeControlInfo.previewSize;
+#ifdef EXYNOS7885
+            mcscSize[1] = sizeControlInfo.pictureSize;
+            mcscSize[2] = sizeControlInfo.thumbnailSize;
+#else
+            mcscSize[3] = sizeControlInfo.pictureSize;
+            mcscSize[4] = sizeControlInfo.thumbnailSize;
+#endif
+            if (params->getOutPutFormatNV21Enable()
+#ifdef USE_DUAL_CAMERA
+                    || (params->getDualCameraMode() == true &&
+                        params->getDualCameraReprocessingSyncType() == SYNC_TYPE_SYNC)
+#endif
+               ) {
+#ifdef EXYNOS7885
+                mcscSize[0] = sizeControlInfo.pictureSize;
+#else
+                mcscSize[1] = sizeControlInfo.pictureSize;
+#endif
+            } else {
+#ifdef EXYNOS7885
+                mcscSize[0] = sizeControlInfo.previewSize;
+#else
+                mcscSize[1] = sizeControlInfo.previewSize;
+#endif
+            }
         }
     }
 
@@ -153,8 +209,14 @@ void updateNodeGroupInfo(
         setLeaderSizeToNodeGroupInfo(node_group_info, mcscInputSize.x, mcscInputSize.y, mcscInputSize.w, mcscInputSize.h);
         break;
     case PIPE_TPU1:
-        setLeaderSizeToNodeGroupInfo(node_group_info, 0, 0, mcsc3Size.x, mcsc3Size.y);
+        setLeaderSizeToNodeGroupInfo(node_group_info, 0, 0, mcscSize[3].x, mcscSize[3].y);
         break;
+#ifdef USE_VRA_GROUP
+    case PIPE_VRA:
+        /* Leader VRA Size */
+        setLeaderSizeToNodeGroupInfo(node_group_info, 0, 0, vraInputSize.w, vraInputSize.h);
+        break;
+#endif
     default:
         CLOGE2("Invalid pipeId %d", pipeId);
         return;
@@ -183,6 +245,9 @@ void updateNodeGroupInfo(
     case PIPE_MCSC_REPROCESSING:
         pipeName = "MCSC";
         break;
+	case PIPE_VRA:
+		pipeName = "VRA";
+		break;
     default:
         break;
     }
@@ -269,12 +334,12 @@ void updateNodeGroupInfo(
         case FIMC_IS_VIDEO_M0P_NUM:
             /* MCSC 0 : [crop/scale] : Preview */
             ret = getCropRectAlign(
-                    mcscInputSize.w, mcscInputSize.h, mcsc0Size.w, mcsc0Size.h,
+                    mcscInputSize.w, mcscInputSize.h, mcscSize[0].w, mcscSize[0].h,
                     &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
                     CAMERA_MCSC_ALIGN, 2, 0, 1.0);
             if (ret != NO_ERROR) {
                 ALOGE("ERR(%s[%d]):getCropRectAlign failed. MCSC in_crop %dx%d, MCSC0 out_size %dx%d",
-                        __FUNCTION__, __LINE__, mcscInputSize.w, mcscInputSize.h, mcsc0Size.w, mcsc0Size.h);
+                        __FUNCTION__, __LINE__, mcscInputSize.w, mcscInputSize.h, mcscSize[0].w, mcscSize[0].h);
 
                 ratioCropSize.x = 0;
                 ratioCropSize.y = 0;
@@ -285,18 +350,36 @@ void updateNodeGroupInfo(
             setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
                                                     ratioCropSize.x, ratioCropSize.y,
                                                     ratioCropSize.w, ratioCropSize.h,
-                                                    mcsc0Size.w, mcsc0Size.h);
+                                                    mcscSize[0].w, mcscSize[0].h);
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_M1P_NUM:
             /* MCSC 1 : [crop/scale] : Preview Callback */
-            ret = getCropRectAlign(
-                    mcscInputSize.w, mcscInputSize.h, mcsc1Size.w, mcsc1Size.h,
-                    &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
-                    CAMERA_MCSC_ALIGN, 2, 0, 1.0);
+#ifdef USE_MSC_CAPTURE
+            if (params->getZoomRatio() == 1.0f)
+#endif
+            {
+                ret = getCropRectAlign(
+                        mcscInputSize.w, mcscInputSize.h, mcscSize[1].w, mcscSize[1].h,
+                        &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
+                        CAMERA_MCSC_ALIGN, 2, 0, 1.0);
+            }
+#ifdef USE_MSC_CAPTURE
+            else {
+                ret = getCropRectAlign(
+                        mcscInputSize.w, mcscInputSize.h, mcscInputSize.w, mcscInputSize.h,
+                        &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
+                        16, 16, 0, 1.0);
+                mcscSize[1].w = ratioCropSize.w;
+                mcscSize[1].h = ratioCropSize.h;
+            }
+#endif
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+            params->getDualCropRect(&ratioCropSize);
+#endif
             if (ret != NO_ERROR) {
                 CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC1(4) out_size %dx%d",
-                        mcscInputSize.w, mcscInputSize.h, mcsc1Size.w, mcsc1Size.h);
+                        mcscInputSize.w, mcscInputSize.h, mcscSize[1].w, mcscSize[1].h);
 
                 ratioCropSize.x = 0;
                 ratioCropSize.y = 0;
@@ -304,10 +387,29 @@ void updateNodeGroupInfo(
                 ratioCropSize.h = mcscInputSize.h;
             }
 
+#ifdef SAMSUNG_HIFI_LLS
+            if (params->getLDCaptureMode())
+                isLlsSrEnabled = true;
+#endif
+#ifdef SR_CAPTURE
+            if (params->getSROn())
+                isLlsSrEnabled = true;
+#endif
+#if defined(SAMSUNG_HIFI_LLS) || defined(SR_CAPTURE)
+            if (isLlsSrEnabled &&
+                 (params->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_ALWAYS_ON ||
+                  params->getReprocessingBayerMode() == REPROCESSING_BAYER_MODE_DIRTY_DYNAMIC)
+            ) {
+                mcscSize[1].w = ALIGN_UP(ratioCropSize.w, 16);
+                mcscSize[1].h = ALIGN_UP(ratioCropSize.h, 16);
+                CLOGD2("[LLS_MBR][SR] mcscSize[1].w: %d, mcscSize[1].h: %d", mcscSize[1].w, mcscSize[1].h);
+            }
+#endif
+
 #if defined(USE_MCSC1_FOR_PREVIEWCALLBACK) && defined(SAMSUNG_HYPER_MOTION)
             if (params->getHyperMotionMode() == true) {
                 params->getHyperMotionCropSize(mcscInputSize.w, mcscInputSize.h,
-                                                mcsc0Size.w, mcsc0Size.h,
+                                                mcscSize[0].w, mcscSize[0].h,
                                                 &ratioCropSize.x, &ratioCropSize.y,
                                                 &ratioCropSize.w, &ratioCropSize.h);
             }
@@ -316,18 +418,18 @@ void updateNodeGroupInfo(
             setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
                                                     ratioCropSize.x, ratioCropSize.y,
                                                     ratioCropSize.w, ratioCropSize.h,
-                                                    mcsc1Size.w, mcsc1Size.h);
+                                                    mcscSize[1].w, mcscSize[1].h);
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_M2P_NUM:
             /* MCSC 2 : [crop/scale] : Recording */
             ret = getCropRectAlign(
-                    mcscInputSize.w, mcscInputSize.h, mcsc2Size.w, mcsc2Size.h,
+                    mcscInputSize.w, mcscInputSize.h, mcscSize[2].w, mcscSize[2].h,
                     &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
                     CAMERA_MCSC_ALIGN, 2, 0, 1.0);
             if (ret != NO_ERROR) {
                 CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC2 out_size %dx%d",
-                        mcscInputSize.w, mcscInputSize.h, mcsc2Size.w, mcsc2Size.h);
+                        mcscInputSize.w, mcscInputSize.h, mcscSize[2].w, mcscSize[2].h);
 
                 ratioCropSize.x = 0;
                 ratioCropSize.y = 0;
@@ -338,38 +440,60 @@ void updateNodeGroupInfo(
             setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
                                                     ratioCropSize.x, ratioCropSize.y,
                                                     ratioCropSize.w, ratioCropSize.h,
-                                                    mcsc2Size.w, mcsc2Size.h);
+                                                    mcscSize[2].w, mcscSize[2].h);
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_M3P_NUM:
+#ifdef USE_VRA_GROUP
             ret = getCropRectAlign(
-                    mcscInputSize.w, mcscInputSize.h, mcsc3Size.w, mcsc3Size.h,
+                    dsInputSize.w, dsInputSize.h, mcscSize[3].w, mcscSize[3].h,
                     &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
                     CAMERA_MCSC_ALIGN, 2, 0, 1.0);
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+            params->getDualCropRect(&ratioCropSize);
+#endif
             if (ret != NO_ERROR) {
                 CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC3 out_size %dx%d",
-                        mcscInputSize.w, mcscInputSize.h, mcsc3Size.w, mcsc3Size.h);
-        
+                        mcscInputSize.w, mcscInputSize.h, mcscSize[3].w, mcscSize[3].h);
+
+                ratioCropSize.x = 0;
+                ratioCropSize.y = 0;
+                ratioCropSize.w = dsInputSize.w;
+                ratioCropSize.h = dsInputSize.h;
+            }
+#else
+            ret = getCropRectAlign(
+                    mcscInputSize.w, mcscInputSize.h, mcscSize[3].w, mcscSize[3].h,
+                    &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
+                    CAMERA_MCSC_ALIGN, 2, 0, 1.0);
+#ifdef SAMSUNG_DUAL_CAPTURE_SOLUTION
+            params->getDualCropRect(&ratioCropSize);
+#endif
+            if (ret != NO_ERROR) {
+                CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC3 out_size %dx%d",
+                        mcscInputSize.w, mcscInputSize.h, mcscSize[3].w, mcscSize[3].h);
+
                 ratioCropSize.x = 0;
                 ratioCropSize.y = 0;
                 ratioCropSize.w = mcscInputSize.w;
                 ratioCropSize.h = mcscInputSize.h;
             }
+#endif
 
             setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
                                                     ratioCropSize.x, ratioCropSize.y,
                                                     ratioCropSize.w, ratioCropSize.h,
-                                                    mcsc3Size.w, mcsc3Size.h);
+                                                    mcscSize[3].w, mcscSize[3].h);
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_M4P_NUM:
             ret = getCropRectAlign(
-                    mcscInputSize.w, mcscInputSize.h, mcsc4Size.w, mcsc4Size.h,
+                    mcscInputSize.w, mcscInputSize.h, mcscSize[4].w, mcscSize[4].h,
                     &ratioCropSize.x, &ratioCropSize.y, &ratioCropSize.w, &ratioCropSize.h,
                     CAMERA_MCSC_ALIGN, 2, 0, 1.0);
             if (ret != NO_ERROR) {
                 CLOGE2("getCropRectAlign failed. MCSC in_crop %dx%d, MCSC4 out_size %dx%d",
-                        mcscInputSize.w, mcscInputSize.h, mcsc4Size.w, mcsc4Size.h);
+                        mcscInputSize.w, mcscInputSize.h, mcscSize[4].w, mcscSize[4].h);
 
                 ratioCropSize.x = 0;
                 ratioCropSize.y = 0;
@@ -380,11 +504,11 @@ void updateNodeGroupInfo(
             setCaptureCropNScaleSizeToNodeGroupInfo(node_group_info, perframePosition,
                                                     ratioCropSize.x, ratioCropSize.y,
                                                     ratioCropSize.w, ratioCropSize.h,
-                                                    mcsc4Size.w, mcsc4Size.h);
+                                                    mcscSize[4].w, mcscSize[4].h);
             perframePosition++;
             break;
         case FIMC_IS_VIDEO_D1C_NUM:
-            setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, mcsc3Size.w, mcsc3Size.h);
+            setCaptureSizeToNodeGroupInfo(node_group_info, perframePosition, mcscSize[3].w, mcscSize[3].h);
             break;
         default:
             break;

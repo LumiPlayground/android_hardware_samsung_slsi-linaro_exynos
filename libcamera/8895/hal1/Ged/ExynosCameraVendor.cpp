@@ -419,6 +419,7 @@ status_t ExynosCamera::startPreview()
 
         if (m_isSuccessedBufferAllocation == false) {
             CLOGE("ERR(%s[%d]):m_setBuffersThread() failed", __FUNCTION__, __LINE__);
+            ret = INVALID_OPERATION;
             goto err;
         }
 
@@ -772,6 +773,14 @@ void ExynosCamera::stopPreview()
         }
         m_previewThread->requestExitAndWait();
 
+        if (m_previewCallbackThread->isRunning()) {
+            m_previewCallbackThread->stop();
+            if (m_previewCallbackQ != NULL) {
+                m_previewCallbackQ->sendCmd(WAKE_UP);
+            }
+            m_previewCallbackThread->requestExitAndWait();
+        }
+
         if (m_parameters->isFlite3aaOtf() == true) {
             m_mainSetupQThread[INDEX(PIPE_FLITE)]->stop();
             m_mainSetupQ[INDEX(PIPE_FLITE)]->sendCmd(WAKE_UP);
@@ -820,6 +829,10 @@ void ExynosCamera::stopPreview()
 
         if (m_previewQ != NULL) {
              m_clearList(m_previewQ);
+        }
+
+        if (m_previewCallbackQ != NULL) {
+            m_clearList(m_previewCallbackQ);
         }
 
         if (m_zoomPreviwWithCscQ != NULL) {
@@ -2457,6 +2470,7 @@ bool ExynosCamera::m_previewThreadFunc(void)
     pipeIdCsc = PIPE_GSC;
     previewCallbackPipeId = PIPE_MCSC1;
     previewCbBuffer.index = -2;
+    scpBuffer.index = -2;
 
     previewQ = m_previewQ;
 
@@ -2492,6 +2506,7 @@ bool ExynosCamera::m_previewThreadFunc(void)
     if (ret < 0) {
         CLOGE("ERR(%s[%d]):getDstBuffer fail, ret(%d)", __FUNCTION__, __LINE__, ret);
         /* TODO: doing exception handling */
+        scpBuffer.index = -2;
         goto func_exit;
     }
 
@@ -2513,6 +2528,7 @@ bool ExynosCamera::m_previewThreadFunc(void)
 
     if (scpBuffer.index < 0 || scpBuffer.index >= maxbuffers ) {
         CLOGE("ERR(%s[%d]):Out of Index! (Max: %d, Index: %d)", __FUNCTION__, __LINE__, maxbuffers, scpBuffer.index);
+        scpBuffer.index = -2;
         goto func_exit;
     }
 
@@ -2526,13 +2542,6 @@ bool ExynosCamera::m_previewThreadFunc(void)
             checkBit(&m_callbackState, CALLBACK_STATE_COMPRESSED_IMAGE)) {
             CLOGV("INFO(%s[%d]):skip the preview callback and the preview display while compressed callback.",
                     __FUNCTION__, __LINE__);
-            if (previewCbBuffer.index >= 0) {
-                ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
-                if (ret != NO_ERROR) {
-                    CLOGE("ERR(%s[%d]):Preview callback buffer return fail", __FUNCTION__, __LINE__);
-                }
-            }
-            ret = m_scpBufferMgr->cancelBuffer(scpBuffer.index);
             goto func_exit;
         }
     }
@@ -2558,54 +2567,45 @@ bool ExynosCamera::m_previewThreadFunc(void)
 
             /* Exynos8890 has MC scaler, so it need not make callback frame */
             int bufIndex = -2;
-            if (previewCbBuffer.index < 0) {
-                m_previewCallbackBufferMgr->getBuffer(&bufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &previewCbBuffer);
-                copybuffer = false;
-            } else {
-                copybuffer = true;
-            }
-
-            ExynosCameraFrame *newFrame = NULL;
-
-            newFrame = m_previewFrameFactory->createNewFrameOnlyOnePipe(pipeIdCsc);
-            if (newFrame == NULL) {
-                CLOGE("ERR(%s):newFrame is NULL", __FUNCTION__);
-                return UNKNOWN_ERROR;
-            }
-
-            ret = m_doPreviewToCallbackFunc(pipeIdCsc, newFrame, scpBuffer, previewCbBuffer, copybuffer);
+            m_previewCallbackBufferMgr->getBuffer(&bufIndex, EXYNOS_CAMERA_BUFFER_POSITION_IN_HAL, &previewCbBuffer);
+            ret = m_doPreviewToCallbackFunc(pipeIdCsc, scpBuffer, previewCbBuffer);
             if (ret < 0) {
                 CLOGE("ERR(%s[%d]):m_doPreviewToCallbackFunc fail", __FUNCTION__, __LINE__);
+                goto func_exit;
+            }
+
+            ret = frame->setSrcBuffer(pipeId, previewCbBuffer);
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):setSrcBuffer fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+                goto func_exit;
+            }
+
+            if (m_parameters->getCallbackNeedCopy2Rendering() == true) {
+                ret = m_previewCallbackFunc(frame);
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):m_previewCallbackFunc fail", __FUNCTION__, __LINE__);
+                    goto func_exit;
+                }
+
+                ret = m_doCallbackToPreviewFunc(pipeIdCsc, frame, previewCbBuffer, scpBuffer);
+                if (ret < 0) {
+                    CLOGE("ERR(%s[%d]):m_doCallbackToPreviewFunc fail", __FUNCTION__, __LINE__);
+                    goto func_exit;
+                }
+
                 if (previewCbBuffer.index >= 0) {
                     ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
                     if (ret != NO_ERROR) {
                         CLOGE("ERR(%s[%d]):Preview callback buffer return fail", __FUNCTION__, __LINE__);
                     }
+                    previewCbBuffer.index  = -2;
                 }
-                m_scpBufferMgr->cancelBuffer(scpBuffer.index);
-                goto func_exit;
             } else {
-                if (m_parameters->getCallbackNeedCopy2Rendering() == true) {
-                    ret = m_doCallbackToPreviewFunc(pipeIdCsc, frame, previewCbBuffer, scpBuffer);
-                    if (ret < 0) {
-                        CLOGE("ERR(%s[%d]):m_doCallbackToPreviewFunc fail", __FUNCTION__, __LINE__);
-                        if (previewCbBuffer.index >= 0) {
-                            ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
-                            if (ret != NO_ERROR) {
-                                CLOGE("ERR(%s[%d]):Preview callback buffer return fail", __FUNCTION__, __LINE__);
-                            }
-                        }
-                        m_scpBufferMgr->cancelBuffer(scpBuffer.index);
-                        goto func_exit;
-                    }
-                }
+                frame->incRef();
+                m_previewCallbackQ->pushProcessQ(&frame);
+                previewCbBuffer.index = -2;
             }
 
-            if (newFrame != NULL) {
-                newFrame->decRef();
-                m_frameMgr->deleteFrame(newFrame);
-                newFrame = NULL;
-            }
         }
 
         if (m_previewWindow != NULL) {
@@ -2646,13 +2646,6 @@ bool ExynosCamera::m_previewThreadFunc(void)
                 checkBit(&m_callbackState, CALLBACK_STATE_COMPRESSED_IMAGE)) {
                 CLOGV("INFO(%s[%d]):skip the preview callback and the preview display while compressed callback.",
                         __FUNCTION__, __LINE__);
-                if (previewCbBuffer.index >= 0) {
-                    ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
-                    if (ret != NO_ERROR) {
-                        CLOGE("ERR(%s[%d]):Preview callback buffer return fail", __FUNCTION__, __LINE__);
-                    }
-                }
-                ret = m_scpBufferMgr->cancelBuffer(scpBuffer.index);
                 goto func_exit;
             }
         }
@@ -2662,13 +2655,6 @@ bool ExynosCamera::m_previewThreadFunc(void)
         if (ret < 0) {
             /* TODO: error handling */
             CLOGE("ERR(%s[%d]):put Buffer fail", __FUNCTION__, __LINE__);
-        }
-
-        if (previewCbBuffer.index >= 0) {
-            ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
-            if (ret != NO_ERROR) {
-                CLOGE("ERR(%s[%d]):Preview callback buffer return fail", __FUNCTION__, __LINE__);
-            }
         }
     } else {
         ALOGW("WARN(%s[%d]):Preview frame buffer is canceled."
@@ -2687,7 +2673,24 @@ bool ExynosCamera::m_previewThreadFunc(void)
         ret = m_scpBufferMgr->cancelBuffer(scpBuffer.index);
     }
 
+    if (frame != NULL) {
+        frame->decRef();
+        m_frameMgr->deleteFrame(frame);
+        frame = NULL;
+    }
+
+    return loop;
+
 func_exit:
+
+    if (previewCbBuffer.index >= 0) {
+        ret = m_putBuffers(m_previewCallbackBufferMgr, previewCbBuffer.index);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Preview callback buffer return fail", __FUNCTION__, __LINE__);
+        }
+    }
+
+    ret = m_scpBufferMgr->cancelBuffer(scpBuffer.index);
 
     if (frame != NULL) {
         frame->decRef();
@@ -5296,6 +5299,14 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
         m_previewQ->sendCmd(WAKE_UP);
     m_previewThread->requestExitAndWait();
 
+    if (m_previewCallbackThread->isRunning()) {
+        m_previewCallbackThread->stop();
+        if (m_previewCallbackQ != NULL) {
+            m_previewCallbackQ->sendCmd(WAKE_UP);
+        }
+        m_previewCallbackThread->requestExitAndWait();
+    }
+
     if (m_parameters->isFlite3aaOtf() == true) {
         m_mainSetupQThread[INDEX(PIPE_FLITE)]->stop();
         m_mainSetupQ[INDEX(PIPE_FLITE)]->sendCmd(WAKE_UP);
@@ -5355,6 +5366,9 @@ status_t ExynosCamera::m_restartPreviewInternal(bool flagUpdateParam, CameraPara
         m_clearList(m_previewQ);
     }
 
+    if (m_previewCallbackQ != NULL) {
+        m_clearList(m_previewCallbackQ);
+    }
 
     /* check reserved memory count */
     if (m_bayerBufferMgr->getContigBufCount() > 0)
@@ -5837,122 +5851,161 @@ status_t ExynosCamera::m_stopPictureInternal(void)
 
 status_t ExynosCamera::m_doPreviewToCallbackFunc(
         int32_t pipeId,
-        ExynosCameraFrame *newFrame,
         ExynosCameraBuffer previewBuf,
-        ExynosCameraBuffer callbackBuf,
-        bool copybuffer)
+        ExynosCameraBuffer callbackBuf)
 {
-    CLOGV("DEBUG(%s): converting preview to callback buffer copybuffer(%d)", __FUNCTION__, copybuffer);
-
     int ret = 0;
     status_t statusRet = NO_ERROR;
 
-    int hwPreviewW = 0, hwPreviewH = 0;
     int hwPreviewFormat = m_parameters->getHwPreviewFormat();
     bool useCSC = m_parameters->getCallbackNeedCSC();
 
-    ExynosCameraDurationTimer probeTimer;
-    int probeTimeMSEC;
-    uint32_t fcount = 0;
+    ExynosCameraFrame *newFrame = NULL;
 
-    m_parameters->getHwPreviewSize(&hwPreviewW, &hwPreviewH);
-
-    ExynosRect srcRect, dstRect;
-
-    camera_memory_t *previewCallbackHeap = NULL;
-    previewCallbackHeap = m_getMemoryCb(callbackBuf.fd[0], callbackBuf.size[0], 1, m_callbackCookie);
-    if (!previewCallbackHeap || previewCallbackHeap->data == MAP_FAILED) {
-        CLOGE("ERR(%s[%d]):m_getMemoryCb(%d) fail", __FUNCTION__, __LINE__, callbackBuf.size[0]);
+    if (m_flagThreadStop == true || m_previewEnabled == false) {
+        CLOGE("ERR(%s[%d]): preview was stopped!", __FUNCTION__, __LINE__);
         statusRet = INVALID_OPERATION;
         goto done;
     }
 
-    if (!copybuffer) {
-        ret = m_setCallbackBufferInfo(&callbackBuf, (char *)previewCallbackHeap->data);
+    if (useCSC) {
+        int pushFrameCnt = 0, doneFrameCnt = 0;
+        int retryCnt = 5;
+        bool isOldFrame = false;
+        ExynosRect srcRect, dstRect;
+
+        newFrame = m_previewFrameFactory->createNewFrameOnlyOnePipe(pipeId);
+        if (newFrame == NULL) {
+            CLOGE("ERR(%s):newFrame is NULL", __FUNCTION__);
+            goto done;
+        }
+
+        m_calcPreviewGSCRect(&srcRect, &dstRect);
+        newFrame->setSrcRect(pipeId, &srcRect);
+        newFrame->setDstRect(pipeId, &dstRect);
+
+        ret = m_setupEntity(pipeId, newFrame, &previewBuf, &callbackBuf);
         if (ret < 0) {
-            CLOGE("ERR(%s[%d]): setCallbackBufferInfo fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            CLOGE("ERR(%s[%d]):setupEntity fail, pipeId(%d), ret(%d)",
+                    __FUNCTION__, __LINE__, pipeId, ret);
             statusRet = INVALID_OPERATION;
             goto done;
         }
+        m_previewFrameFactory->setOutputFrameQToPipe(m_previewCallbackGscFrameDoneQ, pipeId);
+        m_previewFrameFactory->pushFrameToPipe(&newFrame, pipeId);
+        pushFrameCnt = newFrame->getFrameCount();
 
-        if (m_flagThreadStop == true || m_previewEnabled == false) {
-            CLOGE("ERR(%s[%d]): preview was stopped!", __FUNCTION__, __LINE__);
-            statusRet = INVALID_OPERATION;
-            goto done;
-        }
-
-        ret = m_calcPreviewGSCRect(&srcRect, &dstRect);
-
-        if (useCSC) {
-            ret = newFrame->setSrcRect(pipeId, &srcRect);
-            ret = newFrame->setDstRect(pipeId, &dstRect);
-
-            ret = m_setupEntity(pipeId, newFrame, &previewBuf, &callbackBuf);
-            if (ret < 0) {
-                CLOGE("ERR(%s[%d]):setupEntity fail, pipeId(%d), ret(%d)",
-                        __FUNCTION__, __LINE__, pipeId, ret);
-                statusRet = INVALID_OPERATION;
-                goto done;
-            }
-
-            m_previewFrameFactory->setOutputFrameQToPipe(m_previewCallbackGscFrameDoneQ, pipeId);
-            m_previewFrameFactory->pushFrameToPipe(&newFrame, pipeId);
+        do {
+            isOldFrame = false;
+            retryCnt--;
 
             CLOGV("INFO(%s[%d]):wait preview callback output", __FUNCTION__, __LINE__);
             ret = m_previewCallbackGscFrameDoneQ->waitAndPopProcessQ(&newFrame);
             if (ret < 0) {
                 CLOGE("ERR(%s[%d]):wait and pop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
-                /* TODO: doing exception handling */
-                statusRet = INVALID_OPERATION;
-                goto done;
+                if (ret == TIMED_OUT && retryCnt > 0) {
+                    continue;
+                } else {
+                    /* TODO: doing exception handling */
+                    statusRet = INVALID_OPERATION;
+                    goto done;
+                }
             }
             if (newFrame == NULL) {
                 CLOGE("ERR(%s[%d]):newFrame is NULL", __FUNCTION__, __LINE__);
                 statusRet = INVALID_OPERATION;
                 goto done;
             }
-            CLOGV("INFO(%s[%d]):preview callback done", __FUNCTION__, __LINE__);
+
+            doneFrameCnt = newFrame->getFrameCount();
+            if (doneFrameCnt < pushFrameCnt) {
+                isOldFrame = true;
+                CLOGD("INFO(%s[%d]):Frame Count(%d/%d), retryCnt(%d)",
+                    __FUNCTION__, __LINE__, pushFrameCnt, doneFrameCnt, retryCnt);
+            }
+        } while ((ret == TIMED_OUT || isOldFrame == true) && (retryCnt > 0));
+        CLOGV("INFO(%s[%d]):preview callback done", __FUNCTION__, __LINE__);
 
 #if 0
-            int remainedH = m_orgPreviewRect.h - dst_height;
+        int remainedH = m_orgPreviewRect.h - dst_height;
 
-            if (remainedH != 0) {
-                char *srcAddr = NULL;
-                char *dstAddr = NULL;
-                int planeDiver = 1;
-
-                for (int plane = 0; plane < 2; plane++) {
-                    planeDiver = (plane + 1) * 2 / 2;
-
-                    srcAddr = previewBuf.virt.extP[plane] + (ALIGN_UP(hwPreviewW, CAMERA_16PX_ALIGN) * dst_crop_height / planeDiver);
-                    dstAddr = callbackBuf->virt.extP[plane] + (m_orgPreviewRect.w * dst_crop_height / planeDiver);
-
-                    for (int i = 0; i < remainedH; i++) {
-                        memcpy(dstAddr, srcAddr, (m_orgPreviewRect.w / planeDiver));
-
-                        srcAddr += (ALIGN_UP(hwPreviewW, CAMERA_16PX_ALIGN) / planeDiver);
-                        dstAddr += (m_orgPreviewRect.w                   / planeDiver);
-                    }
-                }
-            }
-#endif
-        } else { /* neon memcpy */
+        if (remainedH != 0) {
             char *srcAddr = NULL;
             char *dstAddr = NULL;
-            int planeCount = getYuvPlaneCount(hwPreviewFormat);
-            if (planeCount <= 0) {
-                CLOGE("ERR(%s[%d]):getYuvPlaneCount(%d) fail", __FUNCTION__, __LINE__, hwPreviewFormat);
-                statusRet = INVALID_OPERATION;
-                goto done;
-            }
+            int planeDiver = 1;
 
-            /* TODO : have to consider all fmt(planes) and stride */
-            for (int plane = 0; plane < planeCount; plane++) {
-                srcAddr = previewBuf.addr[plane];
-                dstAddr = callbackBuf.addr[plane];
-                memcpy(dstAddr, srcAddr, callbackBuf.size[plane]);
+            for (int plane = 0; plane < 2; plane++) {
+                planeDiver = (plane + 1) * 2 / 2;
+
+                srcAddr = previewBuf.virt.extP[plane] + (ALIGN_UP(hwPreviewW, CAMERA_16PX_ALIGN) * dst_crop_height / planeDiver);
+                dstAddr = callbackBuf->virt.extP[plane] + (m_orgPreviewRect.w * dst_crop_height / planeDiver);
+
+                for (int i = 0; i < remainedH; i++) {
+                    memcpy(dstAddr, srcAddr, (m_orgPreviewRect.w / planeDiver));
+
+                    srcAddr += (ALIGN_UP(hwPreviewW, CAMERA_16PX_ALIGN) / planeDiver);
+                    dstAddr += (m_orgPreviewRect.w                   / planeDiver);
+                }
             }
         }
+#endif
+    } else { /* neon memcpy */
+        char *srcAddr = NULL;
+        char *dstAddr = NULL;
+        int planeCount = getYuvPlaneCount(hwPreviewFormat);
+        if (planeCount <= 0) {
+            CLOGE("ERR(%s[%d]):getYuvPlaneCount(%d) fail", __FUNCTION__, __LINE__, hwPreviewFormat);
+            statusRet = INVALID_OPERATION;
+            goto done;
+        }
+
+        dstAddr = callbackBuf.addr[0];
+        /* TODO : have to consider all fmt(planes) and stride */
+        for (int plane = 0; plane < planeCount; plane++) {
+            srcAddr = previewBuf.addr[plane];
+            memcpy(dstAddr, srcAddr, previewBuf.size[plane]);
+            dstAddr = dstAddr + previewBuf.size[plane];
+
+            if (m_ionClient >= 0)
+                ion_sync_fd(m_ionClient, callbackBuf.fd[plane]);
+        }
+
+    }
+
+done:
+    if (newFrame != NULL) {
+        newFrame->decRef();
+        m_frameMgr->deleteFrame(newFrame);
+        newFrame = NULL;
+    }
+
+    return statusRet;
+}
+
+
+
+status_t ExynosCamera::m_previewCallbackFunc(ExynosCameraFrameSP_sptr_t newFrame, bool needBufferRelease)
+{
+    status_t statusRet = NO_ERROR;
+    ExynosCameraDurationTimer probeTimer;
+    int probeTimeMSEC;
+    int ret = 0;
+    ExynosCameraBuffer callbackBuf;
+    int pipeId = PIPE_MCSC0;
+    camera_memory_t *previewCallbackHeap = NULL;
+
+    callbackBuf.index = -2;
+
+    ret = newFrame->getSrcBuffer(pipeId, &callbackBuf);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):getDstBuffer fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+    }
+
+    previewCallbackHeap = m_getMemoryCb(callbackBuf.fd[0], callbackBuf.size[0], 1, m_callbackCookie);
+    if (!previewCallbackHeap || previewCallbackHeap->data == MAP_FAILED) {
+        CLOGE("ERR(%s[%d]):m_getMemoryCb(%d) fail", __FUNCTION__, __LINE__, callbackBuf.size[0]);
+        statusRet = INVALID_OPERATION;
+        goto done;
     }
 
     probeTimer.start();
@@ -5964,22 +6017,73 @@ status_t ExynosCamera::m_doPreviewToCallbackFunc(
         clearBit(&m_callbackState, CALLBACK_STATE_PREVIEW_FRAME, false);
     }
     probeTimer.stop();
-    getStreamFrameCount((struct camera2_stream *)previewBuf.addr[2], &fcount);
     probeTimeMSEC = (int)probeTimer.durationMsecs();
 
     if (probeTimeMSEC > 33 && probeTimeMSEC <= 66)
-        CLOGV("(%s[%d]):(%d) duration time(%5d msec)", __FUNCTION__, __LINE__, fcount, (int)probeTimer.durationMsecs());
+        CLOGV("(%s[%d]): duration time(%5d msec)", __FUNCTION__, __LINE__, (int)probeTimer.durationMsecs());
     else if(probeTimeMSEC > 66)
-        CLOGD("(%s[%d]):(%d) duration time(%5d msec)", __FUNCTION__, __LINE__, fcount, (int)probeTimer.durationMsecs());
+        CLOGD("(%s[%d]): duration time(%5d msec)", __FUNCTION__, __LINE__, (int)probeTimer.durationMsecs());
     else
-        CLOGV("(%s[%d]):(%d) duration time(%5d msec)", __FUNCTION__, __LINE__, fcount, (int)probeTimer.durationMsecs());
+        CLOGV("(%s[%d]): duration time(%5d msec)", __FUNCTION__, __LINE__, (int)probeTimer.durationMsecs());
 
 done:
     if (previewCallbackHeap != NULL) {
         previewCallbackHeap->release(previewCallbackHeap);
     }
 
+    if (needBufferRelease && callbackBuf.index >= 0) {
+        ret = m_putBuffers(m_previewCallbackBufferMgr, callbackBuf.index);
+        if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):Preview callback buffer return fail", __FUNCTION__, __LINE__);
+        }
+    }
+
     return statusRet;
+}
+
+bool ExynosCamera::m_previewCallbackThreadFunc(void)
+{
+    bool loop = true;
+    int ret = 0;
+    ExynosCameraFrame *newFrame = NULL;
+
+    CLOGV("INFO(%s[%d]):wait m_previewCallbackQ output", __FUNCTION__, __LINE__);
+    ret = m_previewCallbackQ->waitAndPopProcessQ(&newFrame);
+    if (m_flagThreadStop == true || ret == TIMED_OUT) {
+        CLOGI("INFO(%s[%d]):m_flagThreadStop(%d)", __FUNCTION__, __LINE__, m_flagThreadStop);
+
+        if (newFrame != NULL) {
+            newFrame->decRef();
+            m_frameMgr->deleteFrame(newFrame);
+            newFrame = NULL;
+        }
+
+        return false;
+    }
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):wait and pop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        goto done;
+    }
+
+    if (newFrame == NULL) {
+        CLOGE("ERR(%s[%d]):frame is NULL", __FUNCTION__, __LINE__);
+        goto done;
+    }
+
+    ret = m_previewCallbackFunc(newFrame, true);
+    if (ret < 0) {
+        CLOGE("ERR(%s[%d]):m_previewCallbackFunc fail", __FUNCTION__, __LINE__);
+    }
+
+done:
+
+    if (newFrame != NULL) {
+        newFrame->decRef();
+        m_frameMgr->deleteFrame(newFrame);
+        newFrame = NULL;
+    }
+
+    return loop;
 }
 
 status_t ExynosCamera::m_doCallbackToPreviewFunc(
@@ -5998,21 +6102,6 @@ status_t ExynosCamera::m_doCallbackToPreviewFunc(
     bool useCSC = m_parameters->getCallbackNeedCSC();
 
     m_parameters->getHwPreviewSize(&hwPreviewW, &hwPreviewH);
-
-    camera_memory_t *previewCallbackHeap = NULL;
-    previewCallbackHeap = m_getMemoryCb(callbackBuf.fd[0], callbackBuf.size[0], 1, m_callbackCookie);
-    if (!previewCallbackHeap || previewCallbackHeap->data == MAP_FAILED) {
-        CLOGE("ERR(%s[%d]):m_getMemoryCb(%d) fail", __FUNCTION__, __LINE__, callbackBuf.size[0]);
-        statusRet = INVALID_OPERATION;
-        goto done;
-    }
-
-    ret = m_setCallbackBufferInfo(&callbackBuf, (char *)previewCallbackHeap->data);
-    if (ret < 0) {
-        CLOGE("ERR(%s[%d]): setCallbackBufferInfo fail, ret(%d)", __FUNCTION__, __LINE__, ret);
-        statusRet = INVALID_OPERATION;
-        goto done;
-    }
 
     if (m_flagThreadStop == true || m_previewEnabled == false) {
         CLOGE("ERR(%s[%d]): preview was stopped!", __FUNCTION__, __LINE__);
@@ -6060,10 +6149,11 @@ status_t ExynosCamera::m_doCallbackToPreviewFunc(
         }
 
         /* TODO : have to consider all fmt(planes) and stride */
+        srcAddr = callbackBuf.addr[0];
         for (int plane = 0; plane < planeCount; plane++) {
-            srcAddr = callbackBuf.addr[plane];
             dstAddr = previewBuf.addr[plane];
-            memcpy(dstAddr, srcAddr, callbackBuf.size[plane]);
+            memcpy(dstAddr, srcAddr, previewBuf.size[plane]);
+            srcAddr = srcAddr + previewBuf.size[plane];
 
             if (m_ionClient >= 0)
                 ion_sync_fd(m_ionClient, previewBuf.fd[plane]);
@@ -6071,9 +6161,6 @@ status_t ExynosCamera::m_doCallbackToPreviewFunc(
     }
 
 done:
-    if (previewCallbackHeap != NULL) {
-        previewCallbackHeap->release(previewCallbackHeap);
-    }
 
     return statusRet;
 }
@@ -8426,14 +8513,19 @@ void ExynosCamera::m_terminatePictureThreads(bool callFromJpeg)
 
         if (newFrame != NULL) {
             int seriesShotSaveLocation = m_parameters->getSeriesShotSaveLocation();
-            char command[CAMERA_FILE_PATH_SIZE];
-            memset(command, 0, sizeof(command));
+            char filepath[CAMERA_FILE_PATH_SIZE];
+            int ret = -1;
 
-            snprintf(command, sizeof(command), "rm %sBurst%02d.jpg", m_burstSavePath, newFrame->getFrameCount());
+            memset(filepath, 0, sizeof(filepath));
 
-            CLOGD("DEBUG(%s[%d]):run %s - start", __FUNCTION__, __LINE__, command);
-            system(command);
-            CLOGD("DEBUG(%s[%d]):run %s - end", __FUNCTION__, __LINE__, command);
+            snprintf(filepath, sizeof(filepath), "%sBurst%02d.jpg", m_burstSavePath, newFrame->getFrameCount());
+
+            CLOGD("DEBUG(%s[%d]):run unlink %s - start", __FUNCTION__, __LINE__, filepath);
+            ret = unlink(filepath);
+            CLOGD("DEBUG(%s[%d]):run unlink %s - end", __FUNCTION__, __LINE__, filepath);
+            if (ret != 0) {
+                CLOGE("ERR(%s):unlink fail. filepath(%s) ret(%d)", __FUNCTION__, filepath, ret);
+            }
 
             CLOGD("DEBUG(%s[%d]): remaining frame delete(%d)",
                     __FUNCTION__, __LINE__, newFrame->getFrameCount());
@@ -8673,4 +8765,8 @@ CLEAN:
     return loop;
 }
 
+void ExynosCamera::m_printVendorCameraInfo(void)
+{
+    /* Do nothing */
+}
 }; /* namespace android */

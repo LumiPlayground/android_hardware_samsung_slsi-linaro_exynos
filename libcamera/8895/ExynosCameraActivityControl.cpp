@@ -36,6 +36,7 @@ ExynosCameraActivityControl::ExynosCameraActivityControl(int cameraId)
     m_focusMode = FOCUS_MODE_AUTO;
     m_fpsValue = 1;
     m_halVersion = IS_HAL_VER_1_0;
+    m_camId = cameraId;
 }
 
 ExynosCameraActivityControl::~ExynosCameraActivityControl()
@@ -69,7 +70,6 @@ bool ExynosCameraActivityControl::autoFocus(int focusMode, int focusType, bool f
     int newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_BASE;
     int oldMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_BASE;
     bool flagAutoFocusTringger = false;
-    bool flagPreFlash = false;
     bool flagLockFocus = false;
 
     if (focusType == AUTO_FOCUS_SERVICE) {
@@ -77,9 +77,12 @@ bool ExynosCameraActivityControl::autoFocus(int focusMode, int focusType, bool f
     }
     ALOGD("DEBUG(%s[%d]):NeedCaptureFlash=%d", __FUNCTION__, __LINE__, m_flashMgr->getNeedCaptureFlash());
     if (m_flashMgr->getNeedCaptureFlash() == true) {
-        /* start Pre-flash */
-        if (startPreFlash(this->getAutoFocusMode()) != NO_ERROR)
-            ALOGE("ERR(%s[%d]):start Pre-flash Fail", __FUNCTION__, __LINE__);
+        /* Front camera use display flash so, does not support Pre-flash */
+        if (!(m_camId == CAMERA_ID_FRONT || m_camId == CAMERA_ID_FRONT_1)) {
+            /* start Pre-flash */
+            if (startPreFlash(this->getAutoFocusMode()) != NO_ERROR)
+                ALOGE("ERR(%s[%d]):start Pre-flash Fail", __FUNCTION__, __LINE__);
+        }
     }
 
     if (focusType == AUTO_FOCUS_HAL
@@ -274,7 +277,6 @@ bool ExynosCameraActivityControl::cancelAutoFocus(void)
 
     touchAFMode = false;
     touchAFModeForFlash = false;
-    int mode = m_autofocusMgr->getAutofocusMode();
 
     switch (m_autofocusMgr->getAutofocusMode()) {
     /*  If applications want to resume the continuous focus, cancelAutoFocus must be called */
@@ -356,6 +358,11 @@ void ExynosCameraActivityControl::setAutoFocusMode(int focusMode)
         newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL;
         break;
 #endif
+#ifdef SAMSUNG_FIXED_FACE_FOCUS
+    case FOCUS_MODE_FIXED_FACE:
+        newMgrAutofocusMode = ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_FIXED_FACE;
+        break;
+#endif
     default:
         break;
     }
@@ -433,6 +440,9 @@ void ExynosCameraActivityControl::setAutoFocusMode(int focusMode)
 #endif
 #ifdef SAMSUNG_MANUAL_FOCUS
         case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_MANUAL:
+#endif
+#ifdef SAMSUNG_FIXED_FACE_FOCUS
+        case ExynosCameraActivityAutofocus::AUTOFOCUS_MODE_FIXED_FACE:
 #endif
             if (m_autofocusMgr->flagAutofocusStart() == true)
                 m_autofocusMgr->stopAutofocus();
@@ -819,6 +829,11 @@ void ExynosCameraActivityControl::activityBeforeExecFunc(int pipeId, void *args)
     case PIPE_ISP:
         m_uctlMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_3A_BEFORE, args);
         break;
+#ifdef USE_VRA_GROUP
+    case PIPE_VRA:
+        m_uctlMgr->execFunction(ExynosCameraActivityBase::CALLBACK_TYPE_3A_BEFORE, args);
+        break;
+#endif
     default:
         break;
     }
@@ -956,7 +971,6 @@ bool ExynosCameraActivityControl::m_checkSensorOnThisPipe(int pipeId, void *args
         break;
     }
 
-done:
     return flagCheckSensor;
 }
 }; /* namespace android */

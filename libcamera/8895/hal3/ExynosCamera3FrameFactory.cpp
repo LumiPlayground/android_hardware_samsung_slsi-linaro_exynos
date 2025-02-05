@@ -317,7 +317,7 @@ void ExynosCamera3FrameFactory::setRequest(int pipeId, bool enable)
     case PIPE_MCSC2_REPROCESSING:
         m_requestMCSC2 = enable ? 1 : 0;
         break;
-    case PIPE_MCSC3:
+    case PIPE_MCSC3: /* PIPE_MCSC_DS */
     case PIPE_MCSC3_REPROCESSING:
         m_requestMCSC3 = enable ? 1 : 0;
         break;
@@ -325,6 +325,11 @@ void ExynosCamera3FrameFactory::setRequest(int pipeId, bool enable)
     case PIPE_MCSC4_REPROCESSING:
         m_requestMCSC4 = enable ? 1 : 0;
         break;
+#ifdef USE_VRA_GROUP
+    case PIPE_VRA:
+        m_requestVRA = enable ? 1 : 0;
+        break;
+#endif
     case PIPE_HWFC_JPEG_SRC_REPROCESSING:
     case PIPE_HWFC_JPEG_DST_REPROCESSING:
         m_requestJPEG = enable ? 1 : 0;
@@ -475,28 +480,42 @@ enum NODE_TYPE ExynosCamera3FrameFactory::getNodeType(uint32_t pipeId)
         nodeType = (m_flagIspMcscOTF || m_flagTpuMcscOTF) ? OTF_NODE_6 : OUTPUT_NODE;
         break;
     case PIPE_MCSC0:
-    case PIPE_MCSC3_REPROCESSING:
-        nodeType = CAPTURE_NODE_11;
+    case PIPE_MCSC0_REPROCESSING:
+        nodeType = CAPTURE_NODE_10;
         break;
     case PIPE_MCSC1:
-    case PIPE_MCSC4_REPROCESSING:
-        nodeType = CAPTURE_NODE_12;
+    case PIPE_MCSC1_REPROCESSING:
+        nodeType = CAPTURE_NODE_11;
         break;
     case PIPE_MCSC2:
     case PIPE_MCSC2_REPROCESSING:
+        nodeType = CAPTURE_NODE_12;
+        break;
+    case PIPE_MCSC3_REPROCESSING:
         nodeType = CAPTURE_NODE_13;
         break;
-    case PIPE_HWFC_JPEG_DST_REPROCESSING:
+    case PIPE_MCSC4_REPROCESSING:
         nodeType = CAPTURE_NODE_14;
         break;
-    case PIPE_HWFC_JPEG_SRC_REPROCESSING:
+#ifdef USE_VRA_GROUP
+    case PIPE_MCSC_DS:
+        nodeType = CAPTURE_NODE_14;
+        break;
+    case PIPE_VRA:
+        nodeType = OUTPUT_NODE;
+        break;
+#endif
+    case PIPE_HWFC_JPEG_DST_REPROCESSING:
         nodeType = CAPTURE_NODE_15;
         break;
-    case PIPE_HWFC_THUMB_SRC_REPROCESSING:
+    case PIPE_HWFC_JPEG_SRC_REPROCESSING:
         nodeType = CAPTURE_NODE_16;
         break;
-    case PIPE_HWFC_THUMB_DST_REPROCESSING:
+    case PIPE_HWFC_THUMB_SRC_REPROCESSING:
         nodeType = CAPTURE_NODE_17;
+        break;
+    case PIPE_HWFC_THUMB_DST_REPROCESSING:
+        nodeType = CAPTURE_NODE_18;
         break;
     default:
         android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Unexpected pipe_id(%d), assert!!!!",
@@ -596,7 +615,20 @@ bool ExynosCamera3FrameFactory::isCreated(void)
 {
     Mutex::Autolock lock(m_stateLock);
 
-    return (m_state == FRAME_FACTORY_STATE_CREATE)? true : false;
+    bool isCreated = false;
+
+    switch (m_state) {
+    case FRAME_FACTORY_STATE_INIT:
+    case FRAME_FACTORY_STATE_RUN:
+        CLOGW("invalid state(%d)", m_state);
+    case FRAME_FACTORY_STATE_CREATE:
+        isCreated = true;
+        break;
+    default:
+        break;
+    }
+
+    return isCreated;
 }
 
 bool ExynosCamera3FrameFactory::isRunning(void)
@@ -684,15 +716,20 @@ status_t ExynosCamera3FrameFactory::m_initFrameMetadata(ExynosCameraFrameSP_sptr
     memset(m_shot_ext, 0x0, sizeof(struct camera2_shot_ext));
 
     m_shot_ext->shot.magicNumber = SHOT_MAGIC_NUMBER;
+#ifdef USE_VRA_GROUP
+    for (int i = 0; i < INTERFACE_TYPE_MAX; i++) {
+        m_shot_ext->shot.uctl.scalerUd.mcsc_sub_blk_port[i] = MCSC_PORT_NONE;
+    }
+#endif
 
     /* TODO: These bypass values are enabled at per-frame control */
     if (m_flagReprocessing == true) {
         frame->setRequest(PIPE_3AP_REPROCESSING, m_request3AP);
         frame->setRequest(PIPE_ISPC_REPROCESSING, m_requestISPC);
         frame->setRequest(PIPE_ISPP_REPROCESSING, m_requestISPP);
-        if(m_supportSingleChain == true) {
-            frame->setRequest(PIPE_MCSC2_REPROCESSING, m_requestMCSC2);
-        }
+        frame->setRequest(PIPE_MCSC0_REPROCESSING, m_requestMCSC0);
+        frame->setRequest(PIPE_MCSC1_REPROCESSING, m_requestMCSC1);
+        frame->setRequest(PIPE_MCSC2_REPROCESSING, m_requestMCSC2);
         frame->setRequest(PIPE_MCSC3_REPROCESSING, m_requestMCSC3);
         frame->setRequest(PIPE_MCSC4_REPROCESSING, m_requestMCSC4);
         frame->setRequest(PIPE_HWFC_JPEG_SRC_REPROCESSING, m_requestJPEG);
@@ -714,11 +751,10 @@ status_t ExynosCamera3FrameFactory::m_initFrameMetadata(ExynosCameraFrameSP_sptr
         frame->setRequest(PIPE_MCSC0, m_requestMCSC0);
         frame->setRequest(PIPE_MCSC1, m_requestMCSC1);
         frame->setRequest(PIPE_MCSC2, m_requestMCSC2);
-
-        m_bypassDRC = m_parameters->getDrcEnable();
-        m_bypassDNR = m_parameters->getDnrEnable();
-        m_bypassDIS = m_parameters->getDisEnable();
-        m_bypassFD = m_parameters->getFdEnable();
+#ifdef USE_VRA_GROUP
+        frame->setRequest(PIPE_MCSC_DS, m_requestVRA);
+        frame->setRequest(PIPE_VRA, m_requestVRA);
+#endif
     }
 
     setMetaBypassDrc(m_shot_ext, m_bypassDRC);

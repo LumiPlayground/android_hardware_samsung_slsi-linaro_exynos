@@ -202,6 +202,7 @@ enum scenario_mode {
 #define V4L2_CID_IS_CAPTURE_EXPOSURETIME (V4L2_CID_FIMC_IS_BASE + 67)
 #define V4L2_CID_IS_FAST_CAPTURE_CONTROL (V4L2_CID_FIMC_IS_BASE + 68)
 #define V4L2_CID_IS_S_SENSOR_SIZE        (V4L2_CID_FIMC_IS_BASE + 69)
+#define V4L2_CID_IS_S_VRA_CONNECTION    (V4L2_CID_FIMC_IS_BASE + 73)
 
 enum is_fw_boot_mode {
     IS_COLD_BOOT = 0,  /* FrontCamera, 3rd-Party Camera */

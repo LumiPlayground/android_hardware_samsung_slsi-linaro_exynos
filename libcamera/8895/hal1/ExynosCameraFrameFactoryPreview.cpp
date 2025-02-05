@@ -20,8 +20,16 @@
 #include <cutils/log.h>
 
 #include "ExynosCameraFrameFactoryPreview.h"
+#ifdef TIME_LOGGER_ENABLE
+#include "ExynosCameraTimeLogger.h"
+#endif
 
 namespace android {
+
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+extern ExynosCameraTimeLogger g_timeLoggerLaunch;
+extern int g_timeLoggerLaunchIndex;
+#endif
 
 ExynosCameraFrameFactoryPreview::~ExynosCameraFrameFactoryPreview()
 {
@@ -101,6 +109,19 @@ status_t ExynosCameraFrameFactoryPreview::create(__unused bool active)
     CLOGV("%s(%d) created",
             m_pipes[PIPE_MCSC]->getPipeName(), PIPE_MCSC);
 
+#ifdef USE_VRA_GROUP
+    /* VRA pipe initialize */
+    if (m_flagMcscVraOTF == false) {
+        ret = m_pipes[INDEX(PIPE_VRA)]->create();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):VRA create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+        CLOGD("DEBUG(%s):Pipe(%d) created", __FUNCTION__, INDEX(PIPE_VRA));
+    }
+#endif
+
 #ifdef USE_GSC_FOR_PREVIEW
     /* GSC_PREVIEW pipe initialize */
     ret = m_pipes[PIPE_GSC]->create();
@@ -113,8 +134,18 @@ status_t ExynosCameraFrameFactoryPreview::create(__unused bool active)
             m_pipes[PIPE_GSC]->getPipeName(), PIPE_GSC);
 #endif
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == true) {
+        /* SYNC_SWITCHING pipe initialize */
+        ret = m_pipes[INDEX(PIPE_SYNC_SWITCHING)]->create();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):SYNC_SWITCHING create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+        CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
+                m_pipes[INDEX(PIPE_SYNC_SWITCHING)]->getPipeName(), PIPE_SYNC_SWITCHING);
+
         /* SYNC pipe initialize */
         ret = m_pipes[INDEX(PIPE_SYNC)]->create();
         if (ret < 0) {
@@ -204,7 +235,7 @@ status_t ExynosCameraFrameFactoryPreview::create(__unused bool active)
     m_initNodeInfo();
 #endif
 
-    m_setCreate(true);
+    ret = m_transitState(FRAME_FACTORY_STATE_CREATE);
 
     return NO_ERROR;
 }
@@ -305,6 +336,19 @@ status_t ExynosCameraFrameFactoryPreview::postcreate(void)
     CLOGV("%s(%d) created",
             m_pipes[PIPE_MCSC]->getPipeName(), PIPE_MCSC);
 
+#ifdef USE_VRA_GROUP
+    /* VRA pipe initialize */
+    if (m_flagMcscVraOTF == false) {
+        ret = m_pipes[INDEX(PIPE_VRA)]->create();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):VRA create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+        CLOGD("DEBUG(%s):Pipe(%d) created", __FUNCTION__, INDEX(PIPE_VRA));
+    }
+#endif
+
 #ifdef USE_GSC_FOR_PREVIEW
     /* GSC_PREVIEW pipe initialize */
     ret = m_pipes[PIPE_GSC]->create();
@@ -317,8 +361,18 @@ status_t ExynosCameraFrameFactoryPreview::postcreate(void)
             m_pipes[PIPE_GSC]->getPipeName(), PIPE_GSC);
 #endif
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == true) {
+        /* SYNC_SWITCHING pipe initialize */
+        ret = m_pipes[INDEX(PIPE_SYNC_SWITCHING)]->create();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):SYNC_SWITCHING create fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+        CLOGD("DEBUG(%s[%d]):%s(%d) created", __FUNCTION__, __LINE__,
+                m_pipes[PIPE_SYNC_SWITCHING]->getPipeName(), PIPE_SYNC_SWITCHING);
+
         /* SYNC pipe initialize */
         ret = m_pipes[INDEX(PIPE_SYNC)]->create();
         if (ret < 0) {
@@ -421,7 +475,7 @@ status_t ExynosCameraFrameFactoryPreview::postcreate(void)
     m_initNodeInfo();
 #endif
 
-    m_setCreate(true);
+    ret = m_transitState(FRAME_FACTORY_STATE_CREATE);
 
     return NO_ERROR;
 }
@@ -440,6 +494,7 @@ status_t ExynosCameraFrameFactoryPreview::fastenAeStable(int32_t numFrames, Exyn
     int hwSensorW = 0, hwSensorH = 0;
     int bcropX = 0, bcropY = 0, bcropW = 0, bcropH = 0;
     int hwPreviewW = 0, hwPreviewH = 0;
+    int index = 0;
     uint32_t minFrameRate, maxFrameRate, sensorFrameRate = 0;
     struct v4l2_streamparm streamParam;
 
@@ -459,17 +514,31 @@ status_t ExynosCameraFrameFactoryPreview::fastenAeStable(int32_t numFrames, Exyn
     }
 
     /* 1. Initialize pipes */
-    m_parameters->getFastenAeStableSensorSize(&hwSensorW, &hwSensorH);
-    m_parameters->getFastenAeStableBcropSize(&bcropW, &bcropH);
-    m_parameters->getFastenAeStableBdsSize(&hwPreviewW, &hwPreviewH);
+    if (m_parameters->getCameraId() == CAMERA_ID_FRONT || m_parameters->getCameraId() == CAMERA_ID_FRONT_1) {
+        sensorFrameRate  = FASTEN_AE_FPS_FRONT;
+#ifdef SAMSUNG_COLOR_IRIS
+        if (m_parameters->getShotMode() == SHOT_MODE_COLOR_IRIS) {
+            index = FASTEN_AE_SIZE_INDEX_COLOR_IRIS;
+            sensorFrameRate = FASTEN_AE_FPS_COLOR_IRIS_FRONT;
+        }
+#endif
+    } else {
+        sensorFrameRate  = FASTEN_AE_FPS;
+    }
+
+    m_parameters->getFastenAeStableSensorSize(&hwSensorW, &hwSensorH, index);
+    m_parameters->getFastenAeStableBcropSize(&bcropW, &bcropH, index);
+    m_parameters->getFastenAeStableBdsSize(&hwPreviewW, &hwPreviewH, index);
 
     bcropX = ALIGN_UP(((hwSensorW - bcropW) >> 1), 2);
     bcropY = ALIGN_UP(((hwSensorH - bcropH) >> 1), 2);
 
-    if (m_parameters->getCameraId() == CAMERA_ID_FRONT) {
-        sensorFrameRate  = FASTEN_AE_FPS_FRONT;
-    } else {
-        sensorFrameRate  = FASTEN_AE_FPS;
+    if (bcropW < hwPreviewW || bcropH < hwPreviewH) {
+        CLOGD("bayerCropSize %dx%d is smaller than BDSSize %dx%d. Force bayerCropSize",
+                hwPreviewW, hwPreviewH, bcropW, bcropH);
+
+        hwPreviewW = bcropW;
+        hwPreviewH = bcropH;
     }
 
     /* setDeviceInfo does changing path */
@@ -498,7 +567,10 @@ status_t ExynosCameraFrameFactoryPreview::fastenAeStable(int32_t numFrames, Exyn
     for (int i = 0; i < numFrames; i++) {
         /* 2. Generate instant frames */
         newFrame = m_frameMgr->createFrame(m_parameters, i);
-
+        if (newFrame == NULL) {
+            CLOGE("[F%d]Failed to createFrame. fastenAe failed.", i);
+            goto cleanup;
+        }
         ret = m_initFrameMetadata(newFrame);
         if (ret != NO_ERROR)
             CLOGE("frame(%d) metadata initialize fail", i);
@@ -528,6 +600,9 @@ status_t ExynosCameraFrameFactoryPreview::fastenAeStable(int32_t numFrames, Exyn
             shot_ext->shot.ctl.aa.vendor_afmode_option &= (0 << AA_AFMODE_OPTION_BIT_MACRO);
 
             setMetaCtlAeRegion(shot_ext, aeRegionX, aeRegionY, aeRegionX, aeRegionY, 0);
+
+            /* Set video mode off for fastAE */
+            setMetaVideoMode(shot_ext, AA_VIDEOMODE_OFF);
 
             /* Set 3AS size */
             enum NODE_TYPE nodeType = getNodeType(PIPE_3AA);
@@ -604,6 +679,17 @@ status_t ExynosCameraFrameFactoryPreview::fastenAeStable(int32_t numFrames, Exyn
         }
     }
 
+#ifdef USE_VRA_GROUP
+    if (m_flagMcscVraOTF == false) {
+        ret = m_pipes[PIPE_VRA]->start();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):VRA start fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+    }
+#endif
+
     if (m_flagIspMcscOTF == false && m_flagTpuMcscOTF == false) {
         ret = m_pipes[PIPE_MCSC]->start();
         if (ret != NO_ERROR) {
@@ -634,12 +720,31 @@ status_t ExynosCameraFrameFactoryPreview::fastenAeStable(int32_t numFrames, Exyn
         goto cleanup;
     }
 
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+    if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+    {
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 1, DURATION, LAUNCH_SUB_FASTAE_PRE_POST_CREATE_END, false);
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 1, DURATION, LAUNCH_SUB_FASTAE_INSTANT_ON, true);
+    }
+#endif
     /* 6. SetControl to sensor instant on */
     ret = m_pipes[pipeId]->setControl(V4L2_CID_IS_S_STREAM, (1 | numFrames << SENSOR_INSTANT_SHIFT));
     if (ret != NO_ERROR) {
         CLOGE("instantOn fail, ret(%d)", ret);
         goto cleanup;
     }
+
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+    if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+    {
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 1, DURATION, LAUNCH_SUB_FASTAE_INSTANT_ON, false);
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 1, DURATION, LAUNCH_SUB_FASTAE_THREAD_END, true);
+    }
+#endif
 
 cleanup:
     totalRet |= ret;
@@ -684,6 +789,14 @@ cleanup:
         }
     }
 
+#ifdef USE_VRA_GROUP
+    if (m_pipes[PIPE_VRA]->flagStart() == true) {
+        ret = m_pipes[PIPE_VRA]->stop();
+       if (ret != NO_ERROR) {
+            CLOGE("ERR(%s[%d]):VRA stop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+        }
+    }
+#endif
     /* 8. Rollback framerate after fastenfeenable done */
     /* setParam for Frame rate : must after setInput on Flite */
     memset(&streamParam, 0x0, sizeof(v4l2_streamparm));
@@ -740,10 +853,11 @@ status_t ExynosCameraFrameFactoryPreview::initPipes(void)
     int hwSensorW = 0, hwSensorH = 0;
     uint32_t minFrameRate = 0, maxFrameRate = 0, sensorFrameRate = 0;
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     m_preSyncType = SYNC_TYPE_BASE;
     m_preZoom = 0;
-    m_transitionCount = 0;
+    m_parameters->setDualTransitionCount(0);
+    m_parameters->setDualSmoothTransitionCount(0);
 #endif
 
     m_parameters->getHwSensorSize(&hwSensorW, &hwSensorH);
@@ -759,6 +873,26 @@ status_t ExynosCameraFrameFactoryPreview::initPipes(void)
         CLOGE("m_setupConfig() fail");
         return ret;
     }
+
+#ifdef USE_MCSC_FOR_FD
+    {
+        ExynosFDConfig_t *fdConfig = NULL;
+        fdConfig = m_parameters->getFDConfig();
+
+        enum NODE_TYPE nodeType = getNodeType(fdConfig->portId);
+        ret = setControl(V4L2_CID_IS_S_VRA_CONNECTION, 1, fdConfig->pipeId, nodeType);
+        if (ret != NO_ERROR)
+            CLOGE("pipeId(%d) nodeType(%d) V4L2_CID_IS_S_VRA_CONNECTION fail, ret(%d)", fdConfig->pipeId, nodeType, ret);
+
+        if (fdConfig->flagFdEnable) {
+            for (int i = 0; i < MAX_NUM_PIPES; i++) {
+                if (m_pipes[i] != NULL) {
+                    ret = m_pipes[i]->resetInputs();
+                }
+            }
+        }
+    }
+#endif
 
     /*
      * we must set flite'setupPipe on 3aa_pipe.
@@ -777,6 +911,8 @@ status_t ExynosCameraFrameFactoryPreview::initPipes(void)
     }
 
     m_frameCount = 0;
+
+    ret = m_transitState(FRAME_FACTORY_STATE_INIT);
 
     return NO_ERROR;
 }
@@ -819,6 +955,17 @@ status_t ExynosCameraFrameFactoryPreview::mapBuffers(void)
         }
     }
 
+#ifdef USE_VRA_GROUP
+    if (m_flagMcscVraOTF == false) {
+        ret = m_pipes[PIPE_VRA]->setMapBuffer();
+        if (ret != NO_ERROR) {
+            CLOGE("MCSC mapBuffer fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+    }
+#endif
+
     CLOGI("Map buffer Success!");
 
     return NO_ERROR;
@@ -826,8 +973,6 @@ status_t ExynosCameraFrameFactoryPreview::mapBuffers(void)
 
 status_t ExynosCameraFrameFactoryPreview::preparePipes(void)
 {
-    status_t ret = NO_ERROR;
-
     /* NOTE: Prepare for 3AA is moved after ISP stream on */
     /* we must not qbuf before stream on, when sensor group. */
 
@@ -838,7 +983,13 @@ status_t ExynosCameraFrameFactoryPreview::startPipes(void)
 {
     status_t ret = NO_ERROR;
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
+    bool flagSensorStandby = false;
+    flagSensorStandby = (m_parameters->getDualCameraMode() == true &&
+                m_parameters->getDualStandbyMode() == ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR);
+
+    CLOGE("sensor standby(%d)", flagSensorStandby);
+
     if (m_parameters->getDualCameraMode() == true) {
         ret = m_pipes[INDEX(PIPE_FUSION)]->start();
         if (ret < 0) {
@@ -850,6 +1001,26 @@ status_t ExynosCameraFrameFactoryPreview::startPipes(void)
         ret = m_pipes[INDEX(PIPE_SYNC)]->start();
         if (ret < 0) {
             CLOGE("ERR(%s[%d]):PIPE_SYNC start fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+
+        if (m_parameters->getFlagForceSwitchingOnly() == true) {
+            ret = m_pipes[INDEX(PIPE_SYNC_SWITCHING)]->start();
+            if (ret < 0) {
+                CLOGE("ERR(%s[%d]):PIPE_SYNC_SWITCHING start fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+                /* TODO: exception handling */
+                return INVALID_OPERATION;
+            }
+        }
+    }
+#endif
+
+#ifdef USE_VRA_GROUP
+    if (m_flagMcscVraOTF == false) {
+        ret = m_pipes[PIPE_VRA]->start();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):VRA start fail, ret(%d)", __FUNCTION__, __LINE__, ret);
             /* TODO: exception handling */
             return INVALID_OPERATION;
         }
@@ -883,11 +1054,30 @@ status_t ExynosCameraFrameFactoryPreview::startPipes(void)
         }
     }
 
+    ret = startSensor3AAPipe();
+    if (ret != NO_ERROR) {
+        CLOGE("Sensor/3AA start fail. ret(%d)", ret);
+        return ret;
+    }
+
+    return NO_ERROR;
+}
+
+status_t ExynosCameraFrameFactoryPreview::startSensor3AAPipe(void)
+{
+    status_t ret = NO_ERROR;
+
     ret = m_pipes[PIPE_3AA]->start();
     if (ret != NO_ERROR) {
         CLOGE("3AA start fail, ret(%d)", ret);
         /* TODO: exception handling */
         return INVALID_OPERATION;
+    }
+
+    ret = m_transitState(FRAME_FACTORY_STATE_RUN);
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to transitState. ret %d", ret);
+        return ret;
     }
 
     if (m_parameters->isFlite3aaOtf() == false)
@@ -899,33 +1089,63 @@ status_t ExynosCameraFrameFactoryPreview::startPipes(void)
             return INVALID_OPERATION;
         }
 
-        /* Here is doing FLITE prepare(qbuf) */
-        ret = m_pipes[PIPE_FLITE]->prepare();
-        if (ret != NO_ERROR) {
-            CLOGE("FLITE prepare fail, ret(%d)", ret);
-            /* TODO: exception handling */
-            return INVALID_OPERATION;
+#ifdef USE_DUAL_CAMERA
+        /* skip streamon in sensor standby mode */
+        if (!flagSensorStandby)
+#endif
+        {
+            /* Here is doing FLITE prepare(qbuf) */
+            ret = m_pipes[PIPE_FLITE]->prepare();
+            if (ret != NO_ERROR) {
+                CLOGE("FLITE prepare fail, ret(%d)", ret);
+                /* TODO: exception handling */
+                return INVALID_OPERATION;
+            }
         }
     }
 
-    if (m_flagFlite3aaOTF == true) {
-        /* Here is doing 3AA prepare(qbuf) */
-        ret = m_pipes[PIPE_3AA]->prepare();
-        if (ret != NO_ERROR) {
-            CLOGE("3AA prepare fail, ret(%d)", ret);
-            /* TODO: exception handling */
-            return INVALID_OPERATION;
-        }
-    }
-
-    if (m_parameters->isFlite3aaOtf() == true) {
-        ret = m_pipes[PIPE_3AA]->sensorStream(true);
-    } else
+#ifdef USE_DUAL_CAMERA
+    /* skip streamon in sensor standby mode */
+    if (!flagSensorStandby)
+#endif
     {
-        ret = m_pipes[PIPE_FLITE]->sensorStream(true);
+        if (m_flagFlite3aaOTF == true) {
+            /* Here is doing 3AA prepare(qbuf) */
+            ret = m_pipes[PIPE_3AA]->prepare();
+            if (ret != NO_ERROR) {
+                CLOGE("3AA prepare fail, ret(%d)", ret);
+                /* TODO: exception handling */
+                return INVALID_OPERATION;
+            }
+        }
     }
+
+    int pipeId = -1;
+
+    if (m_parameters->isFlite3aaOtf() == true)
+        pipeId = PIPE_3AA;
+    else
+        pipeId = PIPE_FLITE;
+
+#ifdef TIME_LOGGER_LAUNCH_ENABLE
+#ifdef USE_DUAL_CAMERA
+    if (TIME_LOGGER_LAUNCH_COND(m_parameters, m_cameraId))
+#endif
+    {
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_FACTORY_START_START, false);
+        TIME_LOGGER_UPDATE_BASE(&g_timeLoggerLaunch, m_cameraId, g_timeLoggerLaunchIndex, 0, DURATION, LAUNCH_SENSOR_STREAM_ON, true);
+    }
+#endif
+
+#ifdef USE_DUAL_CAMERA
+    if (!flagSensorStandby)
+#endif
+    {
+        ret = m_pipes[PIPE_3AA]->sensorStream(true);
+    }
+
     if (ret != NO_ERROR) {
-        CLOGE("FLITE sensorStream on fail, ret(%d)", ret);
+        CLOGE("pipeId(%d) sensorStream on fail, ret(%d)", pipeId, ret);
         /* TODO: exception handling */
         return INVALID_OPERATION;
     }
@@ -976,6 +1196,17 @@ status_t ExynosCameraFrameFactoryPreview::stopPipes(void)
         }
     }
 
+#ifdef USE_VRA_GROUP
+    if (m_pipes[PIPE_VRA]->isThreadRunning() == true) {
+        ret = m_pipes[PIPE_VRA]->stopThread();
+        if (ret != NO_ERROR) {
+            CLOGE("VRA stopThread fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            funcRet |= ret;
+        }
+    }
+#endif
+
     if (m_requestVC0 && m_parameters->isFlite3aaOtf() == false) {
         ret = m_pipes[PIPE_FLITE]->stopThread();
         if (ret != NO_ERROR) {
@@ -996,8 +1227,18 @@ status_t ExynosCameraFrameFactoryPreview::stopPipes(void)
     }
 #endif
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == true) {
+        if (m_pipes[INDEX(PIPE_SYNC_SWITCHING)] != NULL &&
+                m_pipes[INDEX(PIPE_SYNC_SWITCHING)]->isThreadRunning() == true) {
+            ret = m_pipes[INDEX(PIPE_SYNC_SWITCHING)]->stopThread();
+            if (ret != NO_ERROR) {
+                CLOGE("SYNC_SWITCHING stopThread fail, ret(%d)", ret);
+                /* TODO: exception handling */
+                funcRet |= ret;
+            }
+        }
+
         if (m_pipes[INDEX(PIPE_SYNC)] != NULL &&
                 m_pipes[INDEX(PIPE_SYNC)]->isThreadRunning() == true) {
             ret = m_pipes[INDEX(PIPE_SYNC)]->stopThread();
@@ -1110,8 +1351,37 @@ status_t ExynosCameraFrameFactoryPreview::stopPipes(void)
         }
     }
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_VRA_GROUP
+    if (m_pipes[PIPE_VRA]->flagStart() == true) {
+        ret = m_pipes[PIPE_VRA]->forceDone(V4L2_CID_IS_FORCE_DONE, 0x1000);
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):PIPE_VRA force done fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            funcRet |= ret;
+        }
+
+        ret = m_pipes[PIPE_VRA]->stop();
+        if (ret < 0) {
+            CLOGE("ERR(%s[%d]):VRA stop fail, ret(%d)", __FUNCTION__, __LINE__, ret);
+            /* TODO: exception handling */
+            funcRet |= ret;
+        }
+    }
+#endif
+
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == true) {
+        if (m_parameters->getFlagForceSwitchingOnly() == true) {
+            if (m_pipes[INDEX(PIPE_SYNC_SWITCHING)] != NULL) {
+                ret = m_pipes[INDEX(PIPE_SYNC_SWITCHING)]->stop();
+                if (ret != NO_ERROR) {
+                    CLOGE("SYNC_SWITCHING stop fail, ret(%d)", ret);
+                    /* TODO: exception handling */
+                    funcRet |= ret;
+                }
+            }
+        }
+
         if (m_pipes[INDEX(PIPE_SYNC)] != NULL) {
             ret = m_pipes[INDEX(PIPE_SYNC)]->stop();
             if (ret != NO_ERROR) {
@@ -1139,10 +1409,108 @@ status_t ExynosCameraFrameFactoryPreview::stopPipes(void)
     }
 #endif
 
+#ifdef USE_MCSC_FOR_FD
+    ExynosFDConfig_t *fdConfig = NULL;
+    fdConfig = m_parameters->getFDConfig();
+    if (fdConfig->flagFdEnable) {
+        for (int i = 0; i < MAX_NUM_PIPES; i++) {
+            if (m_pipes[i] != NULL) {
+                ret = m_pipes[i]->resetInputs();
+                funcRet |= ret;
+            }
+        }
+    }
+#endif
+
+    ret = m_transitState(FRAME_FACTORY_STATE_CREATE);
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to transitState. ret %d",ret);
+        return ret;
+    }
+
     CLOGI("Stopping  Success!");
 
     return funcRet;
 }
+
+#ifdef USE_DUAL_CAMERA
+status_t ExynosCameraFrameFactoryPreview::sensorStandby(bool standby)
+{
+    Mutex::Autolock lock(m_sensorStandbyLock);
+
+    ExynosCameraAutoTimer autoTimer(__FUNCTION__);
+
+    status_t ret = NO_ERROR;
+
+    int pipeId = -1;
+
+    CLOGI("Sensor Standby Start(%d)", standby);
+
+    if (m_parameters->isFlite3aaOtf() == true)
+        pipeId = PIPE_3AA;
+    else
+        pipeId = PIPE_FLITE;
+
+    CLOGI("Sensor Prepare(%d)", standby);
+
+    if (!standby) {
+        /* Sensor Stream On */
+
+        /* stopThread */
+        ret = m_pipes[pipeId]->stopThread();
+        if (ret != NO_ERROR)
+            CLOGE("pipeId(%d) startThread fail, ret(%d)", pipeId, ret);
+
+        ret = stopThreadAndWait(pipeId);
+        if (ret != NO_ERROR)
+            CLOGE("pipeId(%d) stopThreadAndWait fail, ret(%d)", ret);
+
+        /* make inactive for standby */
+        m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_INACTIVE);
+
+        /* prepare */
+        ret = m_pipes[pipeId]->prepare();
+        if (ret != NO_ERROR)
+            CLOGE("pipeId(%d) prepare fail, ret(%d)", pipeId, ret);
+
+        ret = m_pipes[pipeId]->startThread();
+        if (ret != NO_ERROR)
+            CLOGE("pipeId(%d) startThread fail, ret(%d)", pipeId, ret);
+    } else {
+        /* Sensor Stream Off */
+
+        /* stopThread */
+        ret = m_pipes[pipeId]->stopThread();
+        if (ret != NO_ERROR)
+            CLOGE("pipeId(%d) startThread fail, ret(%d)", pipeId, ret);
+
+        ret = stopThreadAndWait(pipeId);
+        if (ret != NO_ERROR)
+            CLOGE("pipeId(%d) stopThreadAndWait fail, ret(%d)", ret);
+
+        /* wait for NDONE frame flushing */
+        m_pipes[pipeId]->flushInputFrameQ();
+    }
+
+    CLOGI("Ready to sensorStandby(%d)", standby);
+
+    ret = m_pipes[pipeId]->setControl(V4L2_CID_IS_S_STREAM, (!standby | (1 << SENSOR_USE_STANDBY_SHIFT)));
+    if (ret != NO_ERROR)
+        CLOGE("pipeId(%d) s_stream(%d, %d) fail, ret(%d)", pipeId, standby, ret);
+
+    if (standby) {
+        /* wait for NDONE frame flushing in sensor stream off */
+        m_pipes[pipeId]->flushRequestFrameQ();
+
+        /* change standby state */
+        m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR);
+    }
+
+    CLOGI("Sensor Standby End(%d)", standby);
+
+    return ret;
+}
+#endif
 
 status_t ExynosCameraFrameFactoryPreview::startInitialThreads(void)
 {
@@ -1150,15 +1518,24 @@ status_t ExynosCameraFrameFactoryPreview::startInitialThreads(void)
 
     CLOGV("start pre-ordered initial pipe thread");
 
-    if (m_requestVC0 && m_parameters->isFlite3aaOtf() == false) {
-        ret = startThread(PIPE_FLITE);
+#ifdef USE_DUAL_CAMERA
+    /* skip 3AA thread in sensor standby */
+    if (!(m_parameters->getDualCameraMode() == true &&
+                m_parameters->getDualStandbyMode() ==
+                ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR)) {
+#endif
+        if (m_requestVC0 && m_parameters->isFlite3aaOtf() == false) {
+            ret = startThread(PIPE_FLITE);
+            if (ret != NO_ERROR)
+                return ret;
+        }
+
+        ret = startThread(PIPE_3AA);
         if (ret != NO_ERROR)
             return ret;
+#ifdef USE_DUAL_CAMERA
     }
-
-    ret = startThread(PIPE_3AA);
-    if (ret != NO_ERROR)
-        return ret;
+#endif
 
     if (m_flag3aaIspOTF == false) {
         ret = startThread(PIPE_ISP);
@@ -1178,11 +1555,27 @@ status_t ExynosCameraFrameFactoryPreview::startInitialThreads(void)
             return ret;
     }
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_VRA_GROUP
+    if (m_flagMcscVraOTF == false) {
+        ret = startThread(PIPE_VRA);
+        if (ret < 0)
+            return ret;
+    }
+#endif
+
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == true) {
         ret = startThread(PIPE_SYNC);
         if (ret != NO_ERROR)
             return ret;
+
+        ExynosCameraDualPreviewFrameSelector *dualSelector = ExynosCameraSingleton<ExynosCameraDualPreviewFrameSelector>::getInstance();
+        dualSelector->setPreventDropFlag(m_cameraId, m_parameters->getFlagForceSwitchingOnly());
+        if (m_parameters->getFlagForceSwitchingOnly() == true) {
+            ret = startThread(PIPE_SYNC_SWITCHING);
+            if (ret != NO_ERROR)
+                return ret;
+        }
     }
 #endif
 
@@ -1212,8 +1605,20 @@ status_t ExynosCameraFrameFactoryPreview::setStopFlag(void)
     if (m_pipes[PIPE_MCSC]->flagStart() == true)
         ret = m_pipes[PIPE_MCSC]->setStopFlag();
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_VRA_GROUP
+    if (m_flagMcscVraOTF == false
+        && m_pipes[PIPE_VRA]->flagStart() == true)
+        ret = m_pipes[PIPE_VRA]->setStopFlag();
+#endif
+
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == true) {
+        if (m_parameters->getFlagForceSwitchingOnly() == true) {
+            if (m_pipes[INDEX(PIPE_SYNC_SWITCHING)] != NULL &&
+                    m_pipes[INDEX(PIPE_SYNC_SWITCHING)]->flagStart() == true)
+                ret = m_pipes[INDEX(PIPE_SYNC_SWITCHING)]->setStopFlag();
+        }
+
         if (m_pipes[INDEX(PIPE_SYNC)] != NULL &&
                 m_pipes[INDEX(PIPE_SYNC)]->flagStart() == true)
             ret = m_pipes[INDEX(PIPE_SYNC)]->setStopFlag();
@@ -1231,20 +1636,34 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryPreview::createNewFrame(Exyno
 {
     status_t ret = NO_ERROR;
     ExynosCameraFrameEntity *newEntity[MAX_NUM_PIPES] = {0};
+
+    if (this->isSwitching() == true) {
+        CLOGD("[F%d]Skip to createFrame. Now switching sensor mode", m_frameCount);
+        return NULL;
+    }
+
     ExynosCameraFrameSP_sptr_t frame = m_frameMgr->createFrame(m_parameters, m_frameCount, FRAME_TYPE_PREVIEW);
+    if (frame == NULL) {
+        CLOGE("[F%d]Failed to createFrame. frameType %d", m_frameCount, FRAME_TYPE_PREVIEW);
+        return NULL;
+    }
 
     int requestEntityCount = 0;
     int pipeId = -1;
     int parentPipeId = -1;
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     int masterCameraId = -1;
     int slaveCameraId = -1;
 #endif
-
     ret = m_initFrameMetadata(frame);
     if (ret != NO_ERROR)
         CLOGE("frame(%d) metadata initialize fail", m_frameCount);
 
+#ifdef USE_DUAL_CAMERA
+    if (refFrame != NULL) {
+        goto MAKE_MASTER_FRAME;
+    }
+#endif
     if (m_requestVC0 == true && m_flagFlite3aaOTF == false) {
         /* set flite pipe to linkageList */
         pipeId = PIPE_FLITE;
@@ -1261,11 +1680,30 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryPreview::createNewFrame(Exyno
     requestEntityCount++;
     parentPipeId = pipeId;
 
+#ifdef USE_DUAL_CAMERA
+    if (m_parameters->getDualCameraMode() == true) {
+        if (m_parameters->getFlagForceSwitchingOnly() == true) {
+            pipeId = PIPE_SYNC_SWITCHING;
+            newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
+            frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
+            requestEntityCount++;
+        }
+    }
+#endif
+
     /* set ISP pipe to linkageList */
     if (m_flag3aaIspOTF == false) {
         pipeId = PIPE_ISP;
-        newEntity[pipeId] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_ONLY, ENTITY_BUFFER_FIXED);
-        frame->addChildEntity(newEntity[parentPipeId], newEntity[pipeId], PIPE_3AP);
+        newEntity[pipeId] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
+#ifdef USE_DUAL_CAMERA
+        if (m_parameters->getDualCameraMode() == true &&
+            m_parameters->getFlagForceSwitchingOnly() == true) {
+            frame->addSiblingEntity(NULL, newEntity[pipeId]);
+        } else
+#endif
+        {
+            frame->addChildEntity(newEntity[parentPipeId], newEntity[pipeId], PIPE_3AP);
+        }
         requestEntityCount++;
         parentPipeId = pipeId;
     }
@@ -1290,12 +1728,24 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryPreview::createNewFrame(Exyno
         requestEntityCount++;
     }
 
+#ifdef USE_VRA_GROUP
+    if (m_flagMcscVraOTF == false
+		&& frame->getRequest(PIPE_VRA)
+		&& frame->getRequest(PIPE_MCSC_DS)) {
+		pipeId = PIPE_VRA;
+        newEntity[pipeId] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_ONLY, ENTITY_BUFFER_FIXED);
+        frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
+        requestEntityCount++;
+    }
+#endif
+
     /* set GSC pipe to linkageList */
     pipeId = PIPE_GSC;
     newEntity[pipeId] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
     frame->addSiblingEntity(NULL, newEntity[pipeId]);
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
+MAKE_MASTER_FRAME:
     if (m_parameters->getDualCameraMode() == true) {
         getDualCameraId(&masterCameraId, &slaveCameraId);
 
@@ -1330,7 +1780,7 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactoryPreview::createNewFrame(Exyno
         frame->addSiblingEntity(NULL, newEntity[pipeId]);
     }
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
 SKIP_SLAVE_CAMERA:
 #endif
     ret = m_initPipelines(frame);
@@ -1341,11 +1791,288 @@ SKIP_SLAVE_CAMERA:
     /* TODO: make it dynamic */
     frame->setNumRequestPipe(requestEntityCount);
 
-    m_fillNodeGroupInfo(frame);
+#ifdef USE_DUAL_CAMERA
+    ret = m_fillNodeGroupInfo(frame, refFrame);
+    if (m_parameters->getDualCameraMode() == true &&
+            ret != NO_ERROR)
+        return NULL;
+#else
+    m_fillNodeGroupInfo(frame, refFrame);
+#endif
 
     m_frameCount++;
 
     return frame;
+}
+
+#if 0
+status_t ExynosCameraFrameFactoryPreview::switchSensorMode(void)
+{
+    status_t ret = NO_ERROR;
+
+    CLOGD("Start");
+
+    ret = m_transitState(FRAME_FACTORY_STATE_SWITCH);
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to transitState. ret %d", ret);
+        return ret;
+    }
+
+    stopPipes();
+
+    m_parameters->switchSensorMode();
+
+    ret = initPipes();
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to initPipes. ret %d", ret);
+        return ret;
+    }
+
+    return ret;
+}
+#else
+status_t ExynosCameraFrameFactoryPreview::switchSensorMode(void)
+{
+    status_t ret = NO_ERROR;
+    camera_pipe_info_t pipeInfo[MAX_NODE];
+    camera_pipe_info_t nullPipeInfo;
+
+    ExynosRect bnsSize;
+    ExynosRect bcropSize;
+    ExynosRect bdsSize;
+    ExynosRect tempRect;
+    int hwSensorW = 0, hwSensorH = 0;
+    uint32_t minFrameRate = 0, maxFrameRate = 0;
+    int pipeId = -1;
+    enum NODE_TYPE nodeType = INVALID_NODE;
+    enum NODE_TYPE leaderNodeType = OUTPUT_NODE;
+    int perFramePos = 0;
+    int bayerFormat = m_parameters->getBayerFormat(PIPE_3AA);;
+    struct ExynosConfigInfo *config = m_parameters->getConfig();
+
+    CLOGD("Start");
+
+    ret = m_transitState(FRAME_FACTORY_STATE_SWITCH);
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to transitState. ret %d", ret);
+        return ret;
+    }
+
+    /* Stop existing sensor OTF stream */
+    if (m_pipes[PIPE_3AA]->isThreadRunning() == true) {
+        ret = m_pipes[PIPE_3AA]->stopThread();
+        if (ret != NO_ERROR) {
+            CLOGE("Failed to stop 3AA thread. ret %d", ret);
+            return INVALID_OPERATION;
+        }
+    }
+
+    if (m_requestVC0 && m_parameters->isFlite3aaOtf() == false) {
+        ret = m_pipes[PIPE_FLITE]->stopThread();
+        if (ret != NO_ERROR) {
+            CLOGE("Failed to stop FLITE thread. ret %d", ret);
+            return INVALID_OPERATION;
+        }
+    }
+
+    if (m_parameters->isFlite3aaOtf() == true) {
+        ret = m_pipes[PIPE_3AA]->sensorStream(false);
+    } else {
+        ret = m_pipes[PIPE_FLITE]->sensorStream(false);
+    }
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to sensorStream OFF. ret %d", ret);
+        return INVALID_OPERATION;
+    }
+
+    if (m_parameters->isFlite3aaOtf() == false) {
+        ret = m_pipes[PIPE_FLITE]->stop();
+        if (ret != NO_ERROR) {
+            CLOGE("Failed to stop FLITE. ret %d", ret);
+            return INVALID_OPERATION;
+        }
+    }
+
+    ret = m_pipes[PIPE_3AA]->forceDone(V4L2_CID_IS_FORCE_DONE, 0x1000);
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to forceDone 3AA. ret %d", ret);
+        /* Continue to stop stream */
+    }
+
+    ret = m_pipes[PIPE_3AA]->stop();
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to stop 3AA. ret %d", ret);
+        return INVALID_OPERATION;
+    }
+
+    /* Start new stream */
+    m_parameters->switchSensorMode();
+    m_parameters->getHwSensorSize(&hwSensorW, &hwSensorH);
+    m_parameters->getPreviewFpsRange(&minFrameRate, &maxFrameRate);
+    m_parameters->getPreviewBayerCropSize(&bnsSize, &bcropSize, false);
+    m_parameters->getPreviewBdsSize(&bdsSize, false);
+
+    if (m_flagFlite3aaOTF == true) {
+        pipeId = PIPE_3AA;
+    } else {
+        pipeId = PIPE_FLITE;
+    }
+
+    struct v4l2_streamparm streamParam;
+    memset(&streamParam, 0x0, sizeof(v4l2_streamparm));
+
+    streamParam.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    streamParam.parm.capture.timeperframe.numerator = 1;
+    streamParam.parm.capture.timeperframe.denominator = maxFrameRate;
+
+    ret = setParam(&streamParam, pipeId);
+    if (ret != NO_ERROR) {
+        CLOGE("FLITE setParam(frameRate(%d), pipeId(%d)) fail", maxFrameRate, pipeId);
+        return INVALID_OPERATION;
+    }
+
+    ret = m_setSensorSize(pipeId, hwSensorW, hwSensorH);
+    if (ret != NO_ERROR) {
+        CLOGE("m_setSensorSize(pipeId(%d), hwSensorW(%d), hwSensorH(%d)) fail", pipeId, hwSensorW, hwSensorH);
+        return ret;
+    }
+
+    /* FLITE */
+    nodeType = getNodeType(PIPE_FLITE);
+
+    /* set v4l2 buffer size */
+    tempRect.fullW = 32;
+    tempRect.fullH = 64;
+    tempRect.colorFormat = bayerFormat;
+
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_3aa_buffers;
+
+    /* Set output node default info */
+    SET_OUTPUT_DEVICE_BASIC_INFO(PERFRAME_INFO_FLITE);
+
+    /* BAYER */
+    nodeType = getNodeType(PIPE_VC0);
+    perFramePos = PERFRAME_BACK_VC0_POS;
+
+    /* set v4l2 buffer size */
+    tempRect.fullW = hwSensorW;
+    tempRect.fullH = hwSensorH;
+    tempRect.colorFormat = bayerFormat;
+
+    /* set v4l2 video node bytes per plane */
+    pipeInfo[nodeType].bytesPerPlane[0] = getBayerLineSize(tempRect.fullW, bayerFormat);
+
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_bayer_buffers;
+
+    /* Set capture node default info */
+    SET_CAPTURE_DEVICE_BASIC_INFO();
+
+#ifdef SUPPORT_DEPTH_MAP
+    if (m_parameters->getUseDepthMap()) {
+        /* Depth Map Configuration */
+        int depthMapW = 0, depthMapH = 0;
+        int depthMapFormat = DEPTH_MAP_FORMAT;
+
+        ret = m_parameters->getDepthMapSize(&depthMapW, &depthMapH);
+        if (ret != NO_ERROR) {
+            CLOGE("Failed to getDepthMapSize");
+            return ret;
+        }
+
+        CLOGI("DepthMapSize %dx%d", depthMapW, depthMapH);
+
+        tempRect.fullW = depthMapW;
+        tempRect.fullH = depthMapH;
+        tempRect.colorFormat = depthMapFormat;
+
+        nodeType = getNodeType(PIPE_VC1);
+        pipeInfo[nodeType].bytesPerPlane[0] = getBayerLineSize(tempRect.fullW, tempRect.colorFormat);
+        pipeInfo[nodeType].bufInfo.count = NUM_DEPTHMAP_BUFFERS;
+
+        SET_CAPTURE_DEVICE_BASIC_INFO();
+    }
+#endif
+
+    /* setup pipe info to FLITE pipe */
+    if (m_flagFlite3aaOTF == false) {
+        ret = m_pipes[pipeId]->setupPipe(pipeInfo, m_sensorIds[pipeId]);
+        if (ret != NO_ERROR) {
+            CLOGE("FLITE setupPipe fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+
+        /* clear pipeInfo for next setupPipe */
+        for (int i = 0; i < MAX_NODE; i++)
+            pipeInfo[i] = nullPipeInfo;
+    }
+
+    /*
+     * 3AA
+     */
+    pipeId = PIPE_3AA;
+
+    /* 3AS */
+    nodeType = getNodeType(PIPE_3AA);
+    bayerFormat = m_parameters->getBayerFormat(PIPE_3AA);
+    tempRect.fullW = 32;
+    tempRect.fullH = 64;
+    tempRect.colorFormat = bayerFormat;
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_3aa_buffers;
+    SET_OUTPUT_DEVICE_BASIC_INFO(PERFRAME_INFO_3AA);
+
+    /* 3AC */
+    nodeType = getNodeType(PIPE_3AC);
+    perFramePos = PERFRAME_BACK_3AC_POS;
+    bayerFormat = m_parameters->getBayerFormat(PIPE_3AC);
+    tempRect.fullW = bcropSize.w;
+    tempRect.fullH = bcropSize.h;
+    tempRect.colorFormat = bayerFormat;
+    pipeInfo[nodeType].bytesPerPlane[0] = getBayerLineSize(tempRect.fullW, bayerFormat);
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_3aa_buffers;
+    SET_CAPTURE_DEVICE_BASIC_INFO();
+
+    /* 3AP */
+    nodeType = getNodeType(PIPE_3AP);
+    perFramePos = PERFRAME_BACK_3AP_POS;
+    bayerFormat = m_parameters->getBayerFormat(PIPE_3AP);
+    tempRect.fullW = bdsSize.w;
+    tempRect.fullH = bdsSize.h;
+    tempRect.colorFormat = bayerFormat;
+    pipeInfo[nodeType].bytesPerPlane[0] = getBayerLineSize(tempRect.fullW, bayerFormat);
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_3aa_buffers;
+    SET_CAPTURE_DEVICE_BASIC_INFO();
+
+    ret = m_pipes[pipeId]->setupPipe(pipeInfo, m_sensorIds[pipeId]);
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to setupPipe 3AA. ret %d", ret);
+        return ret;
+    }
+
+    ret = m_initFlitePipe(hwSensorW, hwSensorH, maxFrameRate);
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to initFlitePipe. ret %d hwSensorSize %dx%d fpsRange %d-%d",
+                ret, hwSensorW, hwSensorH, minFrameRate, maxFrameRate);
+        return ret;
+    }
+
+    CLOGD("Finish");
+    return ret;
+}
+#endif
+
+status_t ExynosCameraFrameFactoryPreview::finishSwitchSensorMode(void)
+{
+    status_t ret = NO_ERROR;
+
+    ret = m_transitState(FRAME_FACTORY_STATE_INIT);
+    if (ret != NO_ERROR) {
+        CLOGE("Failed to transitState. ret %d", ret);
+    }
+
+    return ret;
 }
 
 status_t ExynosCameraFrameFactoryPreview::m_setupConfig(bool isFastAE)
@@ -1354,13 +2081,12 @@ status_t ExynosCameraFrameFactoryPreview::m_setupConfig(bool isFastAE)
 
     status_t ret = NO_ERROR;
 
-    int pipeId = -1;
-
     m_flagFlite3aaOTF = m_parameters->isFlite3aaOtf();
     m_flag3aaIspOTF = m_parameters->is3aaIspOtf();
     m_flagIspTpuOTF = m_parameters->isIspTpuOtf();
     m_flagIspMcscOTF = m_parameters->isIspMcscOtf();
     m_flagTpuMcscOTF = m_parameters->isTpuMcscOtf();
+    m_flagMcscVraOTF = m_parameters->isMcscVraOtf();
 
     m_supportReprocessing = m_parameters->isReprocessing();
     m_supportPureBayerReprocessing = m_parameters->getUsePureBayerReprocessing();
@@ -1370,6 +2096,13 @@ status_t ExynosCameraFrameFactoryPreview::m_setupConfig(bool isFastAE)
         m_requestISPC = 1;
     }
     m_requestMCSC0 = 1;
+
+#ifdef USE_VRA_GROUP
+    if (m_flagMcscVraOTF == true)
+        m_requestVRA = 0;
+    else
+        m_requestVRA = 1;
+#endif
 
     /* FLITE ~ MCSC */
     ret = m_setDeviceInfo(isFastAE);
@@ -1391,7 +2124,8 @@ status_t ExynosCameraFrameFactoryPreview::m_setupConfig(bool isFastAE)
     /* JPEG */
     m_nodeNums[PIPE_JPEG][OUTPUT_NODE] = -1;
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
+    m_nodeNums[INDEX(PIPE_SYNC_SWITCHING)][OUTPUT_NODE] = -1;
     m_nodeNums[INDEX(PIPE_SYNC)][OUTPUT_NODE] = -1;
 
     m_nodeNums[INDEX(PIPE_FUSION)][OUTPUT_NODE] = 0;
@@ -1433,11 +2167,18 @@ status_t ExynosCameraFrameFactoryPreview::m_constructMainPipes()
     m_pipes[pipeId]->setPipeId(pipeId);
 
     /* MCSC */
-
     pipeId = PIPE_MCSC;
     m_pipes[pipeId] = (ExynosCameraPipe*)new ExynosCameraMCPipe(m_cameraId, m_parameters, m_flagReprocessing, &m_deviceInfo[pipeId]);
     m_pipes[pipeId]->setPipeName("PIPE_MCSC");
     m_pipes[pipeId]->setPipeId(pipeId);
+
+#ifdef USE_VRA_GROUP
+    /* VRA */
+    pipeId = PIPE_VRA;
+    m_pipes[pipeId] = (ExynosCameraPipe*)new ExynosCameraPipeVRAGroup(m_cameraId, m_parameters, m_flagReprocessing, m_deviceInfo[pipeId].nodeNum);
+    m_pipes[pipeId]->setPipeName("PIPE_VRA");
+    m_pipes[pipeId]->setPipeId(pipeId);
+#endif
 
     /* GSC */
     pipeId = PIPE_GSC;
@@ -1445,16 +2186,25 @@ status_t ExynosCameraFrameFactoryPreview::m_constructMainPipes()
     m_pipes[PIPE_GSC]->setPipeName("PIPE_GSC");
     m_pipes[PIPE_GSC]->setPipeId(PIPE_GSC);
 
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == true) {
+        /* Sync for switch (only to use for switching) */
+        ExynosCameraPipeSync *switchingSyncPipe = new ExynosCameraPipeSync(m_cameraId, m_parameters, m_flagReprocessing, m_nodeNums[INDEX(PIPE_SYNC_SWITCHING)], true /* flagSelectedByAllCamera */);
+        m_pipes[INDEX(PIPE_SYNC_SWITCHING)] = (ExynosCameraPipe*)switchingSyncPipe;
+        m_pipes[INDEX(PIPE_SYNC_SWITCHING)]->setPipeId(PIPE_SYNC_SWITCHING);
+        m_pipes[INDEX(PIPE_SYNC_SWITCHING)]->setPipeName("PIPE_SYNC_SWITCHING");
+
+        ExynosCameraDualPreviewSwitchingFrameSelector *switchingDualSelector = ExynosCameraSingleton<ExynosCameraDualPreviewSwitchingFrameSelector>::getInstance();
+        switchingSyncPipe->setDualSelector(switchingDualSelector);
+
         /* Sync */
-        ExynosCameraPipeSync *syncPipe = new ExynosCameraPipeSync(m_cameraId, m_parameters, false, m_nodeNums[INDEX(PIPE_SYNC)]);
+        ExynosCameraPipeSync *syncPipe = new ExynosCameraPipeSync(m_cameraId, m_parameters, m_flagReprocessing, m_nodeNums[INDEX(PIPE_SYNC)]);
         m_pipes[INDEX(PIPE_SYNC)] = (ExynosCameraPipe*)syncPipe;
         m_pipes[INDEX(PIPE_SYNC)]->setPipeId(PIPE_SYNC);
         m_pipes[INDEX(PIPE_SYNC)]->setPipeName("PIPE_SYNC");
 
         /* Fusion */
-        ExynosCameraPipeFusion *fusionPipe = new ExynosCameraPipeFusion(m_cameraId, m_parameters, false, m_nodeNums[INDEX(PIPE_FUSION)]);
+        ExynosCameraPipeFusion *fusionPipe = new ExynosCameraPipeFusion(m_cameraId, m_parameters, m_flagReprocessing, m_nodeNums[INDEX(PIPE_FUSION)]);
         m_pipes[INDEX(PIPE_FUSION)] = (ExynosCameraPipe*)fusionPipe;
         m_pipes[INDEX(PIPE_FUSION)]->setPipeId(PIPE_FUSION);
         m_pipes[INDEX(PIPE_FUSION)]->setPipeName("PIPE_FUSION");
@@ -1510,6 +2260,11 @@ status_t ExynosCameraFrameFactoryPreview::m_setDeviceInfo(bool isFastAE)
     int nodeIsp = -1, nodeIspc = -1, nodeIspp = -1;
     int nodeTpu = -1;
     int nodeMcsc = -1, nodeMcscp0 = -1, nodeMcscp1 = -1, nodeMcscp2 = -1;
+#ifdef USE_VRA_GROUP
+    int nodeDS = -1;
+    int nodeVra = -1;
+    int vraSrcPipeId = -1;
+#endif
     int previousPipeId = -1;
     int mcscSrcPipeId = -1;
     unsigned int flite3aaConnectionMode = (unsigned int)m_flagFlite3aaOTF;
@@ -1517,6 +2272,8 @@ status_t ExynosCameraFrameFactoryPreview::m_setDeviceInfo(bool isFastAE)
     unsigned int ispMcscConnectionMode = (unsigned int)m_flagIspMcscOTF;
     unsigned int ispTpuConnectionMode = (unsigned int)m_flagIspTpuOTF;
     unsigned int tpuMcscConnectionMode = (unsigned int)m_flagTpuMcscOTF;
+    unsigned int mcscVraConnectionMode = (unsigned int)m_flagMcscVraOTF;
+
     unsigned int mcscConnectionMode = 0;
     enum NODE_TYPE nodeType = INVALID_NODE;
     bool flagStreamLeader = true;
@@ -1526,10 +2283,34 @@ status_t ExynosCameraFrameFactoryPreview::m_setDeviceInfo(bool isFastAE)
     m_initDeviceInfo(PIPE_ISP);
     m_initDeviceInfo(PIPE_TPU);
     m_initDeviceInfo(PIPE_MCSC);
+#ifdef USE_VRA_GROUP
+    m_initDeviceInfo(PIPE_VRA);
+#endif
 
-    if (((m_cameraId == CAMERA_ID_FRONT || m_cameraId == CAMERA_ID_BACK_1) &&
-        (m_parameters->getDualMode() == true)) ||
-        (m_parameters->getUseCompanion() == false)) {
+#ifdef USE_DUAL_CAMERA
+    /* For dual camera */
+    if ((m_cameraId == CAMERA_ID_BACK_1) ||
+        (m_cameraId == CAMERA_ID_FRONT &&
+        (m_parameters->getDualMode() == true || m_parameters->getUseCompanion() == false))) {
+        node3aa = FIMC_IS_VIDEO_30S_NUM;
+        node3ac = FIMC_IS_VIDEO_30C_NUM;
+        node3ap = FIMC_IS_VIDEO_30P_NUM;
+    } else {
+        node3aa = FIMC_IS_VIDEO_31S_NUM;
+        node3ac = FIMC_IS_VIDEO_31C_NUM;
+        node3ap = FIMC_IS_VIDEO_31P_NUM;
+    }
+
+    nodeIsp = FIMC_IS_VIDEO_I0S_NUM;
+    nodeIspc = FIMC_IS_VIDEO_I0C_NUM;
+    nodeIspp = FIMC_IS_VIDEO_I0P_NUM;
+    nodeMcsc = FIMC_IS_VIDEO_M0S_NUM;
+    nodeMcscp0 = FIMC_IS_VIDEO_M0P_NUM;
+    nodeMcscp1 = FIMC_IS_VIDEO_M1P_NUM;
+    nodeMcscp2 = FIMC_IS_VIDEO_M2P_NUM;
+#else
+#ifdef EXYNOS7885 /* for lassen */
+    if (m_cameraId == CAMERA_ID_BACK || m_cameraId == CAMERA_ID_FRONT_1) {
         node3aa = FIMC_IS_VIDEO_30S_NUM;
         node3ac = FIMC_IS_VIDEO_30C_NUM;
         node3ap = FIMC_IS_VIDEO_30P_NUM;
@@ -1552,8 +2333,39 @@ status_t ExynosCameraFrameFactoryPreview::m_setDeviceInfo(bool isFastAE)
         nodeMcscp1 = FIMC_IS_VIDEO_M1P_NUM;
         nodeMcscp2 = FIMC_IS_VIDEO_M2P_NUM;
     }
-
+#else /* for kangchen */
+    if (((m_cameraId == CAMERA_ID_FRONT || m_cameraId == CAMERA_ID_BACK_1) &&
+        (m_parameters->getDualMode() == true)) ||
+        (m_parameters->getUseCompanion() == false)) {
+        node3aa = FIMC_IS_VIDEO_30S_NUM;
+        node3ac = FIMC_IS_VIDEO_30C_NUM;
+        node3ap = FIMC_IS_VIDEO_30P_NUM;
+        nodeIsp = FIMC_IS_VIDEO_I0S_NUM;
+        nodeIspc = FIMC_IS_VIDEO_I0C_NUM;
+        nodeIspp = FIMC_IS_VIDEO_I1P_NUM;
+        nodeMcsc = FIMC_IS_VIDEO_M0S_NUM;
+        nodeMcscp0 = FIMC_IS_VIDEO_M0P_NUM;
+        nodeMcscp1 = FIMC_IS_VIDEO_M1P_NUM;
+        nodeMcscp2 = FIMC_IS_VIDEO_M2P_NUM;
+    } else {
+        node3aa = FIMC_IS_VIDEO_31S_NUM;
+        node3ac = FIMC_IS_VIDEO_31C_NUM;
+        node3ap = FIMC_IS_VIDEO_31P_NUM;
+        nodeIsp = FIMC_IS_VIDEO_I0S_NUM;
+        nodeIspc = FIMC_IS_VIDEO_I0C_NUM;
+        nodeIspp = FIMC_IS_VIDEO_I0P_NUM;
+        nodeMcsc = FIMC_IS_VIDEO_M0S_NUM;
+        nodeMcscp0 = FIMC_IS_VIDEO_M0P_NUM;
+        nodeMcscp1 = FIMC_IS_VIDEO_M1P_NUM;
+        nodeMcscp2 = FIMC_IS_VIDEO_M2P_NUM;
+    }
+#endif
+#endif
     nodeTpu = FIMC_IS_VIDEO_D0S_NUM;
+#ifdef USE_VRA_GROUP
+    nodeDS = FIMC_IS_VIDEO_M3P_NUM;
+    nodeVra = FIMC_IS_VIDEO_VRA_NUM;
+#endif
 
     if (m_cameraId == CAMERA_ID_BACK || m_parameters->getDualMode() == false) {
 #ifdef USE_FLITE_3AA_BUFFER_HIDING_MODE
@@ -1763,16 +2575,39 @@ status_t ExynosCameraFrameFactoryPreview::m_setDeviceInfo(bool isFastAE)
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC)], true, flagStreamLeader, m_flagReprocessing);
 #endif
 
-    if (m_cameraId == CAMERA_ID_BACK || m_parameters->getDualMode() == false) {
-        /* MCSC2 */
-        nodeType = getNodeType(PIPE_MCSC2);
-        m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC2;
-        m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcscp2;
-        m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
-        strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_RECORDING", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
-        m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC)], true, flagStreamLeader, m_flagReprocessing);
-    }
+    /* MCSC2 */
+    nodeType = getNodeType(PIPE_MCSC2);
+    m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC2;
+    m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcscp2;
+    m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
+    strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_RECORDING", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+    m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC)], true, flagStreamLeader, m_flagReprocessing);
 
+#ifdef USE_VRA_GROUP
+    /* DS */
+    nodeType = getNodeType(PIPE_MCSC_DS);
+    m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC_DS;
+    m_deviceInfo[pipeId].nodeNum[nodeType] = nodeDS;
+    m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
+    strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_DS", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+    m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC)], true, flagStreamLeader, m_flagReprocessing);
+
+    /* vra src configuration */
+    vraSrcPipeId = PIPE_MCSC_DS;
+
+    previousPipeId = pipeId;
+
+    if (m_flagMcscVraOTF == false)
+        pipeId = PIPE_VRA;
+
+    /* VRA */
+    nodeType = getNodeType(PIPE_VRA);
+    m_deviceInfo[pipeId].pipeId[nodeType]  = PIPE_VRA;
+    m_deviceInfo[pipeId].nodeNum[nodeType] = nodeVra;
+    m_deviceInfo[pipeId].connectionMode[nodeType] = mcscVraConnectionMode;
+    strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "VRA_OUTPUT", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+    m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[previousPipeId].nodeNum[getNodeType(vraSrcPipeId)], mcscVraConnectionMode, flagStreamLeader, m_flagReprocessing);
+#endif
     return NO_ERROR;
 }
 
@@ -1794,11 +2629,15 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipes(uint32_t frameRate)
     int maxPictureW = 0, maxPictureH = 0, hwPictureW = 0, hwPictureH = 0;
     int videoH = 0, videoW = 0;
     int previewW = 0, previewH = 0;
+#ifdef USE_VRA_GROUP
+    int dsWidth = 0;
+    int dsHeight = 0;
+    int dsFormat = 0;
+#endif
     int bayerFormat = m_parameters->getBayerFormat(PIPE_3AA);
     int hwPreviewFormat = m_parameters->getHwPreviewFormat();
     int previewFormat = m_parameters->getPreviewFormat();
     int videoFormat = m_parameters->getVideoFormat();
-    int pictureFormat = m_parameters->getHwPictureFormat();
     int hwVdisformat = m_parameters->getHWVdisFormat();
     struct ExynosConfigInfo *config = m_parameters->getConfig();
     ExynosRect bnsSize;
@@ -1806,6 +2645,12 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipes(uint32_t frameRate)
     ExynosRect bdsSize;
     int perFramePos = 0;
     int stride = 0;
+
+#ifdef USE_VRA_GROUP
+    m_parameters->getHwVraInputSize(&dsWidth, & dsHeight);
+    dsFormat = m_parameters->getHwVraInputFormat();
+    CLOGI("DS Size %dx%d Format %x Buffer count %d", dsWidth, dsHeight, dsFormat, config->current->bufInfo.num_vra_buffers);
+#endif
 
 #ifdef DEBUG_RAWDUMP
     if (m_parameters->checkBayerDumpEnable()) {
@@ -1975,8 +2820,8 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipes(uint32_t frameRate)
         pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_3aa_buffers;
     } else {
         /* set v4l2 buffer size */
-        tempRect.fullW = maxSensorW;
-        tempRect.fullH = maxSensorH;
+        tempRect.fullW = hwSensorW;
+        tempRect.fullH = hwSensorH;
         tempRect.colorFormat = bayerFormat;
 
         /* set v4l2 video node bytes per plane */
@@ -2156,7 +3001,7 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipes(uint32_t frameRate)
     }
 
     /*
-     * TPU 
+     * TPU
      */
 
     /* TPU */
@@ -2259,7 +3104,14 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipes(uint32_t frameRate)
     /* set v4l2 video node bytes per plane */
 #ifdef USE_BUFFER_WITH_STRIDE
     /* to use stride for preview buffer, set the bytesPerPlane */
+#ifdef SAMSUNG_DUAL_SOLUTION
+    if(m_parameters->getDualCameraMode() == true)
+        pipeInfo[nodeType].bytesPerPlane[0] = 0;
+    else
+        pipeInfo[nodeType].bytesPerPlane[0] = hwPreviewW;
+#else
     pipeInfo[nodeType].bytesPerPlane[0] = hwPreviewW;
+#endif
 #endif
 
     /* set v4l2 video node buffer count */
@@ -2306,28 +3158,83 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipes(uint32_t frameRate)
     /* Set capture node default info */
     SET_CAPTURE_DEVICE_BASIC_INFO();
 
-    if (m_cameraId == CAMERA_ID_BACK || m_parameters->getDualMode() == false) {
-        /* MCSC2 */
-        nodeType = getNodeType(PIPE_MCSC2);
-        perFramePos = PERFRAME_BACK_MCSC2_POS;
+    /* MCSC2 */
+    nodeType = getNodeType(PIPE_MCSC2);
+    perFramePos = PERFRAME_BACK_MCSC2_POS;
 
-        /* set v4l2 buffer size */
-        stride = m_parameters->getHwPreviewStride();
-        CLOGV("stride=%d", stride);
+    /* set v4l2 buffer size */
+    stride = m_parameters->getHwPreviewStride();
+    CLOGV("stride=%d", stride);
+
+#ifdef USE_MCSC_FOR_FD
+    ExynosFDConfig_t *fdConfig = NULL;
+    fdConfig = m_parameters->getFDConfig();
+    if (fdConfig->flagFdEnable) {
+        tempRect.fullW = fdConfig->width;
+        tempRect.fullH = fdConfig->height;
+    } else
+#endif
+    {
         tempRect.fullW = videoW;
         tempRect.fullH = videoH;
-        tempRect.colorFormat = videoFormat;
+    }
+    tempRect.colorFormat = videoFormat;
+
+    /* set v4l2 video node buffer count */
+    if (m_parameters->increaseMaxBufferOfPreview() == true)
+        pipeInfo[nodeType].bufInfo.count = m_parameters->getPreviewBufferCount();
+    else
+        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_recording_buffers;
+
+    /* Set capture node default info */
+    SET_CAPTURE_DEVICE_BASIC_INFO();
+
+#ifdef USE_VRA_GROUP
+    if (m_flagMcscVraOTF == false) {
+        /* MCSC-DS */
+        nodeType = getNodeType(PIPE_MCSC_DS);
+        perFramePos = PERFRAME_BACK_MCSC_DS_POS;
+
+        /* set v4l2 buffer size */
+        tempRect.fullW = dsWidth;
+        tempRect.fullH = dsHeight;
+        tempRect.colorFormat = dsFormat;
 
         /* set v4l2 video node buffer count */
-        if (m_parameters->increaseMaxBufferOfPreview() == true)
-            pipeInfo[nodeType].bufInfo.count = m_parameters->getPreviewBufferCount();
-        else
-            pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_recording_buffers;
+        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_vra_buffers;
 
         /* Set capture node default info */
         SET_CAPTURE_DEVICE_BASIC_INFO();
+
+        ret = m_pipes[pipeId]->setupPipe(pipeInfo, m_sensorIds[pipeId]);
+        if (ret != NO_ERROR) {
+            CLOGE("MCSC setupPipe fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+
+        /* clear pipeInfo for next setupPipe */
+        for (int i = 0; i < MAX_NODE; i++)
+            pipeInfo[i] = nullPipeInfo;
     }
 
+    /* VRA */
+    if (m_flagMcscVraOTF == false) {
+        pipeId = PIPE_VRA;
+        nodeType = getNodeType(PIPE_VRA);
+
+        /* set v4l2 buffer size */
+        tempRect.fullW = dsWidth;
+        tempRect.fullH = dsHeight;
+        tempRect.colorFormat = dsFormat;
+
+        /* set v4l2 video node buffer count */
+        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_vra_buffers;
+
+        /* Set output node default info */
+        SET_OUTPUT_DEVICE_BASIC_INFO(PERFRAME_INFO_VRA);
+    }
+#endif
     ret = m_pipes[pipeId]->setupPipe(pipeInfo, m_sensorIds[pipeId]);
     if (ret != NO_ERROR) {
         CLOGE("MCSC setupPipe fail, ret(%d)", ret);
@@ -2352,10 +3259,22 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipesFastenAeStable(int32_t numF
     enum NODE_TYPE leaderNodeType = OUTPUT_NODE;
 
     ExynosRect tempRect;
+#ifdef USE_VRA_GROUP
+    int dsWidth = 0;
+    int dsHeight = 0;
+    int dsFormat = 0;
+#endif
     int bayerFormat = m_parameters->getBayerFormat(PIPE_3AA);
     int hwVdisformat = m_parameters->getHWVdisFormat();
     int hwPreviewFormat = m_parameters->getHwPreviewFormat();
     int perFramePos = 0;
+
+#ifdef USE_VRA_GROUP
+    struct ExynosConfigInfo *config = m_parameters->getConfig();
+    m_parameters->getHwVraInputSize(&dsWidth, & dsHeight);
+    dsFormat = m_parameters->getHwVraInputFormat();
+    CLOGI("DS Size %dx%d Format %x Buffer count %d", dsWidth, dsHeight, dsFormat, config->current->bufInfo.num_vra_buffers);
+#endif
 
 #ifdef DEBUG_RAWDUMP
     if (m_parameters->checkBayerDumpEnable()) {
@@ -2424,6 +3343,32 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipesFastenAeStable(int32_t numF
 
     /* Set capture node default info */
     SET_CAPTURE_DEVICE_BASIC_INFO();
+
+#ifdef SUPPORT_DEPTH_MAP
+    if (m_parameters->getUseDepthMap()) {
+        /* Depth Map Configuration */
+        int depthMapW = 0, depthMapH = 0;
+        int depthMapFormat = DEPTH_MAP_FORMAT;
+
+        ret = m_parameters->getDepthMapSize(&depthMapW, &depthMapH);
+        if (ret != NO_ERROR) {
+            CLOGE("Failed to getDepthMapSize");
+            return ret;
+        }
+
+        CLOGI("DepthMapSize %dx%d", depthMapW, depthMapH);
+
+        tempRect.fullW = depthMapW;
+        tempRect.fullH = depthMapH;
+        tempRect.colorFormat = depthMapFormat;
+
+        nodeType = getNodeType(PIPE_VC1);
+        pipeInfo[nodeType].bytesPerPlane[0] = getBayerLineSize(tempRect.fullW, tempRect.colorFormat);
+        pipeInfo[nodeType].bufInfo.count = NUM_DEPTHMAP_BUFFERS;
+
+        SET_CAPTURE_DEVICE_BASIC_INFO();
+    }
+#endif
 
     /* setup pipe info to FLITE pipe */
     if (m_flagFlite3aaOTF == false) {
@@ -2595,6 +3540,53 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipesFastenAeStable(int32_t numF
 
     SET_CAPTURE_DEVICE_BASIC_INFO();
 
+#ifdef USE_VRA_GROUP
+    if (m_flagMcscVraOTF == false) {
+        /* MCSC-DS */
+        nodeType = getNodeType(PIPE_MCSC_DS);
+        perFramePos = PERFRAME_BACK_MCSC_DS_POS;
+
+        /* set v4l2 buffer size */
+        tempRect.fullW = dsWidth;
+        tempRect.fullH = dsHeight;
+        tempRect.colorFormat = dsFormat;
+
+        /* set v4l2 video node buffer count */
+        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_vra_buffers;
+
+        /* Set capture node default info */
+        SET_CAPTURE_DEVICE_BASIC_INFO();
+
+        ret = m_pipes[pipeId]->setupPipe(pipeInfo, m_sensorIds[pipeId]);
+        if (ret != NO_ERROR) {
+            CLOGE("MCSC setupPipe fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+
+        /* clear pipeInfo for next setupPipe */
+        for (int i = 0; i < MAX_NODE; i++)
+            pipeInfo[i] = nullPipeInfo;
+    }
+
+    /* VRA */
+    if (m_flagMcscVraOTF == false) {
+        pipeId = PIPE_VRA;
+        nodeType = getNodeType(PIPE_VRA);
+
+        /* set v4l2 buffer size */
+        tempRect.fullW = dsWidth;
+        tempRect.fullH = dsHeight;
+        tempRect.colorFormat = dsFormat;
+
+        /* set v4l2 video node buffer count */
+        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_vra_buffers;
+
+        /* Set output node default info */
+        SET_OUTPUT_DEVICE_BASIC_INFO(PERFRAME_INFO_VRA);
+    }
+#endif
+
     ret = m_pipes[pipeId]->setupPipe(pipeInfo, m_sensorIds[pipeId]);
     if (ret != NO_ERROR) {
         CLOGE("MCSC setupPipe fail, ret(%d)", ret);
@@ -2605,7 +3597,16 @@ status_t ExynosCameraFrameFactoryPreview::m_initPipesFastenAeStable(int32_t numF
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrameSP_sptr_t frame)
+status_t ExynosCameraFrameFactoryPreview::m_setupRequestFlags(void)
+{
+    status_t ret = NO_ERROR;
+
+    m_requestMCSC0 = (m_parameters->getSwitchSensor() == true)? false : true;
+
+    return ret;
+}
+
+status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrameSP_sptr_t frame, ExynosCameraFrameSP_sptr_t refFrame)
 {
     size_control_info_t sizeControlInfo;
     camera2_node_group node_group_info_flite;
@@ -2613,6 +3614,9 @@ status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrameS
     camera2_node_group node_group_info_isp;
     camera2_node_group node_group_info_tpu;
     camera2_node_group node_group_info_mcsc;
+#ifdef USE_VRA_GROUP
+    camera2_node_group node_group_info_vra;
+#endif
     camera2_node_group *node_group_info_temp;
 
     int zoom = m_parameters->getZoomLevel();
@@ -2629,82 +3633,261 @@ status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrameS
     uint32_t requestMCSC0 = m_requestMCSC0;
     uint32_t requestMCSC1 = m_requestMCSC1;
     uint32_t requestMCSC2 = m_requestMCSC2;
+#ifdef USE_VRA_GROUP
+    uint32_t requestVRA = m_requestVRA;
+#endif
 
+    if (refFrame == NULL) {
+        CLOGV("refFrame is NULL");
+    }
+
+    requestVC1 = m_requestVC1;
+    requestISPP = m_requestISPP;
+    requestMCSC1 = m_requestMCSC1;
+
+#ifdef USE_DUAL_CAMERA
+    if (refFrame == NULL) {
+        memset(&node_group_info_flite, 0x0, sizeof(camera2_node_group));
+        memset(&node_group_info_3aa, 0x0, sizeof(camera2_node_group));
+        memset(&node_group_info_isp, 0x0, sizeof(camera2_node_group));
+        memset(&node_group_info_tpu, 0x0, sizeof(camera2_node_group));
+        memset(&node_group_info_mcsc, 0x0, sizeof(camera2_node_group));
+#ifdef USE_VRA_GROUP
+        memset(&node_group_info_vra, 0x0, sizeof(camera2_node_group));
+#endif
+    }
+#else
     memset(&node_group_info_flite, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_3aa, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_isp, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_tpu, 0x0, sizeof(camera2_node_group));
     memset(&node_group_info_mcsc, 0x0, sizeof(camera2_node_group));
+#ifdef USE_VRA_GROUP
+    memset(&node_group_info_vra, 0x0, sizeof(camera2_node_group));
+#endif
+#endif
 
     /* TODO:should be moved to parameter class */
-#ifdef BOARD_CAMERA_USES_DUAL_CAMERA
+#ifdef USE_DUAL_CAMERA
     if (m_parameters->getDualCameraMode() == true) {
         int masterCameraId = -1;
         int slaveCameraId = -1;
+        int otherCameraId = -1;
+        uint32_t minFps;
+        uint32_t maxFps;
+        bool flagStandbyReady = false;
+        int transitionCount;
+        int smoothTransitionCount;
+        ExynosCameraParameters::dual_standby_mode_t preStandbyMode;
 
+        /* Maybe the "refFrame" is slave frame in master camera */
+        if (refFrame != NULL) {
+            int output_node_index = OUTPUT_NODE_1;
+            struct camera2_node_group node_group;
+            struct camera2_shot_ext shot;
+
+            /* Node Group Setting */
+            for (int i = 0; i < PERFRAME_NODE_GROUP_MAX; i++) {
+                refFrame->getNodeGroupInfo(&node_group, i);
+                frame->storeNodeGroupInfo(&node_group, i, output_node_index);
+            }
+
+            /* Meta Setting */
+            refFrame->getMetaData(&shot);
+            frame->setMetaData(&shot, output_node_index);
+
+            /* Zoom Setting */
+            frame->setZoom(refFrame->getZoom(), output_node_index);
+
+            /* SyncType Setting */
+            frame->setSyncType(refFrame->getSyncType());
+
+            /* FrameType Setting */
+            frame->setFrameType((frame_type_t)refFrame->getFrameType());
+
+            /* Reprocessing State */
+            frame->setReprocessingFrameType((frame_type_t)refFrame->getReprocessingFrameType());
+            frame->setReprocessingZoom(refFrame->getReprocessingZoom());
+            frame->setReprocessingSyncType(refFrame->getReprocessingSyncType());
+
+            /* return frame */
+            return NO_ERROR;
+        }
+
+        transitionCount = m_parameters->getDualTransitionCount();
+        smoothTransitionCount = m_parameters->getDualSmoothTransitionCount();
         sync_type_t syncType = SYNC_TYPE_BASE;
+        sync_type_t reprocessingSyncType = SYNC_TYPE_BASE;
+        m_parameters->updateDualCameraSyncType(zoom, &syncType, &reprocessingSyncType);
+        sync_type_t currentSyncType = syncType;
         frame_type_t frameType = FRAME_TYPE_PREVIEW;
 
         getDualCameraId(&masterCameraId, &slaveCameraId);
+        if (m_cameraId == masterCameraId)
+            otherCameraId = slaveCameraId;
+        else
+            otherCameraId = masterCameraId;
 
         /*
-         *  master camera's zoom range
-         *    BYPASS ~ SYNC
-         *  slave camera's zoom range
-         *    SYNC ~ SWITCH
+         * * reprocessingSyncType must follow currentSyncType !!
+         * ------------------------------------------------------------------------------------
+         *  CAM | currentSyncType | transitionCount | smoothTransitionCount | <result>
+         * ------------------------------------------------------------------------------------
+         *   M  |    BYPASS       |       0         |          0            |  BYPASS / Normal
+         *   M  |    BYPASS       |       N         |          N            |  BYPASS / Transition
+         *   M  |    BYPASS       |       N         |          0            |  BYPASS / Transition
+         *   M  |    BYPASS       |       0         |          N            |  SYNC   / Transition
+         *   M  |    SYNC         |       -         |          -            |  SYNC   / Normal
+         *   M  |    SWITCH       |       0         |          0            |  PostStandby / Internal
+         *   M  |    SWITCH       |       -         |          N            |  SYNC   / Normal
+         *   S  |    BYPASS       |       0         |          0            |  SensorStandby / -
+         *   S  |    BYPASS       |       -         |          N            |  SYNC   / Normal
+         *   S  |    SYNC         |       -         |          -            |  SYNC   / Normal
+         *   S  |    SWITCH       |       0         |          0            |  SWITCH / Normal
+         *   S  |    SWITCH       |       N         |          0            |  SWITCH / Transition
+         *   S  |    SWITCH       |       N         |          N            |  SWITCH / Transition
+         *   S  |    SWITCH       |       0         |          N            |  SYNC   / Transition
+         * ------------------------------------------------------------------------------------
+         * * condition to set transitionCount
+         *   if (transitionCount <= 0 && smoothTransitionCount <= 0) {
+         *      1. Master : BYPASS -> SYNC    (at this changed moment)
+         *      2. Master : BYPASS -> SWITCH  (at this changed moment)
+         *      3. Slave  : SWITCH -> SYNC    (at this changed moment)
+         *      4. Slave  : SWITCH -> BYPASS  (at this changed moment)
+         *   }
+         *
+         * * condition to change smoothTransitionCount
+         *   1. BYPASS <-> SYNC <-> SWITCH
          */
-        if (zoom > DUAL_SYNC_MODE_MAX_ZOOM_LEVEL) {
-            /* SWITCH MODE */
-            if (m_cameraId == masterCameraId) {
-                /* over than zoom range in this camera */
-                zoom = DUAL_SYNC_MODE_MAX_ZOOM_LEVEL;
-                syncType = SYNC_TYPE_SYNC;
-                frameType = FRAME_TYPE_TRANSITION;
-            } else {
-                syncType = SYNC_TYPE_SWITCH;
-            }
-        } else if (zoom < DUAL_SYNC_MODE_MIN_ZOOM_LEVEL) {
-            /* BYPASS MODE */
+
+        /* 1. define basic syncType */
+        switch (syncType) {
+        case SYNC_TYPE_BYPASS:
             if (m_cameraId == slaveCameraId) {
-                /* over than zoom range in this camera */
-                zoom = DUAL_SYNC_MODE_MIN_ZOOM_LEVEL;
-                syncType = SYNC_TYPE_SYNC;
+                syncType = SYNC_TYPE_SWITCH;
                 frameType = FRAME_TYPE_TRANSITION;
-            } else {
+                flagStandbyReady = true;
+            }
+            break;
+        case SYNC_TYPE_SWITCH:
+            if (m_cameraId == masterCameraId) {
                 syncType = SYNC_TYPE_BYPASS;
+                frameType = FRAME_TYPE_TRANSITION;
+                flagStandbyReady = true;
             }
-        } else {
-            /* SYNC MODE */
-            syncType = SYNC_TYPE_SYNC;
+            break;
+        case SYNC_TYPE_SYNC:
+            break;
+        default:
+            CLOGE("invalid syncType(%d)", syncType);
+            return INVALID_OPERATION;
         }
 
-        /* check the internal frame */
-        if (frameType == FRAME_TYPE_TRANSITION) {
-            if (m_preSyncType != SYNC_TYPE_BASE) {
-                /* set the previous information */
-                syncType = m_preSyncType;
-                zoom = m_preZoom;
-            }
+        /* just changed the frameType to transition cause of waiting stable timestamp sync */
+        if (m_parameters->getFlagForceSwitchingOnly() == true &&
+                m_parameters->getDualStableFromStandby() == false) {
+            if (frameType == FRAME_TYPE_PREVIEW)
+                frameType = FRAME_TYPE_TRANSITION;
+        }
 
-            if (m_transitionCount > 0) {
-                m_transitionCount--;
+        /* 2. transitionCount/smoothTransitionCount setting */
+        if (m_preSyncType != SYNC_TYPE_BASE &&
+                m_preSyncType != currentSyncType) {
+            if (m_cameraId == masterCameraId) {
+                if (m_preSyncType == SYNC_TYPE_BYPASS) {
+                    transitionCount = m_parameters->setDualTransitionCount(DUAL_TRANSITION_COUNT);
+                }
             } else {
-                /* make internal frame */
-                frameType = FRAME_TYPE_INTERNAL;
+                if (m_preSyncType == SYNC_TYPE_SWITCH) {
+                    transitionCount = m_parameters->setDualTransitionCount(DUAL_TRANSITION_COUNT);
+                }
             }
-        } else {
-            m_transitionCount = DUAL_TRANSITION_COUNT;
+
+            if (m_parameters->getForceWide() == true) {
+                if (m_preSyncType == SYNC_TYPE_SWITCH && currentSyncType == SYNC_TYPE_BYPASS) {
+                    smoothTransitionCount = m_parameters->setDualSmoothTransitionCount(DUAL_SMOOTH_TRANSITION_COUNT);
+                } else {
+                    smoothTransitionCount = m_parameters->setDualSmoothTransitionCount(0);
+                }
+            } else {
+                smoothTransitionCount = m_parameters->setDualSmoothTransitionCount(DUAL_SMOOTH_TRANSITION_COUNT);
+            }
         }
 
+        /* 3. check the standby mode */
+        if (flagStandbyReady == true &&
+                transitionCount <= 0 &&
+                smoothTransitionCount <= 0) {
+            /* make internal frame */
+            frameType = FRAME_TYPE_INTERNAL;
+        } else {
+            /* 4. transition/smoothTransition frame check */
+            if (transitionCount > 0) {
+                if (m_cameraId == masterCameraId)
+                    syncType = SYNC_TYPE_BYPASS;
+                else
+                    syncType = SYNC_TYPE_SWITCH;
+
+                frameType = FRAME_TYPE_TRANSITION;
+                transitionCount = m_parameters->decreaseDualTransitionCount();
+            } else if (smoothTransitionCount > 0) {
+                syncType = SYNC_TYPE_SYNC;
+                smoothTransitionCount = m_parameters->decreaseDualSmoothTransitionCount();
+            }
+        }
+
+        /* 4. notify wakeup for sensor standby to otherCamera */
+        if (m_preSyncType != SYNC_TYPE_BASE &&
+                m_preSyncType != currentSyncType) {
+            if ((m_cameraId == slaveCameraId) &&
+                    (m_preSyncType == SYNC_TYPE_SWITCH)) {
+                bool useThread = false;
+                /* wakeup master camera */
+#ifdef DUAL_STANDBY_MODE_MASTER
+                if (ExynosCameraParameters::DUAL_STANDBY_MODE_MASTER ==
+                        ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR)
+                    useThread = true;
+#endif
+                m_parameters->dualNotify(DUAL_CAMERA_NOTIFY_WAKE_UP, useThread, masterCameraId, true, NULL);
+            }
+
+            if ((m_cameraId == masterCameraId) &&
+                    (m_preSyncType == SYNC_TYPE_BYPASS)) {
+                bool useThread = false;
+                /* wakeup slave camera */
+#ifdef DUAL_STANDBY_MODE_SLAVE
+                if (ExynosCameraParameters::DUAL_STANDBY_MODE_SLAVE ==
+                        ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR)
+                    useThread = true;
+#endif
+                m_parameters->dualNotify(DUAL_CAMERA_NOTIFY_WAKE_UP, useThread, slaveCameraId, true, NULL);
+            }
+        }
+
+#ifdef DUAL_SMOOTH_TRANSITION_LAUNCH
+        /* 5. specific case for camera entry(master -> slave) */
+        if (m_parameters->getFlagFinishStartPreview(otherCameraId) == false) {
+            if (m_cameraId == masterCameraId)
+                syncType = SYNC_TYPE_BYPASS;
+            else
+                syncType = SYNC_TYPE_SWITCH;
+
+            if (frameType == FRAME_TYPE_INTERNAL)
+                frameType = FRAME_TYPE_TRANSITION;
+        }
+#endif
         frame->setSyncType(syncType);
         frame->setFrameType(frameType);
 
         /* backup for next frame */
-        m_preSyncType = syncType;
         m_preZoom = zoom;
 
+        /* previous standbymode */
+        preStandbyMode = m_parameters->getDualStandbyMode();
+
         /* for internal frame */
-        if (frame->getFrameType() == FRAME_TYPE_INTERNAL) {
+        switch (frame->getFrameType()) {
+        case FRAME_TYPE_INTERNAL:
             /*
              * Clear all capture node's request.
              * But don't touch MCSC0 for preview in master camera.
@@ -2728,11 +3911,63 @@ status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrameS
             /* frame->setRequest(PIPE_MCSC0, requestMCSC0); */
             frame->setRequest(PIPE_MCSC1, requestMCSC1);
             frame->setRequest(PIPE_MCSC2, requestMCSC2);
+
+            if (m_cameraId == masterCameraId) {
+#ifdef DUAL_STANDBY_MODE_MASTER
+                m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_MASTER);
+#else
+                m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_POST);
+#endif
+            } else {
+#ifdef DUAL_STANDBY_MODE_SLAVE
+                m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_SLAVE);
+#else
+                m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_POST);
+#endif
+            }
+            break;
+        case FRAME_TYPE_TRANSITION:
+            m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_READY);
+            break;
+        default:
+            m_parameters->setDualStandbyMode(ExynosCameraParameters::DUAL_STANDBY_MODE_INACTIVE);
+            break;
         }
 
-        CLOGV("frame(%d) : zoom(%d), frame type(%d), syncType(%d), transitionCount(%d)",
-                frame->getFrameCount(), zoom, frame->getFrameType(),
-                frame->getSyncType(), m_transitionCount);
+        if ((preStandbyMode == ExynosCameraParameters::DUAL_STANDBY_MODE_INACTIVE ||
+                preStandbyMode == ExynosCameraParameters::DUAL_STANDBY_MODE_READY) &&
+                m_parameters->getDualStandbyMode() ==
+                ExynosCameraParameters::DUAL_STANDBY_MODE_ACTIVE_IN_SENSOR) {
+
+            /* sensor stream off */
+            status_t ret = sensorStandby(true);
+            if (ret != NO_ERROR) {
+                CLOGE("sensorStandby(true) failed, ret(%d)", ret);
+            }
+
+            m_preSyncType = currentSyncType;
+
+            return INVALID_OPERATION;
+        }
+
+#ifdef DUAL_ENABLE_ASYNC_FPS
+        m_parameters->updatePreviewFpsRange();
+        m_parameters->getPreviewFpsRange(&minFps, &maxFps);
+        frame->setFpsRange(minFps, maxFps);
+#endif
+
+        /* backup state for reprocessing */
+        frame->setReprocessingFrameType((frame_type_t)frame->getFrameType());
+        frame->setReprocessingZoom(zoom);
+        frame->setReprocessingSyncType(reprocessingSyncType);
+
+#ifdef USE_DUAL_CAMERA_LOG_TRACE
+        CLOGI("preview frame(%d) : zoom(%d), frame type(%d), syncType(%d->%d/%d, reprocessing:%d), transitionCount(%d), smoothTransitionCount(%d), fps(%d/%d), postStandby(%d)",
+                frame->getFrameCount(), zoom, frame->getFrameType(), m_preSyncType,
+                currentSyncType, reprocessingSyncType, frame->getSyncType(), transitionCount, smoothTransitionCount,
+                minFps, maxFps, m_parameters->getDualStandbyMode());
+#endif
+        m_preSyncType = currentSyncType;
     }
 #endif
 
@@ -2834,33 +4069,43 @@ status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrameS
         node_group_info_temp->leader.request = 1;
     }
 
-    if (perframePosition < CAPTURE_NODE_MAX) {
-        node_group_info_temp->capture[perframePosition].request = requestMCSC0;
-        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC0)] - FIMC_IS_VIDEO_BAS_NUM;
-        perframePosition++;
-    } else {
-        CLOGE("Perframe capture node index out of bound, requestMCSC0 index(%d) CAPTURE_NODE_MAX(%d)", perframePosition, CAPTURE_NODE_MAX);
-    }
+    node_group_info_temp->capture[perframePosition].request = requestMCSC0;
+    node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC0)] - FIMC_IS_VIDEO_BAS_NUM;
+    perframePosition++;
 
 #ifdef USE_MCSC1_FOR_PREVIEWCALLBACK
-    if (perframePosition < CAPTURE_NODE_MAX) {
-        node_group_info_temp->capture[perframePosition].request = requestMCSC1;
-        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC1)] - FIMC_IS_VIDEO_BAS_NUM;
-        perframePosition++;
-    } else {
-        CLOGE("Perframe capture node index out of bound, requestMCSC1 index(%d) CAPTURE_NODE_MAX(%d)", perframePosition, CAPTURE_NODE_MAX);
-    }
+    node_group_info_temp->capture[perframePosition].request = requestMCSC1;
+    node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC1)] - FIMC_IS_VIDEO_BAS_NUM;
+    perframePosition++;
 #endif
 
-    if (m_cameraId == CAMERA_ID_BACK || m_parameters->getDualMode() == false) {
+    if (m_cameraId == CAMERA_ID_BACK || m_cameraId == CAMERA_ID_BACK_1 ||
+            m_parameters->getDualMode() == false) {
         if (perframePosition < CAPTURE_NODE_MAX) {
             node_group_info_temp->capture[perframePosition].request = requestMCSC2;
             node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC2)] - FIMC_IS_VIDEO_BAS_NUM;
+            perframePosition++;
         } else {
-            CLOGE("Perframe capture node index out of bound, requestMCSC2 index(%d) CAPTURE_NODE_MAX(%d)", perframePosition, CAPTURE_NODE_MAX);
+            CLOGE("perframePostion = %d is over", perframePosition);
         }
     }
 
+#ifdef USE_VRA_GROUP
+    if (perframePosition < CAPTURE_NODE_MAX) {
+        node_group_info_temp->capture[perframePosition].request = requestVRA;
+        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC_DS)] - FIMC_IS_VIDEO_BAS_NUM;
+        perframePosition++;
+    } else {
+        CLOGE("perframePostion = %d is over", perframePosition);
+    }
+
+    if (m_flagMcscVraOTF == false) {
+        pipeId = PIPE_VRA;
+        perframePosition = 0;
+        node_group_info_temp = &node_group_info_vra;
+        node_group_info_temp->leader.request = 1;
+    }
+#endif
     m_parameters->getHwSensorSize(&sizeControlInfo.sensorSize.w,
                                   &sizeControlInfo.sensorSize.h);
 #ifdef SUPPORT_DEPTH_MAP
@@ -2871,15 +4116,38 @@ status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrameS
     m_parameters->getPreviewBayerCropSize(&sizeControlInfo.bnsSize,
                                           &sizeControlInfo.bayerCropSize);
     m_parameters->getPreviewBdsSize(&sizeControlInfo.bdsSize);
+#ifdef USE_VRA_GROUP
+    m_parameters->getHwVraInputSize(&sizeControlInfo.vraInputSize.w,
+                                    &sizeControlInfo.vraInputSize.h);
+#endif
     m_parameters->getPreviewYuvCropSize(&sizeControlInfo.yuvCropSize);
     m_parameters->getHwPreviewSize(&sizeControlInfo.hwPreviewSize.w,
                                    &sizeControlInfo.hwPreviewSize.h);
     m_parameters->getPreviewSize(&sizeControlInfo.previewSize.w,
                                  &sizeControlInfo.previewSize.h);
-    m_parameters->getHwVideoSize(&sizeControlInfo.hwVideoSize.w,
-                                 &sizeControlInfo.hwVideoSize.h);
+#ifdef USE_MCSC_FOR_FD
+    ExynosFDConfig_t *fdConfig = NULL;
+    fdConfig = m_parameters->getFDConfig();
+    if (fdConfig->flagFdEnable) {
+        sizeControlInfo.hwVideoSize.w = fdConfig->width;
+        sizeControlInfo.hwVideoSize.h = fdConfig->height;
+    } else
+#endif
+    {
+        m_parameters->getHwVideoSize(&sizeControlInfo.hwVideoSize.w,
+                                     &sizeControlInfo.hwVideoSize.h);
+    }
+#ifdef SAMSUNG_DUAL_SOLUTION
+    m_parameters->getFusionSize(sizeControlInfo.previewSize.w, sizeControlInfo.previewSize.h,
+                                &sizeControlInfo.fusionSrcSize, &sizeControlInfo.fusionDstSize);
+#endif
 
     frame->setZoom(zoom);
+
+#ifdef SAMSUNG_DUAL_SOLUTION
+    if(m_parameters->getDualCameraMode() == true)
+        m_parameters->setPreviewNeedMargin(frame->getZoom());
+#endif
 
     if (m_flagFlite3aaOTF == true) {
         updateNodeGroupInfo(
@@ -2931,6 +4199,16 @@ status_t ExynosCameraFrameFactoryPreview::m_fillNodeGroupInfo(ExynosCameraFrameS
         frame->storeNodeGroupInfo(&node_group_info_mcsc, PERFRAME_INFO_MCSC);
     }
 
+#ifdef USE_VRA_GROUP
+    if (m_flagMcscVraOTF == false) {
+        updateNodeGroupInfo(
+                PIPE_VRA,
+                m_parameters,
+                sizeControlInfo,
+                &node_group_info_vra);
+        frame->storeNodeGroupInfo(&node_group_info_vra, PERFRAME_INFO_VRA);
+    }
+#endif
     return NO_ERROR;
 }
 
@@ -3042,7 +4320,7 @@ status_t ExynosCameraFrameFactoryPreview::m_updateNodeInfo(void)
         curNodeInfos[INDEX(PIPE_ISP)].node[OTF_NODE_3] = srcNodeInfos[INDEX(PIPE_ISP)].node[CAPTURE_NODE_7];
         curNodeInfos[INDEX(PIPE_ISP)].node[OTF_NODE_4] = srcNodeInfos[INDEX(PIPE_TPU)].node[OUTPUT_NODE];
         curNodeInfos[INDEX(PIPE_ISP)].node[OTF_NODE_6] = srcNodeInfos[INDEX(PIPE_TPU)].node[OTF_NODE_6];
-    }  else {
+    } else {
         // tpu on -> tpu off
         CLOGD("TPU group migration OFF->ON");
 
@@ -3082,7 +4360,7 @@ status_t ExynosCameraFrameFactoryPreview::m_updateNodeInfo(void)
 
 void ExynosCameraFrameFactoryPreview::m_dumpNodeInfo(const char* name, camera_node_objects_t* nodeInfo)
 {
-    for(int i = 0 ; i < MAX_OTF_NODE ; i++) {
+    for (int i = 0 ; i < MAX_OTF_NODE; i++) {
         if (nodeInfo->node[i] != NULL) {
             CLOGD("%s mainNode[%d] = %d %p", name, i, nodeInfo->node[i]->getNodeNum(), nodeInfo->node[i]);
         }

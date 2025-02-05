@@ -74,15 +74,23 @@ status_t ExynosCameraFrameFactory::destroy(void)
         m_shot_ext = NULL;
     }
 
-    m_setCreate(false);
+    ret = m_transitState(FRAME_FACTORY_STATE_NONE);
 
     return ret;
 }
 
 bool ExynosCameraFrameFactory::isCreated(void)
 {
-    Mutex::Autolock lock(m_createLock);
-    return m_create;
+    Mutex::Autolock lock(m_stateLock);
+
+    return (m_state >= FRAME_FACTORY_STATE_CREATE)? true : false;
+}
+
+bool ExynosCameraFrameFactory::isSwitching(void)
+{
+    Mutex::Autolock lock(m_stateLock);
+
+    return (m_state == FRAME_FACTORY_STATE_SWITCH)? true : false;
 }
 
 status_t ExynosCameraFrameFactory::mapBuffers(void)
@@ -374,7 +382,7 @@ void ExynosCameraFrameFactory::setRequest(int pipeId, bool enable)
     }
 }
 
-void ExynosCameraFrameFactory::setRequestFLITE(bool enable)
+void ExynosCameraFrameFactory::setRequestFLITE(__unused bool enable)
 {
     android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Don't use this call. call setRequestBayer(), when USE_MCPIPE_FOR_FLITE. assert!!!!",
         __FUNCTION__, __LINE__);
@@ -467,6 +475,16 @@ enum NODE_TYPE ExynosCameraFrameFactory::getNodeType(uint32_t pipeId)
     enum NODE_TYPE nodeType = INVALID_NODE;
 
     switch (pipeId) {
+#ifdef USE_DUAL_CAMERA
+    /* always fixed output_node position */
+    case PIPE_SYNC_SWITCHING:
+    case PIPE_SYNC:
+    case PIPE_SYNC_REPROCESSING:
+    case PIPE_FUSION:
+    case PIPE_FUSION_REPROCESSING:
+        nodeType = OUTPUT_NODE;
+        break;
+#endif
     case PIPE_FLITE:
     case PIPE_FLITE_REPROCESSING:
         nodeType = OUTPUT_NODE;
@@ -617,6 +635,11 @@ enum NODE_TYPE ExynosCameraFrameFactory::getNodeType(uint32_t pipeId)
     case PIPE_MCSC3_REPROCESSING:
         nodeType = CAPTURE_NODE_11;
         break;
+#ifdef USE_VRA_GROUP
+    case PIPE_MCSC_DS:
+        nodeType = CAPTURE_NODE_14;
+        break;
+#endif
     case PIPE_MCSC1:
     case PIPE_MCSC4_REPROCESSING:
         nodeType = CAPTURE_NODE_12;
@@ -625,6 +648,11 @@ enum NODE_TYPE ExynosCameraFrameFactory::getNodeType(uint32_t pipeId)
     case PIPE_MCSC1_REPROCESSING:
         nodeType = CAPTURE_NODE_13;
         break;
+#ifdef USE_VRA_GROUP
+    case PIPE_VRA:
+        nodeType = OUTPUT_NODE;
+        break;
+#endif
     case PIPE_HWFC_JPEG_DST_REPROCESSING:
         nodeType = CAPTURE_NODE_14;
         break;
@@ -652,10 +680,9 @@ enum NODE_TYPE ExynosCameraFrameFactory::getNodeType(uint32_t pipeId)
     return nodeType;
 }
 
-ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactory::createNewFrameOnlyOnePipe(int pipeId, int frameCnt, uint32_t frameType)
+ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactory::createNewFrameOnlyOnePipe(int pipeId, int frameCnt, uint32_t frameType, ExynosCameraFrameSP_sptr_t refFrame)
 {
     Mutex::Autolock lock(m_frameLock);
-    status_t ret = NO_ERROR;
     ExynosCameraFrameEntity *newEntity[MAX_NUM_PIPES] = {};
 
     if (frameCnt < 0) {
@@ -673,12 +700,38 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactory::createNewFrameOnlyOnePipe(i
     newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
     frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
 
+    /* copy frame info to newFrame from refFrame */
+    if (refFrame != NULL) {
+        int zoom = refFrame->getZoom();
+        int output_node_index = OUTPUT_NODE_1;
+        struct camera2_node_group node_group;
+        struct camera2_shot_ext shot;
+
+        /* Node Group Setting */
+        for (int i = 0; i < PERFRAME_NODE_GROUP_MAX; i++) {
+            refFrame->getNodeGroupInfo(&node_group, i);
+            frame->storeNodeGroupInfo(&node_group, i, output_node_index);
+        }
+
+        /* Meta Setting */
+        refFrame->getMetaData(&shot);
+        frame->setMetaData(&shot, output_node_index);
+
+        /* Zoom Setting */
+        frame->setZoom(zoom, output_node_index);
+
+        /* SyncType Setting */
+        frame->setSyncType(refFrame->getSyncType());
+
+        /* FrameType Setting */
+        frame->setFrameType((frame_type_t)refFrame->getFrameType());
+    }
+
     return frame;
 }
 
 ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactory::createNewFrameVideoOnly(void)
 {
-    status_t ret = NO_ERROR;
     ExynosCameraFrameEntity *newEntity[MAX_NUM_PIPES] = {};
     ExynosCameraFrameSP_sptr_t frame = m_frameMgr->createFrame(m_parameters, m_frameCount);
     if (frame == NULL) {
@@ -692,6 +745,18 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameFactory::createNewFrameVideoOnly(voi
     frame->addSiblingEntity(NULL, newEntity[INDEX(PIPE_GSC_VIDEO)]);
 
     return frame;
+}
+
+status_t ExynosCameraFrameFactory::switchSensorMode(void)
+{
+    android_printAssert(NULL, LOG_TAG, "%s does NOT support %s", m_name, __FUNCTION__);
+    return INVALID_OPERATION;
+}
+
+status_t ExynosCameraFrameFactory::finishSwitchSensorMode(void)
+{
+    android_printAssert(NULL, LOG_TAG, "%s does NOT support %s", m_name, __FUNCTION__);
+    return INVALID_OPERATION;
 }
 
 void ExynosCameraFrameFactory::dump()
@@ -710,7 +775,6 @@ void ExynosCameraFrameFactory::dump()
 status_t ExynosCameraFrameFactory::dumpFimcIsInfo(uint32_t pipeId, bool bugOn)
 {
     status_t ret = NO_ERROR;
-    int pipeIdIsp = 0;
 
     if (m_pipes[INDEX(pipeId)] != NULL)
         ret = m_pipes[INDEX(pipeId)]->dumpFimcIsInfo(bugOn);
@@ -724,7 +788,6 @@ status_t ExynosCameraFrameFactory::dumpFimcIsInfo(uint32_t pipeId, bool bugOn)
 status_t ExynosCameraFrameFactory::syncLog(uint32_t pipeId, uint32_t syncId)
 {
     status_t ret = NO_ERROR;
-    int pipeIdIsp = 0;
 
     if (m_pipes[INDEX(pipeId)] != NULL)
         ret = m_pipes[INDEX(pipeId)]->syncLog(syncId);
@@ -735,17 +798,7 @@ status_t ExynosCameraFrameFactory::syncLog(uint32_t pipeId, uint32_t syncId)
 }
 #endif
 
-status_t ExynosCameraFrameFactory::m_setCreate(bool create)
-{
-    Mutex::Autolock lock(m_createLock);
-    if (create != m_create)
-        CLOGD(" setCreate old(%s) new(%s)", (m_create)?"true":"false", (create)?"true":"false");
-
-    m_create = create;
-    return NO_ERROR;
-}
-
-status_t ExynosCameraFrameFactory::m_initFlitePipe(int sensorW, int sensorH, uint32_t frameRate)
+status_t ExynosCameraFrameFactory::m_initFlitePipe(int sensorW, int sensorH, __unused uint32_t frameRate)
 {
     CLOGI("");
 
@@ -759,16 +812,11 @@ status_t ExynosCameraFrameFactory::m_initFlitePipe(int sensorW, int sensorH, uin
     }
 
     /* FLITE is old pipe, node type is 0 */
-    enum NODE_TYPE nodeType = (enum NODE_TYPE)0;
-    enum NODE_TYPE leaderNodeType = OUTPUT_NODE;
 
     ExynosRect tempRect;
-    struct ExynosConfigInfo *config = m_parameters->getConfig();
-    int maxSensorW = 0, maxSensorH = 0, hwSensorW = 0, hwSensorH = 0;
-    int bayerFormat = m_parameters->getBayerFormat(PIPE_FLITE);
-    int perFramePos = 0;
 
 #ifdef DEBUG_RAWDUMP
+    int bayerFormat = m_parameters->getBayerFormat(PIPE_FLITE);
     if (m_parameters->checkBayerDumpEnable()) {
         bayerFormat = CAMERA_DUMP_BAYER_FORMAT;
     }
@@ -825,6 +873,18 @@ status_t ExynosCameraFrameFactory::m_initFrameMetadata(ExynosCameraFrameSP_sptr_
 
     m_shot_ext->shot.magicNumber = SHOT_MAGIC_NUMBER;
 
+#ifdef USE_VRA_GROUP
+    for (int i = 0; i < INTERFACE_TYPE_MAX; i++) {
+        m_shot_ext->shot.uctl.scalerUd.mcsc_sub_blk_port[i] = MCSC_PORT_NONE;
+    }
+#endif
+
+    ret = m_setupRequestFlags();
+    if (ret != NO_ERROR) {
+        CLOGE("[F%d]Failed to setupRequestFlags", frame->getFrameCount());
+        /* Continue */
+    }
+
     /* TODO: These bypass values are enabled at per-frame control */
     if (m_flagReprocessing == true) {
         frame->setRequest(PIPE_3AP_REPROCESSING, m_request3AP);
@@ -858,6 +918,15 @@ status_t ExynosCameraFrameFactory::m_initFrameMetadata(ExynosCameraFrameSP_sptr_
         m_bypassDNR = m_parameters->getDnrEnable();
         m_bypassDIS = m_parameters->getDisEnable();
         m_bypassFD = m_parameters->getFdEnable();
+
+#ifdef USE_VRA_GROUP
+        if (m_flagMcscVraOTF == false) {
+            m_requestVRA = (m_bypassFD == false)?true:false;
+            frame->setRequest(PIPE_MCSC_DS, m_requestVRA);
+            frame->setRequest(PIPE_VRA, m_requestVRA);
+            m_shot_ext->shot.uctl.scalerUd.mcsc_sub_blk_port[INTERFACE_TYPE_DS] = (enum mcsc_port)m_parameters->getDsInputPortId();
+        }
+#endif
     }
 
     setMetaBypassDrc(m_shot_ext, m_bypassDRC);
@@ -916,7 +985,6 @@ status_t ExynosCameraFrameFactory::m_checkPipeInfo(uint32_t srcPipeId, uint32_t 
 {
     int srcFullW, srcFullH, srcColorFormat;
     int dstFullW, dstFullH, dstColorFormat;
-    int isDifferent = 0;
     status_t ret = NO_ERROR;
 
     ret = m_pipes[INDEX(srcPipeId)]->getPipeInfo(&srcFullW, &srcFullH, &srcColorFormat, SRC_PIPE);
@@ -979,7 +1047,6 @@ int ExynosCameraFrameFactory::m_getSensorId(unsigned int nodeNum, unsigned int c
     nodeNum -= 100;
 
     unsigned int reprocessingBit = 0;
-    unsigned int otfInterfaceBit = 0;
     unsigned int leaderBit = 0;
     unsigned int sensorId = getSensorId(m_cameraId);
 
@@ -1035,6 +1102,63 @@ status_t ExynosCameraFrameFactory::m_setSensorSize(int pipeId, int sensorW, int 
     return ret;
 }
 
+status_t ExynosCameraFrameFactory::m_transitState(frame_factory_state_t state)
+{
+    Mutex::Autolock lock(m_stateLock);
+
+    CLOGI("State transition. curState %d newState %d", m_state, state);
+
+    if (m_state == state) {
+        CLOGI("Skip state transition. curState %d", m_state);
+        return NO_ERROR;
+    }
+
+    switch (m_state) {
+    case FRAME_FACTORY_STATE_NONE:
+        if (state != FRAME_FACTORY_STATE_CREATE)
+            goto ERR_EXIT;
+
+        m_state = state;
+        break;
+    case FRAME_FACTORY_STATE_CREATE:
+        if (state > FRAME_FACTORY_STATE_INIT)
+            goto ERR_EXIT;
+
+        m_state = state;
+        break;
+    case FRAME_FACTORY_STATE_INIT:
+        if (state != FRAME_FACTORY_STATE_RUN)
+            goto ERR_EXIT;
+
+        m_state = state;
+        break;
+    case FRAME_FACTORY_STATE_RUN:
+        if (state != FRAME_FACTORY_STATE_CREATE
+            && state != FRAME_FACTORY_STATE_SWITCH)
+            goto ERR_EXIT;
+
+        m_state = state;
+        break;
+    case FRAME_FACTORY_STATE_SWITCH:
+        if (state != FRAME_FACTORY_STATE_INIT)
+            goto ERR_EXIT;
+
+        m_state = state;
+        break;
+    default:
+        CLOGW("Invalid newState %d maxValue %d", state, FRAME_FACTORY_STATE_MAX);
+
+        goto ERR_EXIT;
+    }
+
+    return NO_ERROR;
+
+ERR_EXIT:
+    CLOGE("Invalid state transition. curState %d newState %d", m_state, state);
+
+    return INVALID_OPERATION;
+}
+
 void ExynosCameraFrameFactory::m_init(void)
 {
     m_cameraId = 0;
@@ -1074,6 +1198,10 @@ void ExynosCameraFrameFactory::m_init(void)
     m_requestMCSC3 = false;
     m_requestMCSC4 = false;
 
+#ifdef USE_VRA_GROUP
+    m_requestVRA = false;
+#endif
+
     m_requestJPEG = false;
     m_requestThumbnail = false;
 
@@ -1089,6 +1217,7 @@ void ExynosCameraFrameFactory::m_init(void)
     m_flagIspTpuOTF = false;
     m_flagIspMcscOTF = false;
     m_flagTpuMcscOTF = false;
+    m_flagMcscVraOTF = false;
 
     /* setting about reprocessing */
     m_supportReprocessing = false;
@@ -1097,7 +1226,7 @@ void ExynosCameraFrameFactory::m_init(void)
     m_supportSCC = false;
     m_supportSingleChain = false;
 
-    m_setCreate(false);
+    m_state = FRAME_FACTORY_STATE_NONE;
 }
 
 }; /* namespace android */

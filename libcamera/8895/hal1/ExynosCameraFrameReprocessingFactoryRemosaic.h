@@ -15,28 +15,28 @@
 ** limitations under the License.
 */
 
-#ifndef EXYNOS_CAMERA_FRAME_REPROCESSING_FACTORY_H
-#define EXYNOS_CAMERA_FRAME_REPROCESSING_FACTORY_H
+#ifndef EXYNOS_CAMERA_FRAME_REPROCESSING_FACTORY_REMOSAIC_H
+#define EXYNOS_CAMERA_FRAME_REPROCESSING_FACTORY_REMOSAIC_H
 
 #include "ExynosCameraFrameFactory.h"
 
 namespace android {
 
-class ExynosCameraFrameReprocessingFactory : public ExynosCameraFrameFactory {
+class ExynosCameraFrameReprocessingFactoryRemosaic : public ExynosCameraFrameFactory {
 public:
-    ExynosCameraFrameReprocessingFactory()
+    ExynosCameraFrameReprocessingFactoryRemosaic()
     {
         m_init();
     }
 
-    ExynosCameraFrameReprocessingFactory(int cameraId, ExynosCamera1Parameters *param) : ExynosCameraFrameFactory(cameraId, param)
+    ExynosCameraFrameReprocessingFactoryRemosaic(int cameraId, ExynosCamera1Parameters *param) : ExynosCameraFrameFactory(cameraId, param)
     {
         m_init();
 
         strncpy(m_name, "ReprocessingFactory",  EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     }
 
-    virtual ~ExynosCameraFrameReprocessingFactory();
+    virtual ~ExynosCameraFrameReprocessingFactoryRemosaic();
 
     virtual status_t        create(bool active = true);
 

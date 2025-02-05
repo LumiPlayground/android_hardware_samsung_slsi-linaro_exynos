@@ -83,8 +83,8 @@ private:
     void        m_createManagers(void);
 
     /* Helper functions for notification */
-    status_t    m_sendRawCaptureResult(ExynosCameraFrameSP_sptr_t frame, uint32_t pipeId, bool isSrc, int dstPos = 0);
-    status_t    m_sendZSLCaptureResult(ExynosCameraFrameSP_sptr_t frame, uint32_t pipeId, bool isSrc);
+    status_t    m_sendRawStreamResult(ExynosCameraFrameSP_sptr_t frame, uint32_t pipeId, bool isSrc, int dstPos = 0);
+    status_t    m_sendZslStreamResult(ExynosCameraFrameSP_sptr_t frame, uint32_t pipeId, bool isSrc);
     status_t    m_sendNotify(uint32_t frameNumber, int type);
     status_t    m_sendMeta(uint32_t frameNumber, EXYNOS_REQUEST_RESULT::TYPE type);
     status_t    m_send3AAMeta(uint32_t frameNumber, EXYNOS_REQUEST_RESULT::TYPE type);
@@ -179,12 +179,16 @@ private:
     status_t    m_createInternalFrameFunc(void);
     status_t    m_createFrameFunc(void);
 
-    status_t    m_previewframeHandler(ExynosCameraRequestSP_sprt_t request,
+    status_t    m_previewFrameHandler(ExynosCameraRequestSP_sprt_t request,
                                       ExynosCamera3FrameFactory *targetfactory);
-    status_t    m_captureframeHandler(ExynosCameraRequestSP_sprt_t request, ExynosCamera3FrameFactory *targetfactory);
+    status_t    m_captureFrameHandler(ExynosCameraRequestSP_sprt_t request, ExynosCamera3FrameFactory *targetfactory);
     bool        m_previewStreamFunc(ExynosCameraFrameSP_sptr_t newFrame, int pipeId);
 
     void        m_updateCropRegion(struct camera2_shot_ext *shot_ext);
+#ifdef USE_VRA_GROUP
+    void        m_updateFD(struct camera2_shot_ext *shot_ext, enum facedetect_mode fdMode, int dsInputPortId, bool isReprocessing);
+#endif
+    void        m_updateEdgeNoiseMode(struct camera2_shot_ext *shot_ext, bool isCaptureFrame);
     status_t    m_updateJpegControlInfo(const struct camera2_shot_ext *shot_ext);
 
     /* helper functions for frame */
@@ -205,11 +209,14 @@ private:
     status_t    m_removeFrameFromList(List<ExynosCameraFrameSP_sptr_t> *list,
                                       Mutex *listLock,
                                       ExynosCameraFrameSP_sptr_t frame);
+    uint32_t    m_getSizeFrameFromList(List<ExynosCameraFrameSP_sptr_t> *list, Mutex *listLock);
+
     status_t    m_clearList(List<ExynosCameraFrameSP_sptr_t> *list, Mutex *listLock);
 
     status_t    m_removeInternalFrames(List<ExynosCameraFrameSP_sptr_t> *list, Mutex *listLock);
     status_t    m_releaseInternalFrame(ExynosCameraFrameSP_sptr_t frame);
     status_t    m_releaseRequestFrame(ExynosCameraFrameSP_sptr_t frame);
+    status_t    m_checkStreamBuffer(ExynosCameraFrameSP_sptr_t frame, ExynosCameraStream *stream, ExynosCameraBuffer *buffer);
     status_t    m_resultCallback(ExynosCameraBuffer *frame, uint32_t frameCount, int streamId);
     status_t    m_forceResultCallback(uint32_t frameCount);
     status_t    m_updateTimestamp(ExynosCameraFrameSP_sptr_t frame, ExynosCameraBuffer *timestampBuffer);
@@ -219,17 +226,19 @@ private:
     status_t    m_handlePreviewFrame(ExynosCameraFrameSP_sptr_t frame, int pipeId);
     status_t    m_handleInternalFrame(ExynosCameraFrameSP_sptr_t frame);
     status_t    m_handleYuvCaptureFrame(ExynosCameraFrameSP_sptr_t frame);
+    status_t    m_handleNV21CaptureFrame(ExynosCameraFrameSP_sptr_t frame);
     status_t    m_handleJpegFrame(ExynosCameraFrameSP_sptr_t frame);
     status_t    m_handleBayerBuffer(ExynosCameraFrameSP_sptr_t frame);
 
     /* helper functions for request */
-    status_t    m_pushRequest(camera3_capture_request *request);
-    status_t    m_popRequest(ExynosCameraRequestSP_dptr_t request);
-    status_t    m_deleteRequest(uint32_t frameCount);
+    status_t    m_pushServiceRequest(camera3_capture_request *request, ExynosCameraRequestSP_dptr_t req);
+    status_t    m_popServiceRequest(ExynosCameraRequestSP_dptr_t request);
+    status_t    m_deleteRunningRequest(uint32_t frameCount);
     status_t    m_pushResult(uint32_t frameCount, struct camera2_shot_ext *src_ext);
+    status_t    m_pushPartialResult(uint32_t frameCount, struct camera2_shot_ext *src_ext);
     status_t    m_pushJpegResult(ExynosCameraFrameSP_sptr_t frame, int size, ExynosCameraBuffer *buffer);
     ExynosCameraRequestSP_sprt_t    m_popResult(CameraMetadata &request, uint32_t frameCount);
-    bool        m_needNotify(ExynosCameraRequestSP_sprt_t request);
+    bool        m_hasCaptureStream(ExynosCameraRequestSP_sprt_t request);
     void        m_updateCurrentShot(void);
 
     /* helper functions for configuration options */
@@ -244,6 +253,9 @@ private:
     status_t    m_getBayerBuffer(uint32_t pipeId, uint32_t frameCount, ExynosCameraBuffer *buffer, ExynosCameraFrameSelector *selector, camera2_shot_ext *updateDmShot = NULL);
     status_t    m_checkBufferAvailable(uint32_t pipeId, ExynosCameraBufferManager *bufferMgr);
     status_t    m_convertingStreamToShotExt(ExynosCameraBuffer *buffer, struct camera2_node_output *outputInfo);
+#ifdef DEBUG_CLASS_INFO
+    void        m_dumpClassInfo();
+#endif
 
 public:
 
@@ -268,6 +280,9 @@ private:
     ExynosCameraBufferManager               *m_mcscBufferMgr;
 #ifdef SUPPORT_DEPTH_MAP
     ExynosCameraBufferManager               *m_depthMapBufferMgr;
+#endif
+#ifdef USE_VRA_GROUP
+    ExynosCameraBufferManager               *m_vraBufferMgr;
 #endif
 
     /* internal reprocessing buffer managers */
@@ -296,12 +311,12 @@ private:
     uint64_t                        m_lastFrametime;
 
     /* HACK : check capture stream */
-    bool                            isCaptureConfig;
+    bool                            m_captureStreamExist;
     bool                            isRestarted;
 
     /* HACK : check recording stream */
-    bool                            isRecordingConfig;
-    bool                            recordingEnabled;
+    bool                            m_videoStreamExist;
+    bool                            m_recordingEnabled;
 
     bool                            m_checkConfigStream;
 
@@ -361,6 +376,11 @@ private:
 
     sp<mainCameraThread>            m_previewStreamMCSCThread;
     bool                            m_previewStreamMCSCPipeThreadFunc(void);
+
+#ifdef USE_VRA_GROUP
+    sp<mainCameraThread>            m_previewStreamVRAThread;
+    bool                            m_previewStreamVRAPipeThreadFunc(void);
+#endif
 
     sp<mainCameraThread>            m_selectBayerThread;
     bool                            m_selectBayerThreadFunc(void);
@@ -424,6 +444,9 @@ private:
     status_t                        m_doDestCSC(bool enableCSC, ExynosCameraFrameSP_sptr_t frame, int pipeIdSrc, int halStreamId, int pipeExtScalerId);
 
     status_t                        m_fastenAeStable(ExynosCamera3FrameFactory *factory);
+
+    status_t                        m_checkRestartStream(ExynosCameraRequestSP_sprt_t request);
+    status_t                        m_restartStreamInternal();
 
     /* HACK : To prevent newly added member variable corruption
        (May caused by compiler bug??) */

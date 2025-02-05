@@ -49,18 +49,19 @@ public:
     virtual status_t        preparePipes(void);
 
     virtual status_t        startPipes(void);
+    virtual status_t        startSensor3AAPipe(void);
     virtual status_t        startInitialThreads(void);
     virtual status_t        stopPipes(void);
     virtual status_t        setStopFlag(void);
 
     virtual void            setRequest3AC(bool enable);
 protected:
+    virtual status_t        m_setupRequestFlags(void);
     status_t                m_fillNodeGroupInfo(ExynosCameraFrameSP_sptr_t frame);
     virtual status_t        m_setupConfig(void);
 
 private:
     void                    m_init(void);
-    int                     m_getSensorId(__unused unsigned int nodeNum, bool enableSecure);
 };
 
 }; /* namespace android */

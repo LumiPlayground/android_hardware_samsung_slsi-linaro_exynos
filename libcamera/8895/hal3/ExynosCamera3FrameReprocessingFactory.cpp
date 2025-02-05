@@ -37,19 +37,24 @@ status_t ExynosCamera3FrameReprocessingFactory::create(void)
     CLOGI("");
 
     status_t ret = NO_ERROR;
+    int headPipeId = PIPE_3AA_REPROCESSING;
 
     m_setupConfig();
     m_constructReprocessingPipes();
 
-    /* 3AA_REPROCESSING pipe initialize */
-    ret = m_pipes[INDEX(PIPE_3AA_REPROCESSING)]->create();
-    if (ret != NO_ERROR) {
-        CLOGE("3AA create fail, ret(%d)", ret);
-        /* TODO: exception handling */
-        return INVALID_OPERATION;
+    if (m_supportPureBayerReprocessing == true) {
+        /* 3AA_REPROCESSING pipe initialize */
+        ret = m_pipes[INDEX(PIPE_3AA_REPROCESSING)]->create();
+        if (ret != NO_ERROR) {
+            CLOGE("3AA create fail, ret(%d)", ret);
+            /* TODO: exception handling */
+            return INVALID_OPERATION;
+        }
+        CLOGV("%s(%d) created",
+                m_pipes[INDEX(PIPE_3AA_REPROCESSING)]->getPipeName(), PIPE_3AA_REPROCESSING);
+    } else {
+        headPipeId = PIPE_ISP_REPROCESSING;
     }
-    CLOGV("%s(%d) created",
-            m_pipes[INDEX(PIPE_3AA_REPROCESSING)]->getPipeName(), PIPE_3AA_REPROCESSING);
 
     /* ISP_REPROCESSING pipe initialize */
     ret = m_pipes[INDEX(PIPE_ISP_REPROCESSING)]->create();
@@ -94,10 +99,10 @@ status_t ExynosCamera3FrameReprocessingFactory::create(void)
     }
 
     /* EOS */
-    ret = m_pipes[INDEX(PIPE_3AA_REPROCESSING)]->setControl(V4L2_CID_IS_END_OF_STREAM, 1);
+    ret = m_pipes[INDEX(headPipeId)]->setControl(V4L2_CID_IS_END_OF_STREAM, 1);
     if (ret != NO_ERROR) {
         CLOGE("PIPE_%s V4L2_CID_IS_END_OF_STREAM fail, ret(%d)",
-                 m_pipes[INDEX(PIPE_3AA_REPROCESSING)]->getPipeName(), ret);
+                 m_pipes[INDEX(headPipeId)]->getPipeName(), ret);
         /* TODO: exception handling */
         return INVALID_OPERATION;
     }
@@ -123,6 +128,11 @@ ExynosCameraFrameSP_sptr_t ExynosCamera3FrameReprocessingFactory::createNewFrame
     if (m_parameters != NULL) {
         curShotMode = m_parameters->getShotMode();
         curSeriesShotMode = m_parameters->getSeriesShotMode();
+    }
+
+    if (frame == NULL) {
+        CLOGE("frame is NULL");
+        return NULL;
     }
 
     ret = m_initFrameMetadata(frame);
@@ -223,12 +233,13 @@ status_t ExynosCamera3FrameReprocessingFactory::initPipes(void)
     ExynosRect bnsSize;
     ExynosRect bayerCropSize;
     int hwSensorW = 0, hwSensorH = 0;
-    int pictureW = 0, pictureH = 0;
     int maxPreviewW = 0, maxPreviewH = 0, hwPreviewW = 0, hwPreviewH = 0;
     int maxPictureW = 0, maxPictureH = 0, hwPictureW = 0, hwPictureH = 0;
     int maxThumbnailW = 0, maxThumbnailH = 0;
+    int yuvWidth[ExynosCamera3Parameters::YUV_MAX] = {0};
+    int yuvHeight[ExynosCamera3Parameters::YUV_MAX] = {0};
     int bayerFormat = m_parameters->getBayerFormat(PIPE_3AA_REPROCESSING);
-    int previewFormat = m_parameters->getHwPreviewFormat();
+    int yuvFormat[ExynosCamera3Parameters::YUV_MAX] = {0};
     int pictureFormat = m_parameters->getHwPictureFormat();
     struct ExynosConfigInfo *config = m_parameters->getConfig();
     int perFramePos = 0;
@@ -246,16 +257,25 @@ status_t ExynosCamera3FrameReprocessingFactory::initPipes(void)
     m_parameters->getHwPreviewSize(&hwPreviewW, &hwPreviewH);
     m_parameters->getMaxPictureSize(&maxPictureW, &maxPictureH);
     m_parameters->getHwPictureSize(&hwPictureW, &hwPictureH);
-    m_parameters->getPictureSize(&pictureW, &pictureH);
     m_parameters->getMaxThumbnailSize(&maxThumbnailW, &maxThumbnailH);
-    m_parameters->getPreviewBayerCropSize(&bnsSize, &bayerCropSize); 
+    m_parameters->getPreviewBayerCropSize(&bnsSize, &bayerCropSize);
 
     CLOGI(" MaxPreviewSize(%dx%d), HwPreviewSize(%dx%d)", maxPreviewW, maxPreviewH, hwPreviewW, hwPreviewH);
     CLOGI(" MaxPixtureSize(%dx%d), HwPixtureSize(%dx%d)", maxPictureW, maxPictureH, hwPictureW, hwPictureH);
-    CLOGI(" PictureSize(%dx%d)", pictureW, pictureH);
     CLOGI(" MaxThumbnailSize(%dx%d)", maxThumbnailW, maxThumbnailH);
     CLOGI(" PreviewBayerCropSize(%dx%d)", bayerCropSize.w, bayerCropSize.h);
 
+    for (int i = ExynosCamera3Parameters::YUV_STALL_0; i < ExynosCamera3Parameters::YUV_STALL_MAX; i++) {
+        m_parameters->getYuvSize(&yuvWidth[i % ExynosCamera3Parameters::YUV_MAX],
+                                 &yuvHeight[i % ExynosCamera3Parameters::YUV_MAX], i);
+        yuvFormat[i % ExynosCamera3Parameters::YUV_MAX] = m_parameters->getYuvFormat(i);
+
+        CLOGI("YUV_STALL[%d] Size %dx%d Format %x",
+                i,
+                yuvWidth[i % ExynosCamera3Parameters::YUV_MAX],
+                yuvHeight[i % ExynosCamera3Parameters::YUV_MAX],
+                yuvFormat[i % ExynosCamera3Parameters::YUV_MAX]);
+    }
 
     /*
      * 3AA for Reprocessing
@@ -329,6 +349,7 @@ status_t ExynosCamera3FrameReprocessingFactory::initPipes(void)
                 pipeInfo[i] = nullPipeInfo;
         }
     } else {
+#if 0
         /*
         * 3A video node is opened for dirty bayer.
         * So, we have to do setinput to 3A video node.
@@ -346,6 +367,7 @@ status_t ExynosCamera3FrameReprocessingFactory::initPipes(void)
         /* clear pipeInfo for next setupPipe */
         for (int i = 0; i < MAX_NODE; i++)
             pipeInfo[i] = nullPipeInfo;
+#endif
     }
 
 
@@ -453,42 +475,63 @@ status_t ExynosCamera3FrameReprocessingFactory::initPipes(void)
         int mcscPerframeInfoIndex = m_supportPureBayerReprocessing ? PERFRAME_INFO_PURE_REPROCESSING_MCSC : PERFRAME_INFO_DIRTY_REPROCESSING_MCSC;
         SET_OUTPUT_DEVICE_BASIC_INFO(mcscPerframeInfoIndex);
     }
+#if 0
+    /* MCSC0 */
+    nodeType = getNodeType(PIPE_MCSC0_REPROCESSING);
+    perFramePos = PERFRAME_REPROCESSING_MCSC0_POS;
 
-    if (m_supportSingleChain == true) {
-        /* MCSC2 */
-        nodeType = getNodeType(PIPE_MCSC2_REPROCESSING);
-        perFramePos = PERFRAME_REPROCESSING_MCSC2_POS;
+    /* set v4l2 buffer size */
+    tempRect.fullW = yuvWidth[ExynosCamera3Parameters::YUV_STALL_0 % ExynosCamera3Parameters::YUV_MAX];
+    tempRect.fullH = yuvHeight[ExynosCamera3Parameters::YUV_STALL_0 % ExynosCamera3Parameters::YUV_MAX];
+    tempRect.colorFormat = yuvFormat[ExynosCamera3Parameters::YUV_STALL_0 % ExynosCamera3Parameters::YUV_MAX];
 
-        /* set v4l2 buffer size */
-        if (m_parameters->getHighResolutionCallbackMode() == true) {
-            tempRect.fullW = pictureW;
-            tempRect.fullH = pictureH;
-        } else {
-            tempRect.fullW = hwPictureW;
-            tempRect.fullH = hwPictureH;
-        }
-        tempRect.colorFormat = pictureFormat;
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
+    pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW;
 
-        /* set v4l2 video node buffer count */
-        pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
-        pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW;
+    /* Set capture node default info */
+    SET_CAPTURE_DEVICE_BASIC_INFO();
+#endif
+    /* MCSC1 */
+    nodeType = getNodeType(PIPE_MCSC1_REPROCESSING);
+    perFramePos = PERFRAME_REPROCESSING_MCSC1_POS;
 
-        /* Set capture node default info */
-        SET_CAPTURE_DEVICE_BASIC_INFO();
-    }
+    /* set v4l2 buffer size */
+    tempRect.fullW = yuvWidth[ExynosCamera3Parameters::YUV_STALL_1 % ExynosCamera3Parameters::YUV_MAX];
+    tempRect.fullH = yuvHeight[ExynosCamera3Parameters::YUV_STALL_1 % ExynosCamera3Parameters::YUV_MAX];
+    tempRect.colorFormat = yuvFormat[ExynosCamera3Parameters::YUV_STALL_1 % ExynosCamera3Parameters::YUV_MAX];
 
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
+    pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW;
+
+    /* Set capture node default info */
+    SET_CAPTURE_DEVICE_BASIC_INFO();
+#if 0
+    /* MCSC2 */
+    nodeType = getNodeType(PIPE_MCSC2_REPROCESSING);
+    perFramePos = PERFRAME_REPROCESSING_MCSC2_POS;
+
+    /* set v4l2 buffer size */
+    tempRect.fullW = yuvWidth[ExynosCamera3Parameters::YUV_STALL_2 % ExynosCamera3Parameters::YUV_MAX];
+    tempRect.fullH = yuvHeight[ExynosCamera3Parameters::YUV_STALL_2 % ExynosCamera3Parameters::YUV_MAX];
+    tempRect.colorFormat = yuvFormat[ExynosCamera3Parameters::YUV_STALL_2 % ExynosCamera3Parameters::YUV_MAX];
+
+    /* set v4l2 video node buffer count */
+    pipeInfo[nodeType].bufInfo.count = config->current->bufInfo.num_picture_buffers;
+    pipeInfo[nodeType].bytesPerPlane[0] = tempRect.fullW;
+
+    /* Set capture node default info */
+    SET_CAPTURE_DEVICE_BASIC_INFO();
+#endif
     /* MCSC3 */
     nodeType = getNodeType(PIPE_MCSC3_REPROCESSING);
     perFramePos = PERFRAME_REPROCESSING_MCSC3_POS;
 
     /* set v4l2 buffer size */
-    if (m_parameters->getHighResolutionCallbackMode() == true) {
-        tempRect.fullW = pictureW;
-        tempRect.fullH = pictureH;
-    } else {
-        tempRect.fullW = hwPictureW;
-        tempRect.fullH = hwPictureH;
-    }
+    tempRect.fullW = hwPictureW;
+    tempRect.fullH = hwPictureH;
+
     tempRect.colorFormat = pictureFormat;
 
     /* set v4l2 video node buffer count */
@@ -781,7 +824,9 @@ status_t ExynosCamera3FrameReprocessingFactory::setStopFlag(void)
 
     status_t ret = NO_ERROR;
 
-    ret = m_pipes[INDEX(PIPE_3AA_REPROCESSING)]->setStopFlag();
+    if (m_supportPureBayerReprocessing == true) {
+        ret = m_pipes[INDEX(PIPE_3AA_REPROCESSING)]->setStopFlag();
+    }
     ret = m_pipes[INDEX(PIPE_ISP_REPROCESSING)]->setStopFlag();
     ret = m_pipes[INDEX(PIPE_MCSC_REPROCESSING)]->setStopFlag();
     if (m_supportSingleChain == true) {
@@ -798,7 +843,8 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
     int pipeId = -1;
     int node3aa = -1, node3ac = -1, node3ap = -1;
     int nodeIsp = -1, nodeIspc = -1, nodeIspp = -1;
-    int nodeMcsc = -1, nodeMcscp2 = -1, nodeMcscp3 = -1, nodeMcscp4 = -1;
+    int nodeMcsc = -1, nodeMcscp0 = -1, nodeMcscp1 = -1;
+    int nodeMcscp2 = -1, nodeMcscp3 = -1, nodeMcscp4 = -1;
     int previousPipeId = -1;
     enum NODE_TYPE nodeType = INVALID_NODE;
     bool flagStreamLeader = false;
@@ -816,6 +862,7 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
     m_request3AP = !(m_flag3aaIspOTF);
     if (m_flagIspTpuOTF == false && m_flagIspMcscOTF == false)
         m_requestISPC = true;
+    m_requestMCSC2 = false;
     m_requestMCSC3 = true;
     m_requestMCSC4 = true;
     if (m_flagHWFCEnabled == true) {
@@ -823,25 +870,41 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
         m_requestThumbnail = true;
     }
 
-    if (m_cameraId == CAMERA_ID_FRONT && m_parameters->getDualMode() == false) {
+#ifdef EXYNOS7885 /* for lassen */
+    if (m_supportPureBayerReprocessing) {
         node3aa = FIMC_IS_VIDEO_31S_NUM;
         node3ac = FIMC_IS_VIDEO_31C_NUM;
         node3ap = FIMC_IS_VIDEO_31P_NUM;
-    } else {
-        node3aa = FIMC_IS_VIDEO_30S_NUM;
-        node3ac = FIMC_IS_VIDEO_30C_NUM;
-        node3ap = FIMC_IS_VIDEO_30P_NUM;
     }
-
+    nodeIsp = FIMC_IS_VIDEO_I0S_NUM;
+    nodeIspc = FIMC_IS_VIDEO_I0C_NUM;
+    nodeIspp = FIMC_IS_VIDEO_I0P_NUM;
+    nodeMcsc = FIMC_IS_VIDEO_M0S_NUM;
+    //nodeMcscp0 = FIMC_IS_VIDEO_M0P_NUM;
+    nodeMcscp1 = FIMC_IS_VIDEO_M0P_NUM;
+    //nodeMcscp2 = FIMC_IS_VIDEO_M2P_NUM;
+    nodeMcscp3 = FIMC_IS_VIDEO_M1P_NUM;
+    nodeMcscp4 = FIMC_IS_VIDEO_M2P_NUM;
+#else /* for kangchen */
+    if (m_supportPureBayerReprocessing) {
+        node3aa = FIMC_IS_VIDEO_31S_NUM;
+        node3ac = FIMC_IS_VIDEO_31C_NUM;
+        node3ap = FIMC_IS_VIDEO_31P_NUM;
+    }
     nodeIsp = FIMC_IS_VIDEO_I1S_NUM;
     nodeIspc = FIMC_IS_VIDEO_I1C_NUM;
     nodeIspp = FIMC_IS_VIDEO_I1P_NUM;
     nodeMcsc = FIMC_IS_VIDEO_M1S_NUM;
+    nodeMcscp0 = FIMC_IS_VIDEO_M0P_NUM;
+    nodeMcscp1 = FIMC_IS_VIDEO_M1P_NUM;
     nodeMcscp2 = FIMC_IS_VIDEO_M2P_NUM;
     nodeMcscp3 = FIMC_IS_VIDEO_M3P_NUM;
     nodeMcscp4 = FIMC_IS_VIDEO_M4P_NUM;
+#endif
 
-    m_initDeviceInfo(INDEX(PIPE_3AA_REPROCESSING));
+    if (m_supportPureBayerReprocessing == true) {
+        m_initDeviceInfo(INDEX(PIPE_3AA_REPROCESSING));
+    }
     m_initDeviceInfo(INDEX(PIPE_ISP_REPROCESSING));
     m_initDeviceInfo(INDEX(PIPE_MCSC_REPROCESSING));
 
@@ -871,33 +934,34 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
     flagQuickSwitchFlag = m_parameters->getQuickSwitchFlag();
 #endif
 
-    /* 3AS */
-    nodeType = getNodeType(PIPE_3AA_REPROCESSING);
-    m_deviceInfo[pipeId].pipeId[nodeType]  = PIPE_3AA_REPROCESSING;
-    m_deviceInfo[pipeId].nodeNum[nodeType] = node3aa;
-    strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "REPROCESSING_3AA_OUTPUT", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
-    int fliteNodeNum = getFliteNodenum(m_cameraId, flagUseCompanion, flagQuickSwitchFlag);
-    m_sensorIds[pipeId][nodeType]  = m_getSensorId(getFliteCaptureNodenum(m_cameraId, fliteNodeNum), false, flagStreamLeader, m_flagReprocessing);
+    if (m_supportPureBayerReprocessing) {
+        /* 3AS */
+        nodeType = getNodeType(PIPE_3AA_REPROCESSING);
+        m_deviceInfo[pipeId].pipeId[nodeType]  = PIPE_3AA_REPROCESSING;
+        m_deviceInfo[pipeId].nodeNum[nodeType] = node3aa;
+        strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "REPROCESSING_3AA_OUTPUT", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+        int fliteNodeNum = getFliteNodenum(m_cameraId, flagUseCompanion, flagQuickSwitchFlag);
+        m_sensorIds[pipeId][nodeType]  = m_getSensorId(getFliteCaptureNodenum(m_cameraId, fliteNodeNum), false, flagStreamLeader, m_flagReprocessing);
 
-    // Restore leader flag
-    flagStreamLeader = false;
+        // Restore leader flag
+        flagStreamLeader = false;
 
 #if 0
-    /* 3AC */
-    nodeType = getNodeType(PIPE_3AC_REPROCESSING);
-    m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_3AC_REPROCESSING;
-    m_deviceInfo[pipeId].nodeNum[nodeType] = node3ac;
-    strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "REPROCESSING_3AA_CAPTURE_OPT", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
-    m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_3AA_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
+        /* 3AC */
+        nodeType = getNodeType(PIPE_3AC_REPROCESSING);
+        m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_3AC_REPROCESSING;
+        m_deviceInfo[pipeId].nodeNum[nodeType] = node3ac;
+        strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "REPROCESSING_3AA_CAPTURE_OPT", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+        m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_3AA_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
 #endif
 
-    /* 3AP */
-    nodeType = getNodeType(PIPE_3AP_REPROCESSING);
-    m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_3AP_REPROCESSING;
-    m_deviceInfo[pipeId].nodeNum[nodeType] = node3ap;
-    strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "REPROCESSING_3AA_CAPTURE_MAIN", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
-    m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_3AA_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
-
+        /* 3AP */
+        nodeType = getNodeType(PIPE_3AP_REPROCESSING);
+        m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_3AP_REPROCESSING;
+        m_deviceInfo[pipeId].nodeNum[nodeType] = node3ap;
+        strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "REPROCESSING_3AA_CAPTURE_MAIN", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+        m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_3AA_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
+    }
     /*
      * ISP for Reprocessing
      */
@@ -912,8 +976,9 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
     nodeType = getNodeType(PIPE_ISP_REPROCESSING);
     m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_ISP_REPROCESSING;
     m_deviceInfo[pipeId].nodeNum[nodeType] = nodeIsp;
+    m_deviceInfo[pipeId].connectionMode[nodeType] = (unsigned int)m_flag3aaIspOTF;
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "REPROCESSING_ISP_OUTPUT", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
-    m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[previousPipeId].nodeNum[getNodeType(PIPE_3AP_REPROCESSING)], m_flag3aaIspOTF, flagStreamLeader, m_flagReprocessing);
+    m_sensorIds[pipeId][nodeType] = m_getSensorId((flagStreamLeader == true) ? nodeIsp : m_deviceInfo[previousPipeId].nodeNum[getNodeType(PIPE_3AP_REPROCESSING)], m_flag3aaIspOTF, flagStreamLeader, m_flagReprocessing);
 
     // Restore leader flag
     flagStreamLeader = false;
@@ -922,6 +987,7 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
     nodeType = getNodeType(PIPE_ISPC_REPROCESSING);
     m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_ISPC_REPROCESSING;
     m_deviceInfo[pipeId].nodeNum[nodeType] = nodeIspc;
+    m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "REPROCESSING_ISP_CAPTURE_M2M", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_ISP_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
 
@@ -929,6 +995,7 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
     nodeType = getNodeType(PIPE_ISPP_REPROCESSING);
     m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_ISPP_REPROCESSING;
     m_deviceInfo[pipeId].nodeNum[nodeType] = nodeIspp;
+    m_deviceInfo[pipeId].connectionMode[nodeType] = (unsigned int)m_flagIspMcscOTF;
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "REPROCESSING_ISP_CAPTURE_OTF", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_ISP_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
 
@@ -938,28 +1005,42 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
     previousPipeId = pipeId;
 
     if (m_flagIspMcscOTF == false && m_flagTpuMcscOTF == false)
-        pipeId = PIPE_MCSC_REPROCESSING;
+        pipeId = INDEX(PIPE_MCSC_REPROCESSING);
 
     /* MCSC */
     nodeType = getNodeType(PIPE_MCSC_REPROCESSING);
     m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC_REPROCESSING;
     m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcsc;
+    m_deviceInfo[pipeId].connectionMode[nodeType] = (unsigned int)m_flagIspMcscOTF;
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_OUTPUT", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[previousPipeId].nodeNum[getNodeType(PIPE_ISPP_REPROCESSING)], m_flagIspMcscOTF, flagStreamLeader, m_flagReprocessing);
-
-    if (m_supportSingleChain == true) {
-        /* MCSC2 */
-        nodeType = getNodeType(PIPE_MCSC2_REPROCESSING);
-        m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC2_REPROCESSING;
-        m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcscp2;
-        strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_CAPTURE_YUV", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
-        m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
-    }
-
+#if 0
+    /* MCSC0 */
+    nodeType = getNodeType(PIPE_MCSC0_REPROCESSING);
+    m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC0_REPROCESSING;
+    m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcscp0;
+    strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_CAPTURE_YUV_0", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+    m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
+#endif
+    /* MCSC1 */
+    nodeType = getNodeType(PIPE_MCSC1_REPROCESSING);
+    m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC1_REPROCESSING;
+    m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcscp1;
+    strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_CAPTURE_YUV_1", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+    m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
+#if 0
+    /* MCSC2 */
+    nodeType = getNodeType(PIPE_MCSC2_REPROCESSING);
+    m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC2_REPROCESSING;
+    m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcscp2;
+    strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_CAPTURE_YUV_2", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
+    m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
+#endif
     /* MCSC3 */
     nodeType = getNodeType(PIPE_MCSC3_REPROCESSING);
     m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC3_REPROCESSING;
     m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcscp3;
+    m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_CAPTURE_MAIN", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
 
@@ -967,6 +1048,7 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
     nodeType = getNodeType(PIPE_MCSC4_REPROCESSING);
     m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_MCSC4_REPROCESSING;
     m_deviceInfo[pipeId].nodeNum[nodeType] = nodeMcscp4;
+    m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
     strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "MCSC_CAPTURE_THUMBNAIL", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
     m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
 
@@ -975,6 +1057,7 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
         nodeType = getNodeType(PIPE_HWFC_JPEG_SRC_REPROCESSING);
         m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_HWFC_JPEG_SRC_REPROCESSING;
         m_deviceInfo[pipeId].nodeNum[nodeType] = FIMC_IS_VIDEO_HWFC_JPEG_NUM;
+        m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
         strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "HWFC_JPEG_SRC", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
         m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_HWFC_JPEG_SRC_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
 
@@ -982,6 +1065,7 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
         nodeType = getNodeType(PIPE_HWFC_THUMB_SRC_REPROCESSING);
         m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_HWFC_THUMB_SRC_REPROCESSING;
         m_deviceInfo[pipeId].nodeNum[nodeType] = FIMC_IS_VIDEO_HWFC_THUMB_NUM;
+        m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
         strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "HWFC_THUMBNAIL_SRC", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
         m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_HWFC_THUMB_SRC_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
 
@@ -989,6 +1073,7 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
         nodeType = getNodeType(PIPE_HWFC_JPEG_DST_REPROCESSING);
         m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_HWFC_JPEG_DST_REPROCESSING;
         m_deviceInfo[pipeId].nodeNum[nodeType] = FIMC_IS_VIDEO_HWFC_JPEG_NUM;
+        m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
         strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "HWFC_JPEG_DST", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
         m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_HWFC_JPEG_DST_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
 
@@ -996,6 +1081,7 @@ status_t ExynosCamera3FrameReprocessingFactory::m_setupConfig(void)
         nodeType = getNodeType(PIPE_HWFC_THUMB_DST_REPROCESSING);
         m_deviceInfo[pipeId].pipeId[nodeType] = PIPE_HWFC_THUMB_DST_REPROCESSING;
         m_deviceInfo[pipeId].nodeNum[nodeType] = FIMC_IS_VIDEO_HWFC_THUMB_NUM;
+        m_deviceInfo[pipeId].connectionMode[nodeType] = HW_CONNECTION_MODE_OTF;
         strncpy(m_deviceInfo[pipeId].nodeName[nodeType], "HWFC_THUMBNAIL_DST", EXYNOS_CAMERA_NAME_STR_SIZE - 1);
         m_sensorIds[pipeId][nodeType] = m_getSensorId(m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_HWFC_THUMB_DST_REPROCESSING)], true, flagStreamLeader, m_flagReprocessing);
     }
@@ -1016,10 +1102,12 @@ status_t ExynosCamera3FrameReprocessingFactory::m_constructReprocessingPipes(voi
     int pipeId = -1;
 
     /* 3AA for Reprocessing */
-    pipeId = PIPE_3AA_REPROCESSING;
-    m_pipes[INDEX(pipeId)] = (ExynosCameraPipe*)new ExynosCameraMCPipe(m_cameraId, m_parameters, m_flagReprocessing, &m_deviceInfo[INDEX(pipeId)]);
-    m_pipes[INDEX(pipeId)]->setPipeId(pipeId);
-    m_pipes[INDEX(pipeId)]->setPipeName("PIPE_3AA_REPROCESSING");
+    if (m_supportPureBayerReprocessing == true) {
+        pipeId = PIPE_3AA_REPROCESSING;
+        m_pipes[INDEX(pipeId)] = (ExynosCameraPipe*)new ExynosCameraMCPipe(m_cameraId, m_parameters, m_flagReprocessing, &m_deviceInfo[INDEX(pipeId)]);
+        m_pipes[INDEX(pipeId)]->setPipeId(pipeId);
+        m_pipes[INDEX(pipeId)]->setPipeName("PIPE_3AA_REPROCESSING");
+    }
 
     /* ISP for Reprocessing */
     pipeId = PIPE_ISP_REPROCESSING;
@@ -1062,14 +1150,14 @@ status_t ExynosCamera3FrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCamera
     camera2_node_group node_group_info_3aa;
     camera2_node_group node_group_info_isp;
     camera2_node_group node_group_info_mcsc;
-    camera2_node_group *node_group_info_temp;
+    camera2_node_group *node_group_info_temp = NULL;
 
     int zoom = m_parameters->getZoomLevel();
     int pipeId = -1;
     uint32_t perframePosition = 0;
 
-#ifdef SR_CAPTURE
-    if(m_parameters->getSROn()) {
+#if defined(SR_CAPTURE) || defined(SAMSUNG_HIFI_LLS)
+    if (m_parameters->getNoBayerCrop()) {
         zoom = ZOOM_LEVEL_0;
     }
 #endif
@@ -1102,13 +1190,13 @@ status_t ExynosCamera3FrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCamera
         node_group_info_temp->leader.request = 1;
     }
 
-    if (m_flagIspMcscOTF == false) {
+    if (m_flagIspMcscOTF == false && node_group_info_temp != NULL) {
         node_group_info_temp->capture[perframePosition].request = m_requestISPC;
         node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_ISPC_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
         perframePosition++;
     }
 
-    if (m_requestISPP == true) {
+    if (m_requestISPP == true && node_group_info_temp != NULL) {
         node_group_info_temp->capture[perframePosition].request = m_requestISPP;
         node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_ISPP_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
         perframePosition++;
@@ -1121,26 +1209,38 @@ status_t ExynosCamera3FrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCamera
         node_group_info_temp = &node_group_info_mcsc;
         node_group_info_temp->leader.request = 1;
     }
-
-    if(m_supportSingleChain == true) {
+    
+    if (node_group_info_temp != NULL) {
+#if 0
+        node_group_info_temp->capture[perframePosition].request = m_requestMCSC0;
+        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC0_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
+        perframePosition++;
+#endif
+        node_group_info_temp->capture[perframePosition].request = m_requestMCSC1;
+        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC1_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
+        perframePosition++;
+#if 0
         node_group_info_temp->capture[perframePosition].request = m_requestMCSC2;
         node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC2_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
         perframePosition++;
+#endif
+        node_group_info_temp->capture[perframePosition].request = m_requestMCSC3;
+        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC3_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
+        perframePosition++;
+
+        node_group_info_temp->capture[perframePosition].request = m_requestMCSC4;
+        node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC4_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
     }
-
-    node_group_info_temp->capture[perframePosition].request = m_requestMCSC3;
-    node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC3_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
-    perframePosition++;
-
-    node_group_info_temp->capture[perframePosition].request = m_requestMCSC4;
-    node_group_info_temp->capture[perframePosition].vid = m_deviceInfo[pipeId].nodeNum[getNodeType(PIPE_MCSC4_REPROCESSING)] - FIMC_IS_VIDEO_BAS_NUM;
+    
     frame->setZoom(zoom);
 
-    updateNodeGroupInfo(
-            PIPE_3AA_REPROCESSING,
-            m_parameters,
-            &node_group_info_3aa);
-    frame->storeNodeGroupInfo(&node_group_info_3aa, PERFRAME_INFO_PURE_REPROCESSING_3AA);
+    if (m_supportPureBayerReprocessing == true) {
+        updateNodeGroupInfo(
+                PIPE_3AA_REPROCESSING,
+                m_parameters,
+                &node_group_info_3aa);
+        frame->storeNodeGroupInfo(&node_group_info_3aa, PERFRAME_INFO_PURE_REPROCESSING_3AA);
+    }
 
     if (m_supportPureBayerReprocessing == false || m_flag3aaIspOTF == false) {
         updateNodeGroupInfo(

@@ -16,14 +16,15 @@
 */
 
 /* #define LOG_NDEBUG 0 */
-#define LOG_TAG "ExynosCameraFrameReprocessingFactory"
+#define LOG_TAG "ExynosCameraFrameReprocessingFactoryRemosaic"
 #include <cutils/log.h>
 
-#include "ExynosCameraFrameReprocessingFactory.h"
+#include "ExynosCameraFrameReprocessingFactoryRemosaic.h"
+#include "ExynosCameraPipePP.h"
 
 namespace android {
 
-ExynosCameraFrameReprocessingFactory::~ExynosCameraFrameReprocessingFactory()
+ExynosCameraFrameReprocessingFactoryRemosaic::~ExynosCameraFrameReprocessingFactoryRemosaic()
 {
     status_t ret = NO_ERROR;
 
@@ -32,7 +33,7 @@ ExynosCameraFrameReprocessingFactory::~ExynosCameraFrameReprocessingFactory()
         CLOGE("destroy fail");
 }
 
-status_t ExynosCameraFrameReprocessingFactory::create(__unused bool active)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::create(__unused bool active)
 {
     Mutex::Autolock lock(ExynosCameraStreamMutex::getInstance()->getStreamMutex());
     CLOGI("");
@@ -42,6 +43,16 @@ status_t ExynosCameraFrameReprocessingFactory::create(__unused bool active)
 
     m_setupConfig();
     m_constructReprocessingPipes();
+
+    /* PIPE_REMOSAIC_REPROCESSING pipe initialize */
+    ret = m_pipes[INDEX(PIPE_REMOSAIC_REPROCESSING)]->create();
+    if (ret != NO_ERROR) {
+        CLOGE("REMOSAIC create fail, ret(%d)", ret);
+        /* TODO: exception handling */
+        return INVALID_OPERATION;
+    }
+    CLOGV("%s(%d) created",
+    m_pipes[INDEX(PIPE_REMOSAIC_REPROCESSING)]->getPipeName(), PIPE_REMOSAIC_REPROCESSING);
 
     if (m_supportPureBayerReprocessing == true) {
         /* 3AA_REPROCESSING pipe initialize */
@@ -181,7 +192,7 @@ status_t ExynosCameraFrameReprocessingFactory::create(__unused bool active)
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::initPipes(void)
 {
     CLOGI("");
 
@@ -206,6 +217,7 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
     ExynosRect bnsSize;
     ExynosRect bayerCropSize;
     int hwSensorW = 0, hwSensorH = 0;
+    int maxSensorW = 0, maxSensorH = 0;
     int previewW = 0, previewH = 0;
     int pictureW = 0, pictureH = 0;
     int maxPreviewW = 0, maxPreviewH = 0, hwPreviewW = 0, hwPreviewH = 0;
@@ -233,11 +245,13 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
     m_parameters->getPictureSize(&pictureW, &pictureH);
     m_parameters->getMaxThumbnailSize(&maxThumbnailW, &maxThumbnailH);
     m_parameters->getPreviewBayerCropSize(&bnsSize, &bayerCropSize, false);
+    m_parameters->getMaxSensorSize(&maxSensorW, &maxSensorH);
 
     CLOGI(" MaxPreviewSize(%dx%d), HwPreviewSize(%dx%d)", maxPreviewW, maxPreviewH, hwPreviewW, hwPreviewH);
     CLOGI(" MaxPixtureSize(%dx%d), HwPixtureSize(%dx%d)", maxPictureW, maxPictureH, hwPictureW, hwPictureH);
     CLOGI(" PreviewSize(%dx%d), PictureSize(%dx%d)", previewW, previewH, pictureW, pictureH);
     CLOGI(" MaxThumbnailSize(%dx%d)", maxThumbnailW, maxThumbnailH);
+    CLOGI(" MaxSensorSize(%dx%d)", maxSensorW, maxSensorH);
 
 
     /*
@@ -251,8 +265,8 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
         bayerFormat = m_parameters->getBayerFormat(PIPE_3AA_REPROCESSING);
 
         /* set v4l2 buffer size */
-        tempRect.fullW = hwSensorW;
-        tempRect.fullH = hwSensorH;
+        tempRect.fullW = maxSensorW;
+        tempRect.fullH = maxSensorH;
         tempRect.colorFormat = bayerFormat;
 
         /* set v4l2 video node bytes per plane */
@@ -615,7 +629,7 @@ status_t ExynosCameraFrameReprocessingFactory::initPipes(void)
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameReprocessingFactory::preparePipes(void)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::preparePipes(void)
 {
 #if 0
     status_t ret = NO_ERROR;
@@ -633,7 +647,7 @@ status_t ExynosCameraFrameReprocessingFactory::preparePipes(void)
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameReprocessingFactory::startPipes(void)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::startPipes(void)
 {
     status_t ret = NO_ERROR;
     CLOGV("");
@@ -705,7 +719,7 @@ status_t ExynosCameraFrameReprocessingFactory::startPipes(void)
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameReprocessingFactory::startSensor3AAPipe(void)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::startSensor3AAPipe(void)
 {
     android_printAssert(NULL, LOG_TAG, "ASSERT(%s[%d]):Not supported API",
             __FUNCTION__, __LINE__);
@@ -713,11 +727,18 @@ status_t ExynosCameraFrameReprocessingFactory::startSensor3AAPipe(void)
     return INVALID_OPERATION;
 }
 
-status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::stopPipes(void)
 {
     status_t ret = NO_ERROR;
     status_t funcRet = NO_ERROR;
     CLOGV("");
+
+    ret = m_pipes[INDEX(PIPE_REMOSAIC_REPROCESSING)]->stopThread();
+    if (ret != NO_ERROR) {
+        CLOGE("REMOSAIC stopThread fail, ret(%d)", ret);
+        /* TODO: exception handling */
+        return INVALID_OPERATION;
+    }
 
     /* 3AA Reprocessing Thread stop */
     if (m_supportPureBayerReprocessing == true) {
@@ -783,6 +804,13 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
         }
     }
 #endif
+
+    ret = m_pipes[INDEX(PIPE_REMOSAIC_REPROCESSING)]->stop();
+    if (ret != NO_ERROR) {
+        CLOGE("REMOSAIC stop fail, ret(%d)", ret);
+        /* TODO: exception handling */
+        return INVALID_OPERATION;
+    }
 
     /* 3AA Reprocessing stop */
     if (m_supportPureBayerReprocessing == true) {
@@ -885,14 +913,14 @@ status_t ExynosCameraFrameReprocessingFactory::stopPipes(void)
     return funcRet;
 }
 
-status_t ExynosCameraFrameReprocessingFactory::startInitialThreads(void)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::startInitialThreads(void)
 {
     CLOGV("start pre-ordered initial pipe thread");
 
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameReprocessingFactory::setStopFlag(void)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::setStopFlag(void)
 {
     CLOGI("");
 
@@ -922,7 +950,7 @@ status_t ExynosCameraFrameReprocessingFactory::setStopFlag(void)
     return NO_ERROR;
 }
 
-ExynosCameraFrameSP_sptr_t ExynosCameraFrameReprocessingFactory::createNewFrame(ExynosCameraFrameSP_sptr_t refFrame)
+ExynosCameraFrameSP_sptr_t ExynosCameraFrameReprocessingFactoryRemosaic::createNewFrame(ExynosCameraFrameSP_sptr_t refFrame)
 {
     status_t ret = NO_ERROR;
     ExynosCameraFrameEntity *newEntity[MAX_NUM_PIPES] = {0};
@@ -935,7 +963,7 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameReprocessingFactory::createNewFrame(
 
     int requestEntityCount = 0;
     int pipeId = -1;
-    int parentPipeId = PIPE_3AA_REPROCESSING;
+    int parentPipeId = PIPE_REMOSAIC_REPROCESSING;
     int curShotMode = 0;
     int curSeriesShotMode = 0;
 #ifdef USE_DUAL_CAMERA
@@ -952,11 +980,18 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameReprocessingFactory::createNewFrame(
     if (ret != NO_ERROR)
         CLOGE("frame(%d) metadata initialize fail", m_frameCount);
 
+
+
     /* set 3AA pipe to linkageList */
     if (m_supportPureBayerReprocessing == true) {
+        pipeId = PIPE_REMOSAIC_REPROCESSING;
+        newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_OUTPUT, ENTITY_BUFFER_FIXED);
+        frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
+        requestEntityCount++;
+
         pipeId = PIPE_3AA_REPROCESSING;
         newEntity[INDEX(pipeId)] = new ExynosCameraFrameEntity(pipeId, ENTITY_TYPE_INPUT_ONLY, ENTITY_BUFFER_FIXED);
-        frame->addSiblingEntity(NULL, newEntity[INDEX(pipeId)]);
+        frame->addChildEntity(newEntity[INDEX(parentPipeId)], newEntity[INDEX(pipeId)], INDEX(PIPE_REMOSAIC_REPROCESSING));
         parentPipeId = pipeId;
     }
 
@@ -1058,7 +1093,7 @@ ExynosCameraFrameSP_sptr_t ExynosCameraFrameReprocessingFactory::createNewFrame(
     return frame;
 }
 
-status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::m_setupConfig(void)
 {
     CLOGI("");
 
@@ -1071,26 +1106,26 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
     bool flagStreamLeader = false;
 
     m_flagFlite3aaOTF = m_parameters->isFlite3aaOtf();
-    m_flag3aaIspOTF = m_parameters->isReprocessing3aaIspOTF();
     m_flagIspTpuOTF = m_parameters->isReprocessingIspTpuOtf();
     m_flagIspMcscOTF = m_parameters->isReprocessingIspMcscOtf();
     m_flagTpuMcscOTF = m_parameters->isReprocessingTpuMcscOtf();
 #ifdef USE_ODC_CAPTURE
     m_flagTPU1Enabled = m_parameters->getODCCaptureMode();
 #endif
+    m_flag3aaIspOTF = true;
 
     m_supportReprocessing = m_parameters->isReprocessing();
     m_supportSingleChain = m_parameters->isSingleChain();
-    m_supportPureBayerReprocessing = m_parameters->getUsePureBayerReprocessing();
 
+    m_supportPureBayerReprocessing = true;
 
-
-    m_request3AP = !(m_flag3aaIspOTF);
-    if (m_flagIspTpuOTF == false && m_flagIspMcscOTF == false)
-        m_requestISPC = true;
+    m_request3AP = false;
+    m_requestISP = false;
+    m_requestISPC = false;
     m_requestMCSC2 = false;
     m_requestMCSC3 = true;
     m_requestMCSC4 = true;
+
     if (m_flagHWFCEnabled == true) {
         m_requestJPEG = true;
         m_requestThumbnail = true;
@@ -1111,9 +1146,7 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
         nodeMcscp4 = FIMC_IS_VIDEO_M2P_NUM;
     } else {
         if (m_supportPureBayerReprocessing == true) {
-            if (((m_cameraId == CAMERA_ID_FRONT || m_cameraId == CAMERA_ID_BACK_1) &&
-                (m_parameters->getDualMode() == true)) ||
-                (m_parameters->getUseCompanion() == false)) {
+            if (m_cameraId == CAMERA_ID_BACK) {
                 node3aa = FIMC_IS_VIDEO_31S_NUM;
                 node3ac = FIMC_IS_VIDEO_31C_NUM;
                 node3ap = FIMC_IS_VIDEO_31P_NUM;
@@ -1124,7 +1157,6 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
             }
         }
 
-#ifdef EXYNOS7885 /* for lassen */
         nodeIsp = FIMC_IS_VIDEO_I0S_NUM;
         nodeIspc = FIMC_IS_VIDEO_I0C_NUM;
         nodeIspp = FIMC_IS_VIDEO_I0P_NUM;
@@ -1132,15 +1164,6 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
         nodeMcscp1 = FIMC_IS_VIDEO_M0P_NUM;
         nodeMcscp3 = FIMC_IS_VIDEO_M1P_NUM;
         nodeMcscp4 = FIMC_IS_VIDEO_M2P_NUM;
-#else /* for kangchen */
-        nodeIsp = FIMC_IS_VIDEO_I1S_NUM;
-        nodeIspc = FIMC_IS_VIDEO_I1C_NUM;
-        nodeIspp = FIMC_IS_VIDEO_I1P_NUM;
-        nodeMcsc = FIMC_IS_VIDEO_M1S_NUM;
-        nodeMcscp1 = FIMC_IS_VIDEO_M1P_NUM;
-        nodeMcscp3 = FIMC_IS_VIDEO_M3P_NUM;
-        nodeMcscp4 = FIMC_IS_VIDEO_M4P_NUM;
-#endif
     }
 
     if (m_supportPureBayerReprocessing == true) {
@@ -1149,6 +1172,11 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
     m_initDeviceInfo(INDEX(PIPE_ISP_REPROCESSING));
     m_initDeviceInfo(INDEX(PIPE_MCSC_REPROCESSING));
 
+
+    /*
+    * REMOSAIC
+    */
+    m_nodeNums[INDEX(PIPE_REMOSAIC_REPROCESSING)][OUTPUT_NODE] = 333;
 
     /*
      * 3AA for Reprocessing
@@ -1357,11 +1385,17 @@ status_t ExynosCameraFrameReprocessingFactory::m_setupConfig(void)
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameReprocessingFactory::m_constructReprocessingPipes(void)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::m_constructReprocessingPipes(void)
 {
     CLOGI("");
 
     int pipeId = -1;
+
+    /* REMOSAIC for Reprocessing */
+    pipeId = PIPE_REMOSAIC_REPROCESSING;
+    m_pipes[INDEX(pipeId)] = (ExynosCameraPipe*)new ExynosCameraPipePP(m_cameraId, m_parameters, m_flagReprocessing, m_nodeNums[INDEX(pipeId)]);
+    m_pipes[INDEX(pipeId)]->setPipeName("PIPE_REMOSAIC_REPROCESSING");
+    m_pipes[INDEX(pipeId)]->setPipeId(pipeId);
 
     /* 3AA for Reprocessing */
     if (m_supportPureBayerReprocessing == true) {
@@ -1454,13 +1488,13 @@ status_t ExynosCameraFrameReprocessingFactory::m_constructReprocessingPipes(void
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameReprocessingFactory::m_setupRequestFlags(void)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::m_setupRequestFlags(void)
 {
     /* Do nothing */
     return NO_ERROR;
 }
 
-status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraFrameSP_sptr_t frame, ExynosCameraFrameSP_sptr_t refFrame)
+status_t ExynosCameraFrameReprocessingFactoryRemosaic::m_fillNodeGroupInfo(ExynosCameraFrameSP_sptr_t frame, ExynosCameraFrameSP_sptr_t refFrame)
 {
     camera2_node_group node_group_info_3aa;
     camera2_node_group node_group_info_isp;
@@ -1559,7 +1593,7 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
             frame->setRequest(PIPE_3AP_REPROCESSING, request3AC);
             frame->setRequest(PIPE_ISPC_REPROCESSING, requestISPC);
             frame->setRequest(PIPE_ISPP_REPROCESSING, requestISPP);
-            frame->setRequest(PIPE_MCSC1_REPROCESSING, requestMCSC1);
+            /* frame->setRequest(PIPE_MCSC1_REPROCESSING, requestMCSC1); */
             /* frame->setRequest(PIPE_MCSC3_REPROCESSING, requestMCSC3); */
             frame->setRequest(PIPE_MCSC4_REPROCESSING, requestMCSC4);
             /* frame->setRequest(PIPE_HWFC_JPEG_SRC_REPROCESSING, requestJPEG); */
@@ -1641,7 +1675,7 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
         }
     }
 
-    if (m_parameters->getUsePureBayerReprocessing() == true) {
+    if (m_supportPureBayerReprocessing == true) {
         m_parameters->getPictureBayerCropSize(&sizeControlInfo.bnsSize,
                                               &sizeControlInfo.bayerCropSize);
         m_parameters->getPictureBdsSize(&sizeControlInfo.bdsSize);
@@ -1712,7 +1746,7 @@ status_t ExynosCameraFrameReprocessingFactory::m_fillNodeGroupInfo(ExynosCameraF
     return NO_ERROR;
 }
 
-void ExynosCameraFrameReprocessingFactory::m_init(void)
+void ExynosCameraFrameReprocessingFactoryRemosaic::m_init(void)
 {
     m_flagReprocessing = true;
     m_flagHWFCEnabled = m_parameters->isUseHWFC();
