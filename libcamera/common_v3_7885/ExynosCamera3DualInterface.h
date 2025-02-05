@@ -674,7 +674,7 @@ static camera3_device_ops_t camera_device3_ops = {
         SET_METHOD3(get_metadata_vendor_tag_ops),
         SET_METHOD3(dump),
         SET_METHOD3(flush),
-        {0} /* reserved for future use */
+        0 /* reserved for future use */
 };
 
 static hw_module_methods_t mCameraHwModuleMethods = {
