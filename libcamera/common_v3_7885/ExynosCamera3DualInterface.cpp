@@ -1436,7 +1436,6 @@ static int HAL_camera_device_dual_open(
         }
 
 done:
-
         for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
             int cmdCameraId = *it;
 
@@ -1518,6 +1517,7 @@ static int HAL_camera_device_dual_close(struct hw_device_t* device)
             funcRet |= ret;
             if (ret != NO_ERROR) {
                 ALOGE("ERR(%s[%d]):g_threadInterface(%d).close() fail", __FUNCTION__, __LINE__, cameraId);
+                goto done;
             }
 
             // tele
@@ -1527,10 +1527,10 @@ static int HAL_camera_device_dual_close(struct hw_device_t* device)
             funcRet = ret;
             if (ret != NO_ERROR) {
                 ALOGE("ERR(%s[%d]):g_threadInterface(%d).close() fail", __FUNCTION__, __LINE__, teleCameraId);
+                goto done;
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -1618,7 +1618,6 @@ static int HAL_camera_device_dual_set_preview_window(
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -1690,7 +1689,6 @@ static void HAL_camera_device_dual_set_callbacks(
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -1752,7 +1750,6 @@ static void HAL_camera_device_dual_enable_msg_type(
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -1815,7 +1812,6 @@ static void HAL_camera_device_dual_disable_msg_type(
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -1919,7 +1915,6 @@ static int HAL_camera_device_dual_start_preview(struct camera_device *dev)
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -1976,6 +1971,7 @@ static void HAL_camera_device_dual_stop_preview(struct camera_device *dev)
             ret = g_threadInterface[cameraId]->stopPreview();
             if (ret != NO_ERROR) {
                 ALOGE("ERR(%s[%d]):g_threadInterface[%d]->stopPreview() fail", __FUNCTION__, __LINE__, cameraId);
+                goto done;
             }
 
 
@@ -1984,10 +1980,10 @@ static void HAL_camera_device_dual_stop_preview(struct camera_device *dev)
             ret = g_threadInterface[teleCameraId]->stopPreview();
             if (ret != NO_ERROR) {
                 ALOGE("ERR(%s[%d]):g_threadInterface[%d]->stopPreview() fail", __FUNCTION__, __LINE__, teleCameraId);
+                goto done;
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -2216,7 +2212,6 @@ static int HAL_camera_device_dual_auto_focus(struct camera_device *dev)
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -2268,6 +2263,7 @@ static int HAL_camera_device_dual_cancel_auto_focus(struct camera_device *dev)
             funcRet |= ret;
             if (ret != NO_ERROR) {
                 ALOGE("ERR(%s[%d]):g_threadInterface[%d]->cancelAutoFocus()", __FUNCTION__, __LINE__, cameraId);
+                goto done;
             }
 
             cameraIdList.push_back(teleCameraId);
@@ -2276,10 +2272,10 @@ static int HAL_camera_device_dual_cancel_auto_focus(struct camera_device *dev)
             funcRet |= ret;
             if (ret != NO_ERROR) {
                 ALOGE("ERR(%s[%d]):g_threadInterface[%d]->cancelAutoFocus()", __FUNCTION__, __LINE__, teleCameraId);
+                goto done;
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -2343,7 +2339,6 @@ static int HAL_camera_device_dual_take_picture(struct camera_device *dev)
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -2394,6 +2389,7 @@ static int HAL_camera_device_dual_cancel_picture(struct camera_device *dev)
             funcRet |= ret;
             if (ret != NO_ERROR) {
                 ALOGE("ERR(%s[%d]):g_threadInterface[%d]->cancelPicture()", __FUNCTION__, __LINE__, cameraId);
+                goto done;
             }
 
             cameraIdList.push_back(teleCameraId);
@@ -2402,10 +2398,10 @@ static int HAL_camera_device_dual_cancel_picture(struct camera_device *dev)
             funcRet |= ret;
             if (ret != NO_ERROR) {
                 ALOGE("ERR(%s[%d]):g_threadInterface[%d]->cancelPicture()", __FUNCTION__, __LINE__, teleCameraId);
+                goto done;
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -2580,7 +2576,6 @@ static int HAL_camera_device_dual_set_parameters(
                 }
             }
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -2708,7 +2703,6 @@ static int HAL_camera_device_dual_send_command(
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
@@ -2757,6 +2751,7 @@ static void HAL_camera_device_dual_release(struct camera_device *dev)
             ret = g_threadInterface[cameraId]->release();
             if (ret != NO_ERROR) {
                 ALOGE("ERR(%s[%d]):g_threadInterface[%d]->release() fail", __FUNCTION__, __LINE__, cameraId);
+                goto done;
             }
 
             cameraIdList.push_back(teleCameraId);
@@ -2764,10 +2759,10 @@ static void HAL_camera_device_dual_release(struct camera_device *dev)
             ret = g_threadInterface[teleCameraId]->release();
             if (ret != NO_ERROR) {
                 ALOGE("ERR(%s[%d]):g_threadInterface[%d]->release() fail", __FUNCTION__, __LINE__, teleCameraId);
+                goto done;
             }
 
 done:
-
             for (list<int>::iterator it = cameraIdList.begin(); it != cameraIdList.end(); it++) {
                 int cmdCameraId = *it;
 
