@@ -64,6 +64,7 @@ static Mutex            g_cam_openLock[MAX_NUM_OF_CAMERA];
 static Mutex            g_cam_previewLock[MAX_NUM_OF_CAMERA];
 static Mutex            g_cam_recordingLock[MAX_NUM_OF_CAMERA];
 static bool             g_flagPipMode;
+static bool             g_flagAutoDualMode = false;
 
 static inline ExynosCamera *obj(struct camera_device *dev)
 {
