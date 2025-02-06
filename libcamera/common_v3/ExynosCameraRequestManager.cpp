@@ -3079,7 +3079,7 @@ status_t ExynosCameraRequestManager::m_createCallbackThreads(camera3_stream_conf
             break;
         }
         m_threadStreamDoneQ[id] = new stream_callback_queue_t;
-        m_threadStreamDoneQ[id]->setWaitTime(100000000 * 100); // 2 sec
+        m_threadStreamDoneQ[id]->setWaitTime(2000000000); // 2 sec
         m_streamPrevPos[id] = 0;
         ret = m_pushStreamThread(id, m_CallbackThread, &m_streamthreadMap, &m_streamthreadMapLock);
         if (ret < 0) {
