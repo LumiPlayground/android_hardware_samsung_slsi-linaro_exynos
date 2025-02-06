@@ -1585,23 +1585,23 @@ struct ysum_data {
 #endif
 
 struct camera2_scaler_uctl {
-    uint32_t sourceAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint32_t txcTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint32_t txpTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint32_t ixcTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint32_t ixpTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint32_t sccTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint32_t scpTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint32_t sc0TargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint32_t sc1TargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint32_t sc2TargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint32_t sc3TargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
-    uint32_t sc4TargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
+    uint32_t sourceAddress[17];
+    uint32_t txcTargetAddress[17];
+    uint32_t txpTargetAddress[17];
+    uint32_t ixcTargetAddress[17];
+    uint32_t ixpTargetAddress[17];
+    uint32_t sccTargetAddress[17];
+    uint32_t scpTargetAddress[17];
+    uint32_t sc0TargetAddress[17];
+    uint32_t sc1TargetAddress[17];
+    uint32_t sc2TargetAddress[17];
+    uint32_t sc3TargetAddress[17];
+    uint32_t sc4TargetAddress[17];
 #ifdef EXYNOS7885
     // To add buffer address because of MCSC DS for LT (VRA input)
-    uint32_t sc5TargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES]; /* MCSC DS output */
+    uint32_t sc5TargetAddress[17]; /* MCSC DS output */
 #endif
-    uint32_t dxcTargetAddress[EXYNOS_CAMERA_BUFFER_MAX_PLANES];
+    uint32_t dxcTargetAddress[17];
     uint32_t orientation;
 #ifdef EXYNOS7885
     enum mcsc_port mcsc_sub_blk_port[INTERFACE_TYPE_MAX];
