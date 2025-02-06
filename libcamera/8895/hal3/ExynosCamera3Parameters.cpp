@@ -4008,7 +4008,6 @@ void ExynosCamera3Parameters::m_getSetfileYuvRange(bool flagReprocessing, int *s
     CLOGD("CurrentState (0x%4x), currentSetfile(%d)", stateReg, currentSetfile);
 #endif
 
-done:
     *setfile = currentSetfile;
     *yuvRange = flagYUVRange;
 }

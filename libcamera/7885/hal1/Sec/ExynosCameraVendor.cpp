@@ -8769,7 +8769,7 @@ status_t ExynosCamera::m_startRecordingInternal(void)
     /* alloc recording Callback Heap */
     m_recordingCallbackHeap = m_getMemoryCb(-1, sizeof(struct VideoNativeHandleMetadata), m_recordingBufferCount, m_callbackCookie);
     if (!m_recordingCallbackHeap || m_recordingCallbackHeap->data == MAP_FAILED) {
-        CLOGE("m_getMemoryCb(%zu) fail", sizeof(struct addrs));
+        CLOGE("m_getMemoryCb(%zu) fail");
         ret = INVALID_OPERATION;
         goto func_exit;
     }
@@ -14896,12 +14896,6 @@ status_t ExynosCamera::m_previewCallbackFunc(ExynosCameraFrameSP_sptr_t newFrame
     }
 
     memset(&m_Metadata, 0, sizeof(camera_frame_metadata_t));
-#ifdef SAMSUNG_TIMESTAMP_BOOT
-    m_Metadata.timestamp = newFrame->getTimeStampBoot();
-#else
-    m_Metadata.timestamp = newFrame->getTimeStamp();
-#endif
-    CLOGV("timestamp:%jd ms!", m_Metadata.timestamp);
 
     probeTimer.start();
     if (m_parameters->msgTypeEnabled(CAMERA_MSG_PREVIEW_FRAME) &&
