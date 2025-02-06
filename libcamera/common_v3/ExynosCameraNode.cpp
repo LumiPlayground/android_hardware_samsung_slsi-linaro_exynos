@@ -1529,7 +1529,7 @@ int ExynosCameraNode::m_mBuf(ExynosCameraBuffer *buf)
     }
 
 #ifndef SUPPORT_64BITS
-    ret = exynos_v4l2_s_ctrl(m_fd, V4L2_CID_IS_MAP_BUFFER, (int)&v4l2_buf);
+    ret = exynos_v4l2_s_ctrl(m_fd, V4L2_CID_IS_MAP_BUFFER, (long)&v4l2_buf);
     if (ret < 0) {
         CLOGE("exynos_v4l2_s_ctrl(m_fd:%d, buf->index:%d) fail (%d)",
                  m_fd, buf->index, ret);
