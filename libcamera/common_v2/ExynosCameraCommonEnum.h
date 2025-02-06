@@ -74,4 +74,10 @@ typedef enum
 
 }IS_SensorNameEnum;
 
+enum HW_CONNECTION_MODE {
+    HW_CONNECTION_MODE_M2M                  = 0,
+    HW_CONNECTION_MODE_OTF,
+    HW_CONNECTION_MODE_M2M_BUFFER_HIDING,
+};
+
 #endif /* EXYNOS_CAMERA_COMMON_CONFIG_H */

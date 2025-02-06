@@ -116,5 +116,10 @@ typedef enum frame_factory_state {
     FRAME_FACTORY_STATE_MAX     = 5,
 } frame_factory_state_t;
 
+enum HW_CONNECTION_MODE {
+    HW_CONNECTION_MODE_M2M                  = 0,
+    HW_CONNECTION_MODE_OTF,
+    HW_CONNECTION_MODE_M2M_BUFFER_HIDING,
+};
 
 #endif /* EXYNOS_CAMERA_COMMON_CONFIG_H */

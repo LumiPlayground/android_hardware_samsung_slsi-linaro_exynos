@@ -24,12 +24,6 @@ namespace android {
 
 using namespace std;
 
-enum HW_CONNECTION_MODE {
-    HW_CONNECTION_MODE_M2M                  = 0,
-    HW_CONNECTION_MODE_OTF,
-    HW_CONNECTION_MODE_M2M_BUFFER_HIDING,
-};
-
 class ExynosCameraMCPipe : public ExynosCameraPipeFlite {
 public:
     ExynosCameraMCPipe()

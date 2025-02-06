@@ -22,12 +22,6 @@
 
 namespace android {
 
-enum HW_CONNECTION_MODE {
-    HW_CONNECTION_MODE_M2M                  = 0,
-    HW_CONNECTION_MODE_OTF,
-    HW_CONNECTION_MODE_M2M_BUFFER_HIDING,
-};
-
 typedef struct ExynosCameraDeviceInfo {
     int32_t nodeNum[MAX_NODE];
     int32_t secondaryNodeNum[MAX_NODE];
